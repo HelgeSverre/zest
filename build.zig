@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     zest.root_module.linkFramework("CoreServices", .{});
+    zest.root_module.linkFramework("AppKit", .{});
     zest.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(zest);
 

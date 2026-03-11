@@ -88,7 +88,7 @@ fn streamCallback(
     eventPaths: ?*anyopaque,
     _: [*c]const c.FSEventStreamEventFlags,
     _: [*c]const c.FSEventStreamEventId,
-) callconv(.C) void {
+) callconv(.c) void {
     const cb = callback_storage orelse return;
     const alloc = allocator_storage orelse return;
 

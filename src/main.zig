@@ -14,10 +14,21 @@ pub fn main() !void {
 
     var target_path: []const u8 = ".";
     var show_help = false;
+    var benchmark_query: ?[]const u8 = null;
 
-    for (args[1..]) |arg| {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             show_help = true;
+        } else if (std.mem.eql(u8, arg, "--benchmark")) {
+            i += 1;
+            if (i < args.len) {
+                benchmark_query = args[i];
+            } else {
+                std.debug.print("error: --benchmark requires a query argument\n", .{});
+                std.process.exit(1);
+            }
         } else {
             target_path = arg;
         }
@@ -65,11 +76,51 @@ pub fn main() !void {
                     allocator.free(data);
                     std.debug.print("warning: could not load index, search unavailable\n", .{});
                 };
+                // Store initial inode for change detection
+                app.index_inode = stat.inode;
+                app.last_index_check = std.time.nanoTimestamp();
             } else {
                 allocator.free(data);
             }
         } else |_| {}
     } else |_| {}
+
+    // Check for index updates (single check in CLI mode; sets up the pattern for GUI event loop)
+    app.checkForIndexUpdate();
+
+    // --benchmark mode
+    if (benchmark_query) |query| {
+        if (app.getIndexStatus() != .ready) {
+            std.debug.print("error: no index loaded. Run zest-indexer --full-scan ~ first.\n", .{});
+            std.process.exit(1);
+        }
+
+        const iterations: usize = 1000;
+        var latencies: [1000]i128 = undefined;
+
+        for (0..iterations) |iter| {
+            const start = std.time.nanoTimestamp();
+            const results = try app.search(query, null);
+            const end = std.time.nanoTimestamp();
+            latencies[iter] = end - start;
+            allocator.free(results);
+        }
+
+        std.mem.sort(i128, &latencies, {}, struct {
+            fn lt(_: void, a: i128, b: i128) bool {
+                return a < b;
+            }
+        }.lt);
+
+        const p50 = latencies[iterations / 2];
+        const p99 = latencies[iterations * 99 / 100];
+
+        const bm_stdout = std.fs.File.stdout().deprecatedWriter();
+        try bm_stdout.print("Benchmark: \"{s}\" x {d} iterations\n", .{ query, iterations });
+        try bm_stdout.print("  p50: {d} us\n", .{@divTrunc(p50, 1000)});
+        try bm_stdout.print("  p99: {d} us\n", .{@divTrunc(p99, 1000)});
+        return;
+    }
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
 
@@ -105,7 +156,8 @@ pub fn main() !void {
 
     for (listing.entries) |entry| {
         const icon: []const u8 = if (entry.isDirectory()) "📁 " else "📄 ";
-        const size_str = formatSize(entry.size, entry.isDirectory());
+        var size_buf: [16]u8 = undefined;
+        const size_str = formatSizeHuman(entry.size, entry.isDirectory(), &size_buf);
         try stdout.print("  {s}{s: <27} {s: <10} {s}\n", .{
             icon,
             truncateName(entry.name, 27),
@@ -123,13 +175,26 @@ pub fn main() !void {
     }});
 }
 
-fn formatSize(size: u64, is_dir: bool) []const u8 {
+fn formatSizeHuman(size: u64, is_dir: bool, buf: []u8) []const u8 {
     if (is_dir) return "--";
     if (size == 0) return "0 B";
-    if (size < 1024) return "< 1 KB";
-    if (size < 1024 * 1024) return "KB";
-    if (size < 1024 * 1024 * 1024) return "MB";
-    return "GB";
+
+    const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB" };
+    var value: f64 = @floatFromInt(size);
+    var unit_idx: usize = 0;
+
+    while (value >= 1024.0 and unit_idx < units.len - 1) {
+        value /= 1024.0;
+        unit_idx += 1;
+    }
+
+    if (unit_idx == 0) {
+        // Bytes: no decimal
+        return std.fmt.bufPrint(buf, "{d} B", .{size}) catch "--";
+    } else {
+        // KB/MB/GB/TB: one decimal place
+        return std.fmt.bufPrint(buf, "{d:.1} {s}", .{ value, units[unit_idx] }) catch "--";
+    }
 }
 
 fn truncateName(name: []const u8, max: usize) []const u8 {
@@ -144,7 +209,8 @@ fn printUsage() void {
         \\  A minimal, fast file browser for macOS.
         \\
         \\Options:
-        \\  -h, --help    Show this help message
+        \\  -h, --help              Show this help message
+        \\  --benchmark "query"     Run search benchmark (1000 iterations, prints p50/p99)
         \\
         \\Examples:
         \\  zest .         Open current directory

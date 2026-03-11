@@ -15,6 +15,8 @@ pub const App = struct {
     index_data: ?[]const u8,
     allocator: std.mem.Allocator,
     pins_path: ?[]const u8,
+    index_inode: ?u64 = null,
+    last_index_check: i128 = 0,
 
     pub fn init(allocator: std.mem.Allocator, fs: fs_provider.FileSystemProvider, initial_path: []const u8) !App {
         const pins_path = config.pinsPath(allocator) catch null;
@@ -97,6 +99,21 @@ pub const App = struct {
         return self.pin_manager.getPins();
     }
 
+    // Open files/directories
+    pub fn openFile(self: *App, path: []const u8) !void {
+        _ = self;
+        const argv: []const []const u8 = &.{ "open", path };
+        var child = std.process.Child.init(argv, std.heap.page_allocator);
+        try child.spawn();
+    }
+
+    pub fn openInTerminal(self: *App, path: []const u8) !void {
+        _ = self;
+        const argv: []const []const u8 = &.{ "open", "-a", "Terminal", path };
+        var child = std.process.Child.init(argv, std.heap.page_allocator);
+        try child.spawn();
+    }
+
     // Index
     pub fn loadIndex(self: *App, data: []const u8) !void {
         if (self.index_reader) |*ir| ir.deinit();
@@ -108,5 +125,47 @@ pub const App = struct {
     pub fn getIndexStatus(self: App) types.IndexStatus {
         if (self.index_reader) |_| return .ready;
         return .not_found;
+    }
+
+    /// Check if the index file has changed on disk and reload it if so.
+    /// Only performs the stat check every 5 seconds to avoid excessive syscalls.
+    pub fn checkForIndexUpdate(self: *App) void {
+        const check_interval_ns: i128 = 5 * std.time.ns_per_s;
+        const now = std.time.nanoTimestamp();
+        if (now - self.last_index_check < check_interval_ns) return;
+        self.last_index_check = now;
+
+        const idx_path = config.indexPath(self.allocator) catch return;
+        defer self.allocator.free(idx_path);
+
+        const file = std.fs.openFileAbsolute(idx_path, .{}) catch return;
+        defer file.close();
+
+        const stat = file.stat() catch return;
+        const current_inode = stat.inode;
+
+        if (self.index_inode) |prev_inode| {
+            if (current_inode == prev_inode) return;
+        } else {
+            // No previous inode recorded — nothing to compare against
+            return;
+        }
+
+        // Inode changed: reload the index
+        const data = self.allocator.alloc(u8, stat.size) catch return;
+        const bytes_read = file.readAll(data) catch {
+            self.allocator.free(data);
+            return;
+        };
+        if (bytes_read != stat.size) {
+            self.allocator.free(data);
+            return;
+        }
+
+        self.loadIndex(data) catch {
+            self.allocator.free(data);
+            return;
+        };
+        self.index_inode = current_inode;
     }
 };
