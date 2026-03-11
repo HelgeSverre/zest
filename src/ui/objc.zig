@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const c = @cImport({
     @cInclude("objc/runtime.h");
@@ -103,6 +104,73 @@ pub fn msgSendU64(target: id, sel_name: [:0]const u8) u64 {
     return func(target, sel(sel_name));
 }
 
+/// `objc_msgSend(target, sel, arg1, arg2, arg3, arg4) -> id`
+pub fn msgSendWith4(comptime T1: type, comptime T2: type, comptime T3: type, comptime T4: type, target: id, sel_name: [:0]const u8, arg1: T1, arg2: T2, arg3: T3, arg4: T4) id {
+    const func: *const fn (id, SEL, T1, T2, T3, T4) callconv(.c) id = @ptrCast(&c.objc_msgSend);
+    return func(target, sel(sel_name), arg1, arg2, arg3, arg4);
+}
+
+/// `objc_msgSend(target, sel, arg1, arg2, arg3) -> void`
+pub fn msgSendVoidWith3(comptime T1: type, comptime T2: type, comptime T3: type, target: id, sel_name: [:0]const u8, arg1: T1, arg2: T2, arg3: T3) void {
+    const func: *const fn (id, SEL, T1, T2, T3) callconv(.c) void = @ptrCast(&c.objc_msgSend);
+    func(target, sel(sel_name), arg1, arg2, arg3);
+}
+
+/// `objc_msgSend(target, sel, arg1) -> bool`
+pub fn msgSendBoolWith1(comptime T1: type, target: id, sel_name: [:0]const u8, arg1: T1) bool {
+    const func: *const fn (id, SEL, T1) callconv(.c) bool = @ptrCast(&c.objc_msgSend);
+    return func(target, sel(sel_name), arg1);
+}
+
+/// `objc_msgSend(target, sel, arg1) -> i64`
+pub fn msgSendI64With1(comptime T1: type, target: id, sel_name: [:0]const u8, arg1: T1) i64 {
+    const func: *const fn (id, SEL, T1) callconv(.c) i64 = @ptrCast(&c.objc_msgSend);
+    return func(target, sel(sel_name), arg1);
+}
+
+/// Cast `objc_msgSend` to any function pointer type for custom signatures.
+pub fn msgSendFn(comptime T: type) T {
+    return @ptrCast(&c.objc_msgSend);
+}
+
+// ---------------------------------------------------------------------------
+// CoreGraphics geometry types
+// ---------------------------------------------------------------------------
+
+pub const CGFloat = f64;
+pub const CGPoint = extern struct { x: CGFloat, y: CGFloat };
+pub const CGSize = extern struct { width: CGFloat, height: CGFloat };
+pub const CGRect = extern struct {
+    origin: CGPoint,
+    size: CGSize,
+
+    pub fn make(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) CGRect {
+        return .{ .origin = .{ .x = x, .y = y }, .size = .{ .width = w, .height = h } };
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Runtime class creation
+// ---------------------------------------------------------------------------
+
+/// Create a new ObjC class as a subclass of `superclass`.
+/// Returns null if the class name is already registered.
+pub fn allocateClassPair(superclass: ?Class, name: [:0]const u8) ?Class {
+    return c.objc_allocateClassPair(superclass orelse null, name.ptr, 0);
+}
+
+/// Register a class that was created with `allocateClassPair`.
+/// After this, the class can be instantiated.
+pub fn registerClassPair(cls: Class) void {
+    c.objc_registerClassPair(cls);
+}
+
+/// Add a method to a class.  `imp` must be a `callconv(.c)` function pointer.
+/// `types` is the ObjC type encoding (e.g. "v@:@" for void(self, _cmd, id)).
+pub fn addMethod(cls: Class, sel_name: [:0]const u8, imp: anytype, types: [:0]const u8) bool {
+    return c.class_addMethod(cls, sel(sel_name), @ptrCast(&imp), types.ptr);
+}
+
 // ---------------------------------------------------------------------------
 // Convenience wrappers for common messages
 // ---------------------------------------------------------------------------
@@ -197,4 +265,43 @@ test "NSString round-trip" {
     const output = try NSString.toSlice(std.testing.allocator, ns);
     defer std.testing.allocator.free(output);
     try std.testing.expectEqualStrings(input, output);
+}
+
+test "CGRect make" {
+    const r = CGRect.make(10, 20, 100, 200);
+    try std.testing.expectEqual(@as(CGFloat, 10), r.origin.x);
+    try std.testing.expectEqual(@as(CGFloat, 20), r.origin.y);
+    try std.testing.expectEqual(@as(CGFloat, 100), r.size.width);
+    try std.testing.expectEqual(@as(CGFloat, 200), r.size.height);
+}
+
+test "allocateClassPair and registerClassPair" {
+    const NSObject = getClass("NSObject") orelse return error.SkipZigTest;
+    const cls = allocateClassPair(NSObject, "ZestTestClass001") orelse return error.SkipZigTest;
+    registerClassPair(cls);
+    // Should now be findable
+    const found = getClass("ZestTestClass001");
+    try std.testing.expect(found != null);
+}
+
+test "addMethod and call it" {
+    const NSObject = getClass("NSObject") orelse return error.SkipZigTest;
+    const cls = allocateClassPair(NSObject, "ZestTestClass002") orelse return error.SkipZigTest;
+
+    const impl = struct {
+        fn testMethod(_self: id, _cmd: SEL) callconv(.c) i64 {
+            _ = _self;
+            _ = _cmd;
+            return 42;
+        }
+    }.testMethod;
+
+    const added = addMethod(cls, "testMethod", impl, "q@:");
+    try std.testing.expect(added);
+    registerClassPair(cls);
+
+    const obj = init(alloc(cls));
+    defer release(obj);
+    const result = msgSendI64(obj, "testMethod");
+    try std.testing.expectEqual(@as(i64, 42), result);
 }

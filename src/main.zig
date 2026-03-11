@@ -2,7 +2,6 @@ const std = @import("std");
 const App = @import("app.zig").App;
 const real_fs = @import("core/real_fs.zig");
 const config = @import("config/config.zig");
-const types_mod = @import("core/types.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -88,7 +87,7 @@ pub fn main() !void {
     // Check for index updates (single check in CLI mode; sets up the pattern for GUI event loop)
     app.checkForIndexUpdate();
 
-    // --benchmark mode
+    // --benchmark mode (CLI) or launch GUI
     if (benchmark_query) |query| {
         if (app.getIndexStatus() != .ready) {
             std.debug.print("error: no index loaded. Run zest-indexer --full-scan ~ first.\n", .{});
@@ -122,84 +121,9 @@ pub fn main() !void {
         return;
     }
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
-
-    try stdout.print("\n  Zest — {s}\n\n", .{app.currentPath()});
-
-    const pins = app.getPins();
-    if (pins.len > 0) {
-        try stdout.writeAll("  Pinned:\n");
-        for (pins) |pin| {
-            const marker: []const u8 = if (pin.is_default) " " else "*";
-            try stdout.print("  {s} {s: <12} {s}\n", .{ marker, pin.name, pin.path });
-        }
-        try stdout.writeByte('\n');
-    }
-
-    var listing = app.getCurrentEntries() catch |err| {
-        try stdout.print("  Error: {}\n", .{err});
-        return;
-    };
-    defer listing.deinit();
-
-    std.mem.sort(types_mod.FileEntry, listing.entries, {}, struct {
-        fn lessThan(_: void, a: types_mod.FileEntry, b: types_mod.FileEntry) bool {
-            if (a.isDirectory() != b.isDirectory()) return a.isDirectory();
-            return std.ascii.lessThanIgnoreCase(a.name, b.name);
-        }
-    }.lessThan);
-
-    try stdout.print("  {s: <30} {s: <10} {s}\n", .{ "Name", "Size", "Type" });
-    try stdout.writeAll("  ");
-    for (0..52) |_| try stdout.writeByte('-');
-    try stdout.writeByte('\n');
-
-    for (listing.entries) |entry| {
-        const icon: []const u8 = if (entry.isDirectory()) "📁 " else "📄 ";
-        var size_buf: [16]u8 = undefined;
-        const size_str = formatSizeHuman(entry.size, entry.isDirectory(), &size_buf);
-        try stdout.print("  {s}{s: <27} {s: <10} {s}\n", .{
-            icon,
-            truncateName(entry.name, 27),
-            size_str,
-            entry.category.displayName(),
-        });
-    }
-
-    const index_status = app.getIndexStatus();
-    try stdout.print("\n  Index: {s}\n\n", .{switch (index_status) {
-        .ready => "loaded",
-        .not_found => "not found (run zest-indexer --full-scan ~ to build)",
-        .indexing => "building...",
-        .stale => "stale",
-    }});
-}
-
-fn formatSizeHuman(size: u64, is_dir: bool, buf: []u8) []const u8 {
-    if (is_dir) return "--";
-    if (size == 0) return "0 B";
-
-    const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB" };
-    var value: f64 = @floatFromInt(size);
-    var unit_idx: usize = 0;
-
-    while (value >= 1024.0 and unit_idx < units.len - 1) {
-        value /= 1024.0;
-        unit_idx += 1;
-    }
-
-    if (unit_idx == 0) {
-        // Bytes: no decimal
-        return std.fmt.bufPrint(buf, "{d} B", .{size}) catch "--";
-    } else {
-        // KB/MB/GB/TB: one decimal place
-        return std.fmt.bufPrint(buf, "{d:.1} {s}", .{ value, units[unit_idx] }) catch "--";
-    }
-}
-
-fn truncateName(name: []const u8, max: usize) []const u8 {
-    if (name.len <= max) return name;
-    return name[0..max];
+    // Launch GUI
+    const appkit = @import("ui/appkit.zig");
+    try appkit.run(allocator, &app);
 }
 
 fn printUsage() void {

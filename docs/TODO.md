@@ -42,14 +42,14 @@
 
 - [x] `theme.zig` — Full Darcula color constants (backgrounds, selection, text, category colors, window dims)
 - [x] **T8: ObjC runtime bridge** — `objc.zig` with typed msgSend wrappers, NSString helpers, 4 tests *(Sprint 1)*
-- [ ] **T9: Window + toolbar** — NSWindow, dark appearance, back/forward/up buttons, path display, search field
-- [ ] **T10: File list (NSTableView)** — Name, Size, Modified, Type columns; sort dirs first
-- [ ] **T11: Sidebar (NSSplitView + NSOutlineView)** — Pinned folders, default + custom sections
-- [ ] **T12: Search bar → index query** — NSTextField → app.search() → display results in table
-- [ ] **T13: Category filter dropdown** — NSPopUpButton with FileCategory options
-- [ ] **T14: Context menus** — Right-click: Pin folder, Copy path, Open in Terminal
-- [ ] **T15: Keyboard shortcuts** — Cmd+Up (go up), Cmd+[ / Cmd+] (back/forward), Cmd+F (search)
-- [ ] **T16: File icons** — NSWorkspace icons or emoji-based per category
+- [x] **T9: Window + toolbar** — NSWindow, dark appearance, back/forward/up buttons, path display, search field
+- [x] **T10: File list (NSTableView)** — Name, Size, Type columns; sort dirs first; double-click to open/navigate
+- [x] **T11: Sidebar (NSSplitView + NSTableView)** — Pinned folders, click to navigate
+- [x] **T12: Search bar → index query** — NSSearchField → app.search() → display results in table
+- [x] **T13: Category filter dropdown** — NSPopUpButton with FileCategory options
+- [x] **T14: Context menus** — Right-click: Open, Open in Terminal, Pin folder, Copy path
+- [x] **T15: Keyboard shortcuts** — Cmd+[ (back), Cmd+] (forward), Cmd+Q (quit), Cmd+W (close)
+- [ ] **T16: File icons** — NSWorkspace icons or emoji-based per category (currently emoji only)
 
 ## Polish & Extras
 
