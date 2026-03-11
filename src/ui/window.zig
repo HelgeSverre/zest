@@ -1,6 +1,7 @@
 const std = @import("std");
 const objc = @import("objc.zig");
 const theme = @import("theme.zig");
+const icons = @import("icons.zig");
 const delegate = @import("delegate.zig");
 const file_list = @import("file_list.zig");
 const sidebar = @import("sidebar.zig");
@@ -9,6 +10,7 @@ const NSViewMinXMargin: u64 = 1;
 const NSViewWidthSizable: u64 = 2;
 const NSViewMinYMargin: u64 = 8;
 const NSViewHeightSizable: u64 = 16;
+const NSEventModifierFlagCommand: u64 = 1 << 20;
 
 fn msgSendSize(target: objc.id, sel_name: [:0]const u8, size: objc.CGSize) void {
     const func = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGSize) callconv(.c) void);
@@ -88,6 +90,8 @@ pub fn createMainWindow() void {
 
     // Initial data load
     delegate.refreshAll();
+    configureKeyLoop(s);
+    focusPrimaryView(s);
 }
 
 fn buildFullContentView(s: *delegate.AppState) objc.id {
@@ -161,17 +165,17 @@ fn buildToolbarView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
     var x = padding;
 
     // Navigation buttons
-    if (makeToolbarButton("\xE2\x86\x90", "backAction:", app_delegate)) |button| {
+    if (makeToolbarSymbolButton("chevron.left", "backAction:", app_delegate)) |button| {
         msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
         objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
         x += button_size + 8;
     }
-    if (makeToolbarButton("\xE2\x86\x92", "forwardAction:", app_delegate)) |button| {
+    if (makeToolbarSymbolButton("chevron.right", "forwardAction:", app_delegate)) |button| {
         msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
         objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
         x += button_size + 8;
     }
-    if (makeToolbarButton("\xE2\x86\x91", "upAction:", app_delegate)) |button| {
+    if (makeToolbarSymbolButton("arrow.up", "upAction:", app_delegate)) |button| {
         msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
         objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
         x += button_size + 12;
@@ -185,17 +189,46 @@ fn buildToolbarView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
         x += 54;
     }
 
-    // Path label
+    // Editable path field (wrapped in container for padding)
     if (objc.getClass("NSTextField")) |NSTextField| {
-        const path_label = objc.msgSendWith1(objc.id, @as(objc.id, @ptrCast(NSTextField)), "labelWithString:", objc.NSString.fromSlice(s.app.currentPath()));
-        objc.msgSendVoidWith1(objc.id, path_label, "setTextColor:", makeNSColor(theme.text_secondary));
-        objc.msgSendVoidWith1(bool, path_label, "setUsesSingleLineMode:", true);
-        objc.msgSendVoidWith1(i64, path_label, "setLineBreakMode:", @as(i64, 5));
         const path_width = @max(120.0, search_x - x - gap);
-        msgSendRect(path_label, "setFrame:", objc.CGRect.make(x, control_y + 4, path_width, 20));
-        setAutoresizingMask(path_label, NSViewWidthSizable);
-        s.path_label = path_label;
-        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", path_label);
+        const inset_x: f64 = 8.0;
+        const inset_y: f64 = 4.0;
+
+        // Container view with styled background/border
+        const container = makeView("NSView", objc.CGRect.make(x, control_y, path_width, button_size));
+        if (container != null) {
+            styleToolbarField(container);
+            setAutoresizingMask(container, NSViewWidthSizable);
+            objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", container);
+        }
+
+        // Text field inset inside container
+        const path_field = objc.autorelease(objc.msgSendWith1(
+            objc.CGRect,
+            objc.alloc(NSTextField),
+            "initWithFrame:",
+            objc.CGRect.make(inset_x, inset_y, path_width - inset_x * 2, button_size - inset_y * 2),
+        ));
+        objc.msgSendVoidWith1(objc.id, path_field, "setStringValue:", objc.NSString.fromSlice(s.app.currentPath()));
+        objc.msgSendVoidWith1(objc.id, path_field, "setTextColor:", makeNSColor(theme.text_primary));
+        objc.msgSendVoidWith1(bool, path_field, "setEditable:", true);
+        objc.msgSendVoidWith1(bool, path_field, "setSelectable:", true);
+        objc.msgSendVoidWith1(bool, path_field, "setBordered:", false);
+        objc.msgSendVoidWith1(bool, path_field, "setBezeled:", false);
+        objc.msgSendVoidWith1(bool, path_field, "setDrawsBackground:", false);
+        objc.msgSendVoidWith1(bool, path_field, "setUsesSingleLineMode:", true);
+        objc.msgSendVoidWith1(i64, path_field, "setLineBreakMode:", @as(i64, 2));
+        objc.msgSendVoidWith1(objc.id, path_field, "setTarget:", app_delegate);
+        objc.msgSendVoidWith1(objc.SEL, path_field, "setAction:", objc.sel("pathAction:"));
+        if (objc.msgSend(path_field, "cell")) |cell| {
+            objc.msgSendVoidWith1(bool, cell, "setSendsActionOnEndEditing:", true);
+        }
+        setAutoresizingMask(path_field, NSViewWidthSizable);
+        s.path_field = path_field;
+        if (container != null) {
+            objc.msgSendVoidWith1(objc.id, container, "addSubview:", path_field);
+        }
     }
 
     // Search field
@@ -261,6 +294,7 @@ fn buildMainMenu() void {
         const edit_menu = objc.msgSendWith1(objc.id, objc.alloc(NSMenu), "initWithTitle:", objc.NSString.fromSlice("Edit"));
         addMenuItem(edit_menu, "Copy", "copy:", null, "c");
         addMenuItem(edit_menu, "Select All", "selectAll:", null, "a");
+        addMenuItem(edit_menu, "Find", "focusSearch:", app_delegate, "f");
         objc.msgSendVoidWith1(objc.id, edit_item, "setSubmenu:", edit_menu);
         objc.msgSendVoidWith1(objc.id, main_menu, "addItem:", edit_item);
     }
@@ -271,6 +305,8 @@ fn buildMainMenu() void {
         const nav_menu = objc.msgSendWith1(objc.id, objc.alloc(NSMenu), "initWithTitle:", objc.NSString.fromSlice("Navigate"));
         addMenuItem(nav_menu, "Back", "backAction:", app_delegate, "[");
         addMenuItem(nav_menu, "Forward", "forwardAction:", app_delegate, "]");
+        addMenuItemWithModifiers(nav_menu, "Go Up", "upAction:", app_delegate, "\u{F700}", NSEventModifierFlagCommand);
+        addMenuItemWithModifiers(nav_menu, "Open Selection", "openSelection:", app_delegate, "\u{F701}", NSEventModifierFlagCommand);
         objc.msgSendVoidWith1(objc.id, nav_item, "setSubmenu:", nav_menu);
         objc.msgSendVoidWith1(objc.id, main_menu, "addItem:", nav_item);
     }
@@ -279,6 +315,10 @@ fn buildMainMenu() void {
 }
 
 fn addMenuItem(menu: objc.id, title: []const u8, action: [:0]const u8, target: objc.id, key: []const u8) void {
+    addMenuItemWithModifiers(menu, title, action, target, key, if (key.len > 0) NSEventModifierFlagCommand else 0);
+}
+
+fn addMenuItemWithModifiers(menu: objc.id, title: []const u8, action: [:0]const u8, target: objc.id, key: []const u8, modifiers: u64) void {
     const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
     const item = objc.msgSendWith3(
         objc.id,
@@ -293,6 +333,7 @@ fn addMenuItem(menu: objc.id, title: []const u8, action: [:0]const u8, target: o
     if (target) |t| {
         objc.msgSendVoidWith1(objc.id, item, "setTarget:", t);
     }
+    objc.msgSendVoidWith1(u64, item, "setKeyEquivalentModifierMask:", modifiers);
     objc.msgSendVoidWith1(objc.id, menu, "addItem:", item);
 }
 
@@ -318,10 +359,47 @@ fn makeButton(title: []const u8, action: [:0]const u8, target: objc.id) objc.id 
     );
 }
 
-fn makeToolbarButton(title: []const u8, action: [:0]const u8, target: objc.id) objc.id {
-    const button = makeButton(title, action, target);
+fn makeToolbarSymbolButton(symbol_name: []const u8, action: [:0]const u8, target: objc.id) objc.id {
+    const button = makeButton("", action, target);
     if (button == null) return null;
     msgSendSize(button, "setFrameSize:", .{ .width = 28, .height = 28 });
-    objc.msgSendVoidWith1(i64, button, "setBezelStyle:", @as(i64, 1));
+    objc.msgSendVoidWith1(i64, button, "setBezelStyle:", @as(i64, 10));
+    objc.msgSendVoidWith1(bool, button, "setBordered:", false);
+    objc.msgSendVoidWith1(i64, button, "setImagePosition:", @as(i64, 1));
+    icons.applyImage(button, icons.symbolImage(symbol_name, 14.0, 0.0, 1), theme.toolbar_icon, 14.0);
+    objc.msgSendVoidWith1(i64, button, "setImageScaling:", @as(i64, 2));
     return button;
+}
+
+fn styleToolbarField(field: objc.id) void {
+    objc.msgSendVoidWith1(bool, field, "setWantsLayer:", true);
+    if (objc.msgSend(field, "layer")) |layer| {
+        const background = objc.msgSend(makeNSColor(theme.input_background), "CGColor");
+        const border = objc.msgSend(makeNSColor(theme.input_border), "CGColor");
+        objc.msgSendVoidWith1(objc.id, layer, "setBackgroundColor:", background);
+        objc.msgSendVoidWith1(objc.id, layer, "setBorderColor:", border);
+        msgSendFloat(layer, "setBorderWidth:", 1.0);
+        msgSendFloat(layer, "setCornerRadius:", 6.0);
+    }
+}
+
+fn configureKeyLoop(s: *delegate.AppState) void {
+    const path_field = s.path_field orelse return;
+    const search_field = s.search_field orelse return;
+    const category_popup = s.category_popup orelse return;
+    const sidebar_view = s.sidebar_view orelse return;
+    const table_view = s.table_view orelse return;
+
+    objc.msgSendVoidWith1(objc.id, path_field, "setNextKeyView:", search_field);
+    objc.msgSendVoidWith1(objc.id, search_field, "setNextKeyView:", category_popup);
+    objc.msgSendVoidWith1(objc.id, category_popup, "setNextKeyView:", sidebar_view);
+    objc.msgSendVoidWith1(objc.id, sidebar_view, "setNextKeyView:", table_view);
+    objc.msgSendVoidWith1(objc.id, table_view, "setNextKeyView:", path_field);
+}
+
+fn focusPrimaryView(s: *delegate.AppState) void {
+    const win = s.window_id orelse return;
+    const table_view = s.table_view orelse return;
+    objc.msgSendVoidWith1(objc.id, win, "setInitialFirstResponder:", table_view);
+    _ = objc.msgSendBoolWith1(objc.id, win, "makeFirstResponder:", table_view);
 }
