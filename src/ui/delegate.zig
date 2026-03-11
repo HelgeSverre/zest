@@ -4,8 +4,12 @@ const types = @import("../core/types.zig");
 const App = @import("../app.zig").App;
 const search_mod = @import("../index/search.zig");
 const window = @import("window.zig");
+const theme = @import("theme.zig");
 const file_list = @import("file_list.zig");
-const sidebar = @import("sidebar.zig");
+
+const c = @cImport({
+    @cInclude("time.h");
+});
 
 // ---------------------------------------------------------------------------
 // Global application state (single-window app)
@@ -69,6 +73,7 @@ pub fn registerAllClasses() void {
         const cls = objc.allocateClassPair(NSObject, "ZestTableDataSource") orelse @panic("Failed to create ZestTableDataSource");
         _ = objc.addMethod(cls, "numberOfRowsInTableView:", tableNumberOfRows, "q@:@");
         _ = objc.addMethod(cls, "tableView:objectValueForTableColumn:row:", tableObjectValue, "@@:@@q");
+        _ = objc.addMethod(cls, "tableView:viewForTableColumn:row:", tableViewForColumn, "@@:@@q");
         objc.registerClassPair(cls);
     }
 
@@ -77,6 +82,7 @@ pub fn registerAllClasses() void {
         const cls = objc.allocateClassPair(NSObject, "ZestSidebarDataSource") orelse @panic("Failed to create ZestSidebarDataSource");
         _ = objc.addMethod(cls, "numberOfRowsInTableView:", sidebarNumberOfRows, "q@:@");
         _ = objc.addMethod(cls, "tableView:objectValueForTableColumn:row:", sidebarObjectValue, "@@:@@q");
+        _ = objc.addMethod(cls, "tableView:viewForTableColumn:row:", sidebarViewForColumn, "@@:@@q");
         _ = objc.addMethod(cls, "tableViewSelectionDidChange:", sidebarSelectionChanged, "v@:@");
         objc.registerClassPair(cls);
     }
@@ -137,9 +143,7 @@ fn openItemAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callconv(.c)
     _ = _sender;
     const s = state orelse return;
     const tv = s.table_view orelse return;
-    const row = objc.msgSendI64(tv, "clickedRow");
-    if (row < 0) return;
-    const idx: usize = @intCast(row);
+    const idx = preferredTableIndex(tv) orelse return;
 
     if (s.is_search_mode) {
         if (s.search_results) |results| {
@@ -212,7 +216,7 @@ fn runSearch(search_field_obj: objc.id) void {
     if (s.category_popup) |popup| {
         const idx = objc.msgSendI64(popup, "indexOfSelectedItem");
         if (idx > 0) {
-            category = std.meta.intToEnum(types.FileCategory, @as(u8, @intCast(idx - 1))) catch null;
+            category = std.meta.intToEnum(types.FileCategory, @as(u8, @intCast(idx))) catch null;
         }
     }
 
@@ -237,9 +241,8 @@ fn copyPathAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callconv(.c)
     _ = _sender;
     const s = state orelse return;
     const tv = s.table_view orelse return;
-    const row = objc.msgSendI64(tv, "clickedRow");
-    if (row < 0) return;
-    const path = getPathForRow(s, @intCast(row)) orelse return;
+    const idx = clickedTableIndex(tv) orelse return;
+    const path = getPathForRow(s, idx) orelse return;
     defer s.allocator.free(path);
 
     const pb = objc.msgSend(objc.getClass("NSPasteboard") orelse return, "generalPasteboard");
@@ -255,9 +258,8 @@ fn openInTerminalAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callco
     _ = _sender;
     const s = state orelse return;
     const tv = s.table_view orelse return;
-    const row = objc.msgSendI64(tv, "clickedRow");
-    if (row < 0) return;
-    const path = getPathForRow(s, @intCast(row)) orelse return;
+    const idx = clickedTableIndex(tv) orelse return;
+    const path = getPathForRow(s, idx) orelse return;
     defer s.allocator.free(path);
     s.app.openInTerminal(path) catch {};
 }
@@ -268,9 +270,7 @@ fn pinFolderAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callconv(.c
     _ = _sender;
     const s = state orelse return;
     const tv = s.table_view orelse return;
-    const row = objc.msgSendI64(tv, "clickedRow");
-    if (row < 0) return;
-    const idx: usize = @intCast(row);
+    const idx = clickedTableIndex(tv) orelse return;
 
     if (s.is_search_mode) {
         if (s.search_results) |results| {
@@ -340,15 +340,15 @@ fn tableObjectValueDir(s: *AppState, col_id: []const u8, idx: usize) objc.id {
     const entry = listing.entries[idx];
 
     if (std.mem.eql(u8, col_id, "name")) {
-        const icon: []const u8 = if (entry.isDirectory()) "\xF0\x9F\x93\x81 " else "\xF0\x9F\x93\x84 "; // folder/page emoji
-        const display = std.fmt.allocPrint(s.allocator, "{s}{s}", .{ icon, entry.name }) catch return null;
-        defer s.allocator.free(display);
-        return objc.NSString.fromSlice(display);
+        return objc.NSString.fromSlice(entry.name);
     } else if (std.mem.eql(u8, col_id, "size")) {
         if (entry.isDirectory()) return objc.NSString.fromSlice("--");
         var buf: [32]u8 = undefined;
         const size_str = formatSize(entry.size, &buf);
         return objc.NSString.fromSlice(size_str);
+    } else if (std.mem.eql(u8, col_id, "modified")) {
+        var buf: [32]u8 = undefined;
+        return objc.NSString.fromSlice(formatDate(entry.mtime, &buf));
     } else if (std.mem.eql(u8, col_id, "type")) {
         return objc.NSString.fromSlice(entry.category.displayName());
     }
@@ -361,19 +361,60 @@ fn tableObjectValueSearch(s: *AppState, col_id: []const u8, idx: usize) objc.id 
     const result = results[idx];
 
     if (std.mem.eql(u8, col_id, "name")) {
-        const icon: []const u8 = if (result.kind == .directory) "\xF0\x9F\x93\x81 " else "\xF0\x9F\x93\x84 ";
-        const display = std.fmt.allocPrint(s.allocator, "{s}{s}", .{ icon, result.name }) catch return null;
-        defer s.allocator.free(display);
-        return objc.NSString.fromSlice(display);
+        return objc.NSString.fromSlice(result.name);
     } else if (std.mem.eql(u8, col_id, "size")) {
         if (result.kind == .directory) return objc.NSString.fromSlice("--");
         var buf: [32]u8 = undefined;
         const size_str = formatSize(result.size, &buf);
         return objc.NSString.fromSlice(size_str);
+    } else if (std.mem.eql(u8, col_id, "modified")) {
+        var buf: [32]u8 = undefined;
+        return objc.NSString.fromSlice(formatDate(result.mtime, &buf));
     } else if (std.mem.eql(u8, col_id, "type")) {
         return objc.NSString.fromSlice(result.category.displayName());
     }
     return null;
+}
+
+fn tableViewForColumn(_self: objc.id, _cmd: objc.SEL, table: objc.id, column: objc.id, row: i64) callconv(.c) objc.id {
+    _ = _self;
+    _ = _cmd;
+    const s = state orelse return null;
+    if (row < 0) return null;
+    const idx: usize = @intCast(row);
+
+    const col_id_ns = objc.msgSend(column, "identifier");
+    const col_id = objc.NSString.toSlice(s.allocator, col_id_ns) catch return null;
+    defer s.allocator.free(col_id);
+
+    if (std.mem.eql(u8, col_id, "name")) {
+        if (s.is_search_mode) {
+            const results = s.search_results orelse return null;
+            if (idx >= results.len) return null;
+            const result = results[idx];
+            const path = std.fmt.allocPrint(s.allocator, "{s}/{s}", .{ result.dir_path, result.name }) catch return null;
+            defer s.allocator.free(path);
+            return buildNameCell(table, column, "NameCell", result.name, path, theme.file_row_height, theme.text_bright);
+        }
+
+        const listing = s.current_entries orelse return null;
+        if (idx >= listing.entries.len) return null;
+        const entry = listing.entries[idx];
+        return buildNameCell(table, column, "NameCell", entry.name, entry.path, theme.file_row_height, theme.text_bright);
+    }
+
+    const value = if (s.is_search_mode)
+        tableObjectValueSearch(s, col_id, idx)
+    else
+        tableObjectValueDir(s, col_id, idx);
+    if (value == null) return null;
+
+    const color = if (std.mem.eql(u8, col_id, "type"))
+        theme.text_primary
+    else
+        theme.text_secondary;
+    const alignment: i64 = if (std.mem.eql(u8, col_id, "size")) 2 else 0;
+    return buildTextCell(table, column, "ValueCell", value, color, alignment, theme.file_row_height);
 }
 
 // ---------------------------------------------------------------------------
@@ -399,9 +440,20 @@ fn sidebarObjectValue(_self: objc.id, _cmd: objc.SEL, _table: objc.id, _column: 
     const idx: usize = @intCast(row);
     if (idx >= pins.len) return null;
     const pin = pins[idx];
-    const display = std.fmt.allocPrint(s.allocator, "\xF0\x9F\x93\x81 {s}", .{pin.name}) catch return null;
-    defer s.allocator.free(display);
-    return objc.NSString.fromSlice(display);
+    return objc.NSString.fromSlice(pin.name);
+}
+
+fn sidebarViewForColumn(_self: objc.id, _cmd: objc.SEL, table: objc.id, column: objc.id, row: i64) callconv(.c) objc.id {
+    _ = _self;
+    _ = _cmd;
+    const s = state orelse return null;
+    if (row < 0) return null;
+
+    const pins = s.app.getPins();
+    const idx: usize = @intCast(row);
+    if (idx >= pins.len) return null;
+    const pin = pins[idx];
+    return buildNameCell(table, column, "SidebarCell", pin.name, pin.path, theme.sidebar_row_height, theme.text_primary);
 }
 
 fn sidebarSelectionChanged(_self: objc.id, _cmd: objc.SEL, _notification: objc.id) callconv(.c) void {
@@ -419,6 +471,109 @@ fn sidebarSelectionChanged(_self: objc.id, _cmd: objc.SEL, _notification: objc.i
     s.app.openDirectory(pin.path) catch return;
     s.is_search_mode = false;
     refreshAll();
+}
+
+fn buildTextCell(table: objc.id, column: objc.id, identifier_text: []const u8, value: objc.id, color: @TypeOf(theme.text_primary), alignment: i64, height: f64) objc.id {
+    const width = objc.msgSendF64(column, "width");
+    const frame = objc.CGRect.make(0, 0, width, height);
+    const cell = reuseOrCreateCell(table, identifier_text, frame);
+    if (cell == null) return null;
+
+    var label = objc.msgSend(cell, "textField");
+    if (label == null) {
+        label = makeLabel(objc.NSString.fromSlice(""), color);
+        if (label == null) return cell;
+        objc.msgSendVoidWith1(objc.id, cell, "setTextField:", label);
+        objc.msgSendVoidWith1(objc.id, cell, "addSubview:", label);
+    }
+
+    const label_width = if (width > 20) width - 20 else width;
+    objc.msgSendVoidWith1(objc.id, label, "setStringValue:", value);
+    objc.msgSendVoidWith1(objc.id, label, "setTextColor:", window.makeNSColor(color));
+    objc.msgSendVoidWith1(objc.CGRect, label, "setFrame:", objc.CGRect.make(10, 6, label_width, height - 12));
+    objc.msgSendVoidWith1(i64, label, "setAlignment:", alignment);
+    objc.msgSendVoidWith1(bool, label, "setUsesSingleLineMode:", true);
+    objc.msgSendVoidWith1(i64, label, "setLineBreakMode:", @as(i64, 4));
+    return cell;
+}
+
+fn buildNameCell(table: objc.id, column: objc.id, identifier_text: []const u8, title: []const u8, full_path: []const u8, height: f64, color: @TypeOf(theme.text_primary)) objc.id {
+    const width = objc.msgSendF64(column, "width");
+    const frame = objc.CGRect.make(0, 0, width, height);
+    const cell = reuseOrCreateCell(table, identifier_text, frame);
+    if (cell == null) return null;
+
+    var image_view = objc.msgSend(cell, "imageView");
+    if (image_view == null) {
+        image_view = makeView("NSImageView", objc.CGRect.make(8, 5, height - 10, height - 10));
+        if (image_view != null) {
+            objc.msgSendVoidWith1(objc.id, cell, "setImageView:", image_view);
+            objc.msgSendVoidWith1(objc.id, cell, "addSubview:", image_view);
+        }
+    }
+
+    if (image_view) |iv| {
+        objc.msgSendVoidWith1(objc.CGRect, iv, "setFrame:", objc.CGRect.make(8, 5, height - 10, height - 10));
+        const icon = iconForPath(full_path);
+        if (icon != null) {
+            objc.msgSendVoidWith1(objc.id, iv, "setImage:", icon);
+            objc.msgSendVoidWith1(i64, iv, "setImageScaling:", @as(i64, 2));
+        }
+    }
+
+    var label = objc.msgSend(cell, "textField");
+    if (label == null) {
+        label = makeLabel(objc.NSString.fromSlice(""), color);
+        if (label != null) {
+            objc.msgSendVoidWith1(objc.id, cell, "setTextField:", label);
+            objc.msgSendVoidWith1(objc.id, cell, "addSubview:", label);
+        }
+    }
+
+    if (label) |field| {
+        const text_x = height + 6;
+        const text_width = if (width > text_x + 12) width - text_x - 12 else width;
+        objc.msgSendVoidWith1(objc.id, field, "setStringValue:", objc.NSString.fromSlice(title));
+        objc.msgSendVoidWith1(objc.id, field, "setTextColor:", window.makeNSColor(color));
+        objc.msgSendVoidWith1(objc.CGRect, field, "setFrame:", objc.CGRect.make(text_x, 6, text_width, height - 12));
+        objc.msgSendVoidWith1(bool, field, "setUsesSingleLineMode:", true);
+        objc.msgSendVoidWith1(i64, field, "setLineBreakMode:", @as(i64, 4));
+    }
+
+    return cell;
+}
+
+fn reuseOrCreateCell(table: objc.id, identifier_text: []const u8, frame: objc.CGRect) objc.id {
+    const identifier = objc.NSString.fromSlice(identifier_text);
+    const reused = objc.msgSendWith2(objc.id, objc.id, table, "makeViewWithIdentifier:owner:", identifier, null);
+    if (reused != null) {
+        objc.msgSendVoidWith1(objc.CGRect, reused, "setFrame:", frame);
+        return reused;
+    }
+
+    const cell = makeView("NSTableCellView", frame);
+    if (cell != null) {
+        objc.msgSendVoidWith1(objc.id, cell, "setIdentifier:", identifier);
+    }
+    return cell;
+}
+
+fn makeView(class_name: [:0]const u8, frame: objc.CGRect) objc.id {
+    const cls = objc.getClass(class_name) orelse return null;
+    return objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(cls), "initWithFrame:", frame));
+}
+
+fn makeLabel(value: objc.id, color: @TypeOf(theme.text_primary)) objc.id {
+    const NSTextField = objc.getClass("NSTextField") orelse return null;
+    const label = objc.msgSendWith1(objc.id, @as(objc.id, @ptrCast(NSTextField)), "labelWithString:", value);
+    objc.msgSendVoidWith1(objc.id, label, "setTextColor:", window.makeNSColor(color));
+    return label;
+}
+
+fn iconForPath(path: []const u8) objc.id {
+    const NSWorkspace = objc.getClass("NSWorkspace") orelse return null;
+    const workspace = objc.msgSend(@as(objc.id, @ptrCast(NSWorkspace)), "sharedWorkspace");
+    return objc.msgSendWith1(objc.id, workspace, "iconForFile:", objc.NSString.fromSlice(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +594,20 @@ pub fn updatePathLabel() void {
         const nsstr = objc.NSString.fromSlice(path);
         objc.msgSendVoidWith1(objc.id, label, "setStringValue:", nsstr);
     }
+}
+
+fn clickedTableIndex(table_view: objc.id) ?usize {
+    const clicked = objc.msgSendI64(table_view, "clickedRow");
+    if (clicked >= 0) return @intCast(clicked);
+    return null;
+}
+
+fn preferredTableIndex(table_view: objc.id) ?usize {
+    if (clickedTableIndex(table_view)) |idx| return idx;
+    const selected = objc.msgSendI64(table_view, "selectedRow");
+    if (selected >= 0) return @intCast(selected);
+
+    return null;
 }
 
 fn getPathForRow(s: *AppState, idx: usize) ?[]const u8 {
@@ -474,4 +643,16 @@ fn formatSize(size: u64, buf: []u8) []const u8 {
     } else {
         return std.fmt.bufPrint(buf, "{d:.1} {s}", .{ value, units[unit_idx] }) catch "--";
     }
+}
+
+fn formatDate(mtime: i64, buf: []u8) []const u8 {
+    if (mtime <= 0) return "--";
+
+    var raw: c.time_t = @intCast(mtime);
+    var tm_value: c.struct_tm = undefined;
+    if (c.localtime_r(&raw, &tm_value) == null) return "--";
+
+    const written = c.strftime(buf.ptr, buf.len, "%b %e", &tm_value);
+    if (written == 0) return "--";
+    return buf[0..written];
 }

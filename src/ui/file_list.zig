@@ -5,18 +5,27 @@ const delegate = @import("delegate.zig");
 const window = @import("window.zig");
 const types = @import("../core/types.zig");
 
-pub fn createFileList(s: *delegate.AppState) objc.id {
+const NSViewWidthSizable: u64 = 2;
+const NSViewHeightSizable: u64 = 16;
+
+fn setAutoresizingMask(view: objc.id, mask: u64) void {
+    objc.msgSendVoidWith1(u64, view, "setAutoresizingMask:", mask);
+}
+
+pub fn createFileList(s: *delegate.AppState, frame: objc.CGRect) objc.id {
     const NSScrollView = objc.getClass("NSScrollView") orelse return null;
     const NSTableView = objc.getClass("NSTableView") orelse return null;
     const NSTableColumn = objc.getClass("NSTableColumn") orelse return null;
 
-    const table = objc.init(objc.alloc(NSTableView));
+    const table = objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(NSTableView), "initWithFrame:", objc.CGRect.make(0, 0, frame.size.width, frame.size.height)));
     s.table_view = table;
+    setAutoresizingMask(table, NSViewWidthSizable | NSViewHeightSizable);
 
     // Add columns
     const col_specs = [_]struct { id: []const u8, title: []const u8, width: f64 }{
-        .{ .id = "name", .title = "Name", .width = 400 },
+        .{ .id = "name", .title = "Name", .width = 420 },
         .{ .id = "size", .title = "Size", .width = 80 },
+        .{ .id = "modified", .title = "Modified", .width = 140 },
         .{ .id = "type", .title = "Type", .width = 100 },
     };
 
@@ -39,7 +48,9 @@ pub fn createFileList(s: *delegate.AppState) objc.id {
     // Appearance
     objc.msgSendVoidWith1(objc.id, table, "setBackgroundColor:", window.makeNSColor(theme.background));
     const setRowHeight = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGFloat) callconv(.c) void);
-    setRowHeight(table, objc.sel("setRowHeight:"), 22.0);
+    setRowHeight(table, objc.sel("setRowHeight:"), theme.file_row_height);
+    objc.msgSendVoidWith1(bool, table, "setAllowsEmptySelection:", false);
+    objc.msgSendVoidWith1(bool, table, "setUsesAlternatingRowBackgroundColors:", false);
 
     // Double-click action
     const NSApp = objc.msgSend(objc.getClass("NSApplication").?, "sharedApplication");
@@ -51,7 +62,8 @@ pub fn createFileList(s: *delegate.AppState) objc.id {
     objc.msgSendVoidWith1(u64, table, "setColumnAutoresizingStyle:", 4);
 
     // Wrap in scroll view
-    const scroll = objc.init(objc.alloc(NSScrollView));
+    const scroll = objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(NSScrollView), "initWithFrame:", frame));
+    setAutoresizingMask(scroll, NSViewWidthSizable | NSViewHeightSizable);
     objc.msgSendVoidWith1(objc.id, scroll, "setDocumentView:", table);
     objc.msgSendVoidWith1(bool, scroll, "setHasVerticalScroller:", true);
     objc.msgSendVoidWith1(bool, scroll, "setAutohidesScrollers:", true);

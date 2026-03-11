@@ -5,6 +5,11 @@ const delegate = @import("delegate.zig");
 const file_list = @import("file_list.zig");
 const sidebar = @import("sidebar.zig");
 
+const NSViewMinXMargin: u64 = 1;
+const NSViewWidthSizable: u64 = 2;
+const NSViewMinYMargin: u64 = 8;
+const NSViewHeightSizable: u64 = 16;
+
 fn msgSendSize(target: objc.id, sel_name: [:0]const u8, size: objc.CGSize) void {
     const func = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGSize) callconv(.c) void);
     func(target, objc.sel(sel_name), size);
@@ -18,6 +23,20 @@ fn msgSendFloat(target: objc.id, sel_name: [:0]const u8, val: objc.CGFloat) void
 fn msgSendFloatI64(target: objc.id, sel_name: [:0]const u8, val: objc.CGFloat, idx: i64) void {
     const func = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGFloat, i64) callconv(.c) void);
     func(target, objc.sel(sel_name), val, idx);
+}
+
+fn msgSendRect(target: objc.id, sel_name: [:0]const u8, rect: objc.CGRect) void {
+    const func = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGRect) callconv(.c) void);
+    func(target, objc.sel(sel_name), rect);
+}
+
+fn setAutoresizingMask(view: objc.id, mask: u64) void {
+    objc.msgSendVoidWith1(u64, view, "setAutoresizingMask:", mask);
+}
+
+fn makeView(class_name: [:0]const u8, frame: objc.CGRect) objc.id {
+    const cls = objc.getClass(class_name) orelse return null;
+    return objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(cls), "initWithFrame:", frame));
 }
 
 pub fn makeNSColor(color: theme.Color) objc.id {
@@ -72,82 +91,128 @@ pub fn createMainWindow() void {
 }
 
 fn buildFullContentView(s: *delegate.AppState) objc.id {
-    // Outer vertical stack: toolbar on top, split view below
-    const NSStackView = objc.getClass("NSStackView") orelse return null;
-    const outer = objc.init(objc.alloc(NSStackView));
-    objc.msgSendVoidWith1(i64, outer, "setOrientation:", @as(i64, 1)); // vertical
-    msgSendFloat(outer, "setSpacing:", 0.0);
-    objc.msgSendVoidWith1(i64, outer, "setDistribution:", @as(i64, 1)); // gravityAreas
-    const setInsets = objc.msgSendFn(*const fn (objc.id, objc.SEL, f64, f64, f64, f64) callconv(.c) void);
-    setInsets(outer, objc.sel("setEdgeInsets:"), 0, 0, 0, 0);
+    const content_frame = objc.CGRect.make(0, 0, theme.window_default_width, theme.window_default_height);
+    const content = makeView("NSView", content_frame);
+    if (content == null) return null;
 
-    // Build toolbar row
-    const toolbar = buildToolbarView(s);
-    if (toolbar) |tb| {
-        objc.msgSendVoidWith2(objc.id, i64, outer, "addView:inGravity:", tb, @as(i64, 1)); // top
+    objc.msgSendVoidWith1(bool, content, "setWantsLayer:", true);
+    if (objc.msgSend(content, "layer")) |layer| {
+        const cg_color = objc.msgSend(makeNSColor(theme.background), "CGColor");
+        objc.msgSendVoidWith1(objc.id, layer, "setBackgroundColor:", cg_color);
     }
 
-    // Build split view (sidebar + file list)
-    const NSSplitView = objc.getClass("NSSplitView") orelse return outer;
-    const split = objc.init(objc.alloc(NSSplitView));
-    objc.msgSendVoidWith1(bool, split, "setVertical:", true);
+    const split_height = theme.window_default_height - theme.toolbar_height;
+    const split = buildSplitView(s, objc.CGRect.make(0, 0, theme.window_default_width, split_height));
+    if (split != null) {
+        setAutoresizingMask(split, NSViewWidthSizable | NSViewHeightSizable);
+        objc.msgSendVoidWith1(objc.id, content, "addSubview:", split);
+    }
 
-    if (sidebar.createSidebar(s)) |sv| {
+    const toolbar = buildToolbarView(s, objc.CGRect.make(0, split_height, theme.window_default_width, theme.toolbar_height));
+    if (toolbar != null) {
+        setAutoresizingMask(toolbar, NSViewWidthSizable | NSViewMinYMargin);
+        objc.msgSendVoidWith1(objc.id, content, "addSubview:", toolbar);
+    }
+
+    return content;
+}
+
+fn buildSplitView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
+    const NSSplitView = objc.getClass("NSSplitView") orelse return null;
+    const split = objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(NSSplitView), "initWithFrame:", frame));
+    objc.msgSendVoidWith1(bool, split, "setVertical:", true);
+    objc.msgSendVoidWith1(i64, split, "setDividerStyle:", @as(i64, 1));
+
+    if (sidebar.createSidebar(s, objc.CGRect.make(0, 0, theme.sidebar_width, frame.size.height))) |sv| {
+        setAutoresizingMask(sv, NSViewHeightSizable);
         objc.msgSendVoidWith1(objc.id, split, "addSubview:", sv);
     }
-    if (file_list.createFileList(s)) |lv| {
+
+    const file_width = if (frame.size.width > theme.sidebar_width) frame.size.width - theme.sidebar_width else frame.size.width;
+    if (file_list.createFileList(s, objc.CGRect.make(theme.sidebar_width, 0, file_width, frame.size.height))) |lv| {
+        setAutoresizingMask(lv, NSViewWidthSizable | NSViewHeightSizable);
         objc.msgSendVoidWith1(objc.id, split, "addSubview:", lv);
     }
 
     msgSendFloatI64(split, "setPosition:ofDividerAtIndex:", theme.sidebar_width, 0);
-
-    // Split view fills remaining space
-    objc.msgSendVoidWith2(objc.id, i64, outer, "addView:inGravity:", split, @as(i64, 3)); // bottom
-
-    // Low hugging priority so split view expands
-    const setHugging = objc.msgSendFn(*const fn (objc.id, objc.SEL, f32, i64) callconv(.c) void);
-    setHugging(split, objc.sel("setContentHuggingPriority:forOrientation:"), 1.0, @as(i64, 1));
-
-    return outer;
+    return split;
 }
 
-fn buildToolbarView(s: *delegate.AppState) objc.id {
-    const NSStackView = objc.getClass("NSStackView") orelse return null;
-    const toolbar_stack = objc.init(objc.alloc(NSStackView));
+fn buildToolbarView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
+    const toolbar = makeView("NSView", frame);
+    if (toolbar == null) return null;
 
-    objc.msgSendVoidWith1(i64, toolbar_stack, "setOrientation:", @as(i64, 0)); // horizontal
-    msgSendFloat(toolbar_stack, "setSpacing:", 8.0);
+    objc.msgSendVoidWith1(bool, toolbar, "setWantsLayer:", true);
+    if (objc.msgSend(toolbar, "layer")) |layer| {
+        const cg_color = objc.msgSend(makeNSColor(theme.toolbar), "CGColor");
+        objc.msgSendVoidWith1(objc.id, layer, "setBackgroundColor:", cg_color);
+    }
 
     const NSApp = objc.msgSend(objc.getClass("NSApplication") orelse return null, "sharedApplication");
     const app_delegate = objc.msgSend(NSApp, "delegate");
+    const padding = theme.content_padding;
+    const button_size = 28.0;
+    const control_y = @max(0.0, @divExact(frame.size.height - button_size, 2.0));
+    const popup_width = 140.0;
+    const search_width = 260.0;
+    const gap = 10.0;
+    const popup_x = frame.size.width - padding - popup_width;
+    const search_x = popup_x - gap - search_width;
+    var x = padding;
 
     // Navigation buttons
-    addViewToStack(toolbar_stack, makeButton("\xE2\x86\x90", "backAction:", app_delegate)); // ←
-    addViewToStack(toolbar_stack, makeButton("\xE2\x86\x92", "forwardAction:", app_delegate)); // →
-    addViewToStack(toolbar_stack, makeButton("\xE2\x86\x91", "upAction:", app_delegate)); // ↑
+    if (makeToolbarButton("\xE2\x86\x90", "backAction:", app_delegate)) |button| {
+        msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
+        x += button_size + 8;
+    }
+    if (makeToolbarButton("\xE2\x86\x92", "forwardAction:", app_delegate)) |button| {
+        msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
+        x += button_size + 8;
+    }
+    if (makeToolbarButton("\xE2\x86\x91", "upAction:", app_delegate)) |button| {
+        msgSendRect(button, "setFrame:", objc.CGRect.make(x, control_y, button_size, button_size));
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", button);
+        x += button_size + 12;
+    }
+
+    if (objc.getClass("NSTextField")) |NSTextField| {
+        const title_label = objc.msgSendWith1(objc.id, @as(objc.id, @ptrCast(NSTextField)), "labelWithString:", objc.NSString.fromSlice("ZEST"));
+        objc.msgSendVoidWith1(objc.id, title_label, "setTextColor:", makeNSColor(theme.text_bright));
+        msgSendRect(title_label, "setFrame:", objc.CGRect.make(x, control_y + 4, 44, 20));
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", title_label);
+        x += 54;
+    }
 
     // Path label
     if (objc.getClass("NSTextField")) |NSTextField| {
         const path_label = objc.msgSendWith1(objc.id, @as(objc.id, @ptrCast(NSTextField)), "labelWithString:", objc.NSString.fromSlice(s.app.currentPath()));
         objc.msgSendVoidWith1(objc.id, path_label, "setTextColor:", makeNSColor(theme.text_secondary));
+        objc.msgSendVoidWith1(bool, path_label, "setUsesSingleLineMode:", true);
+        objc.msgSendVoidWith1(i64, path_label, "setLineBreakMode:", @as(i64, 5));
+        const path_width = @max(120.0, search_x - x - gap);
+        msgSendRect(path_label, "setFrame:", objc.CGRect.make(x, control_y + 4, path_width, 20));
+        setAutoresizingMask(path_label, NSViewWidthSizable);
         s.path_label = path_label;
-        addViewToStack(toolbar_stack, path_label);
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", path_label);
     }
 
     // Search field
     if (objc.getClass("NSSearchField")) |NSSearchField| {
-        const search_field = objc.init(objc.alloc(NSSearchField));
-        objc.msgSendVoidWith1(objc.id, search_field, "setPlaceholderString:", objc.NSString.fromSlice("Search..."));
+        const search_field = objc.autorelease(objc.msgSendWith1(objc.CGRect, objc.alloc(NSSearchField), "initWithFrame:", objc.CGRect.make(search_x, control_y, search_width, button_size)));
+        objc.msgSendVoidWith1(objc.id, search_field, "setPlaceholderString:", objc.NSString.fromSlice("Search Everywhere"));
         objc.msgSendVoidWith1(objc.id, search_field, "setTarget:", app_delegate);
         objc.msgSendVoidWith1(objc.SEL, search_field, "setAction:", objc.sel("searchAction:"));
         objc.msgSendVoidWith1(bool, search_field, "setSendsSearchStringImmediately:", true);
+        setAutoresizingMask(search_field, NSViewMinXMargin);
         s.search_field = search_field;
-        addViewToStack(toolbar_stack, search_field);
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", search_field);
     }
 
     // Category filter popup
     if (objc.getClass("NSPopUpButton")) |NSPopUpButton| {
-        const popup_frame = objc.CGRect.make(0, 0, 120, 24);
+        const popup_frame = objc.CGRect.make(popup_x, control_y, popup_width, button_size);
         const popup = objc.msgSendWith2(objc.CGRect, bool, objc.alloc(NSPopUpButton), "initWithFrame:pullsDown:", popup_frame, false);
         objc.msgSendVoidWith1(objc.id, popup, "addItemWithTitle:", objc.NSString.fromSlice("All"));
         const categories = [_][]const u8{ "Images", "Text", "Documents", "Spreadsheets", "Audio", "Video", "Code", "Archives" };
@@ -156,18 +221,12 @@ fn buildToolbarView(s: *delegate.AppState) objc.id {
         }
         objc.msgSendVoidWith1(objc.id, popup, "setTarget:", app_delegate);
         objc.msgSendVoidWith1(objc.SEL, popup, "setAction:", objc.sel("categoryChanged:"));
+        setAutoresizingMask(popup, NSViewMinXMargin);
         s.category_popup = popup;
-        addViewToStack(toolbar_stack, popup);
+        objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", popup);
     }
 
-    // Toolbar background
-    objc.msgSendVoidWith1(bool, toolbar_stack, "setWantsLayer:", true);
-    if (objc.msgSend(toolbar_stack, "layer")) |layer| {
-        const cg_color = objc.msgSend(makeNSColor(theme.toolbar), "CGColor");
-        objc.msgSendVoidWith1(objc.id, layer, "setBackgroundColor:", cg_color);
-    }
-
-    return toolbar_stack;
+    return toolbar;
 }
 
 fn buildMainMenu() void {
@@ -259,7 +318,10 @@ fn makeButton(title: []const u8, action: [:0]const u8, target: objc.id) objc.id 
     );
 }
 
-fn addViewToStack(stack: objc.id, view: objc.id) void {
-    if (view == null) return;
-    objc.msgSendVoidWith2(objc.id, i64, stack, "addView:inGravity:", view, @as(i64, 1));
+fn makeToolbarButton(title: []const u8, action: [:0]const u8, target: objc.id) objc.id {
+    const button = makeButton(title, action, target);
+    if (button == null) return null;
+    msgSendSize(button, "setFrameSize:", .{ .width = 28, .height = 28 });
+    objc.msgSendVoidWith1(i64, button, "setBezelStyle:", @as(i64, 1));
+    return button;
 }

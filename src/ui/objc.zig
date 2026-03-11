@@ -140,6 +140,12 @@ pub fn msgSendFn(comptime T: type) T {
 pub const CGFloat = f64;
 pub const CGPoint = extern struct { x: CGFloat, y: CGFloat };
 pub const CGSize = extern struct { width: CGFloat, height: CGFloat };
+pub const NSEdgeInsets = extern struct {
+    top: CGFloat,
+    left: CGFloat,
+    bottom: CGFloat,
+    right: CGFloat,
+};
 pub const CGRect = extern struct {
     origin: CGPoint,
     size: CGSize,
