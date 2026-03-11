@@ -18,30 +18,30 @@
 - [x] `search.zig` — First/last char substring search with bitmap category filtering
 - [x] Tests: format roundtrip, bitmap ops, reader roundtrip, search correctness, case-insensitive, category filter
 
-## Phase 3: Background Indexer — PARTIAL
+## Phase 3: Background Indexer — COMPLETE
 
 - [x] `fsevents.zig` — FSEvents C interop wrapper (stream create, start, stop, callback)
 - [x] `daemon.zig` — Full scan mode with atomic rename (.tmp → .zst)
 - [x] `daemon.zig` — Launchd plist generation
-- [ ] **T1: FSEvents watcher loop** — Wire up incremental updates in daemon after full scan
-- [ ] **T2: Launchd install command** — `zest-indexer install` writes plist to `~/Library/LaunchAgents/` and loads it
-- [ ] **T3: Periodic full rescan** — Daily safety net rebuild (timer in daemon)
+- [x] **T1: FSEvents watcher loop** — CFRunLoop-based watcher, rebuilds on 1000+ events or 30s timer *(Sprint 1)*
+- [x] **T2: Launchd install command** — `zest-indexer install/uninstall` with `--binary-path` override *(Sprint 1)*
+- [x] **T3: Periodic full rescan** — 24h safety net timer in watcher loop
 
-## Phase 4: Core Features — MOSTLY COMPLETE
+## Phase 4: Core Features — COMPLETE
 
 - [x] `navigator.zig` — Back/forward/up with history (tested)
 - [x] `pins.zig` — JSON persistence, defaults, add/remove (tested)
 - [x] `app.zig` — Wires navigator + pins + index reader + search
 - [x] `main.zig` — CLI entry, arg parsing, directory listing
-- [ ] **T4: Index stat polling** — Detect new index file every ~5s, remap (in App or main loop)
-- [ ] **T5: Human-readable file sizes** — "2.1 KB", "540 B", "3.4 MB" instead of bucket labels
-- [ ] **T6: `--benchmark` flag** — `zest --benchmark "query"` runs 1000 searches, prints p50/p99
-- [ ] **T7: `open` on double-click** — Wire up `std.process.Child` to run `open <path>` for files
+- [x] **T4: Index stat polling** — Checks inode every 5s, auto-reloads on change
+- [x] **T5: Human-readable file sizes** — "2.1 KB", "540 B", "3.4 MB" via `formatSizeHuman` *(Sprint 1)*
+- [x] **T6: `--benchmark` flag** — 1000 iterations, sorted latencies, p50/p99 in µs *(Sprint 1)*
+- [x] **T7: `open` files/dirs** — `openFile` (macOS `open`) + `openInTerminal` (`open -a Terminal`)
 
-## Phase 5: UI (AppKit) — NOT STARTED
+## Phase 5: UI (AppKit) — IN PROGRESS
 
 - [x] `theme.zig` — Full Darcula color constants (backgrounds, selection, text, category colors, window dims)
-- [ ] **T8: ObjC runtime bridge** — Direct `@cImport("objc/runtime.h")` interop (no zig-objc dep)
+- [x] **T8: ObjC runtime bridge** — `objc.zig` with typed msgSend wrappers, NSString helpers, 4 tests *(Sprint 1)*
 - [ ] **T9: Window + toolbar** — NSWindow, dark appearance, back/forward/up buttons, path display, search field
 - [ ] **T10: File list (NSTableView)** — Name, Size, Modified, Type columns; sort dirs first
 - [ ] **T11: Sidebar (NSSplitView + NSOutlineView)** — Pinned folders, default + custom sections
