@@ -1,6 +1,8 @@
-import CZestCore
+import AppKit
 
-// Prove the C module imports and the Zig static lib links: reference a symbol.
-// (zest_open(nil-ish) is not called with real data here; we only need the symbol
-// to resolve at link time. Print a banner.)
-print("Zest bootstrap — CZestCore module imported, libzest-core.a linked")
+// Non-bundled executable (preserves `zest /path` ergonomics, like today's app).
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.regular)   // show in Dock / accept focus when unbundled
+app.run()
