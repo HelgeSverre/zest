@@ -51,3 +51,26 @@ bench query:
 # Remove build output and local cache
 clean:
     rm -rf zig-out .zig-cache
+
+# --- Swift UI (Phase 0+) ---
+
+# Build the Zig C-ABI core the Swift app links against.
+core:
+    zig build core
+
+# Build the Swift app (depends on the core lib being built first).
+app: core
+    swift build
+
+# Build everything: Zig binaries + core lib + Swift app.
+build-all: core
+    zig build
+    swift build
+
+# Run the Swift app.
+run-app: core
+    swift run Zest
+
+# Run Swift tests (FFI + theme).
+test-swift: core
+    swift test
