@@ -62,6 +62,13 @@ pub fn createSidebar(s: *delegate.AppState, frame: objc.CGRect) objc.id {
     const ds = objc.init(objc.alloc(ds_cls));
     objc.msgSendVoidWith1(objc.id, table, "setDataSource:", ds);
     objc.msgSendVoidWith1(objc.id, table, "setDelegate:", ds);
+
+    // Navigate on single click (fires even when re-clicking the active pin).
+    const NSApp = objc.msgSend(objc.getClass("NSApplication") orelse return container, "sharedApplication");
+    const app_delegate = objc.msgSend(NSApp, "delegate");
+    objc.msgSendVoidWith1(objc.id, table, "setTarget:", app_delegate);
+    objc.msgSendVoidWith1(objc.SEL, table, "setAction:", objc.sel("sidebarClicked:"));
+
     objc.msgSendVoidWith1(objc.id, table, "setBackgroundColor:", window.makeNSColor(theme.sidebar));
     const setRowHeight = objc.msgSendFn(*const fn (objc.id, objc.SEL, objc.CGFloat) callconv(.c) void);
     setRowHeight(table, objc.sel("setRowHeight:"), theme.sidebar_row_height);
@@ -72,6 +79,12 @@ pub fn createSidebar(s: *delegate.AppState, frame: objc.CGRect) objc.id {
     objc.msgSendVoidWith1(bool, scroll, "setHasVerticalScroller:", true);
     objc.msgSendVoidWith1(bool, scroll, "setAutohidesScrollers:", true);
     objc.msgSendVoidWith1(objc.id, container, "addSubview:", scroll);
+
+    const NSMenu = objc.getClass("NSMenu") orelse return container;
+    const menu = objc.init(objc.alloc(NSMenu));
+    objc.msgSendVoidWith1(objc.id, menu, "setDelegate:", app_delegate);
+    objc.msgSendVoidWith1(objc.id, table, "setMenu:", menu);
+    s.sidebar_context_menu = menu;
 
     return container;
 }

@@ -1,5 +1,6 @@
 const objc = @import("objc.zig");
 const delegate = @import("delegate.zig");
+const async_search_mod = @import("../core/async_search.zig");
 const std = @import("std");
 const App = @import("../app.zig").App;
 
@@ -15,6 +16,12 @@ pub fn run(allocator: std.mem.Allocator, app: *App) !void {
     // NSApplicationActivationPolicyRegular = 0 — gives us Dock icon and menu bar
     objc.msgSendVoidWith1(i64, NSApp, "setActivationPolicy:", @as(i64, 0));
 
+    // Disable AppKit's automatic window tabbing so it stops injecting the
+    // "Show Tab Bar" / "Show All Tabs" items into the View menu — unused here.
+    if (objc.getClass("NSWindow")) |NSWindow| {
+        objc.msgSendVoidWith1(bool, NSWindow, "setAllowsAutomaticWindowTabbing:", false);
+    }
+
     // Register all ObjC delegate classes
     delegate.registerAllClasses();
 
@@ -23,6 +30,7 @@ pub fn run(allocator: std.mem.Allocator, app: *App) !void {
     app_state.* = .{
         .app = app,
         .allocator = allocator,
+        .async_search = async_search_mod.AsyncSearch.init(allocator),
     };
     delegate.state = app_state;
 

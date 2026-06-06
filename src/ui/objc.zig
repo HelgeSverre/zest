@@ -133,6 +133,20 @@ pub fn msgSendFn(comptime T: type) T {
     return @ptrCast(&c.objc_msgSend);
 }
 
+/// Mirrors C `struct objc_super` ({ id receiver; Class super_class; }).
+pub const objc_super = extern struct {
+    receiver: id,
+    super_class: Class,
+};
+
+/// `[super sel:arg1]` returning void. Call from inside an overridden method's
+/// IMP, passing the superclass whose implementation should run.
+pub fn msgSendSuperVoidWith1(comptime T1: type, self_obj: id, superclass: Class, sel_name: [:0]const u8, arg1: T1) void {
+    var sup = objc_super{ .receiver = self_obj, .super_class = superclass };
+    const func: *const fn (*objc_super, SEL, T1) callconv(.c) void = @ptrCast(&c.objc_msgSendSuper);
+    func(&sup, sel(sel_name), arg1);
+}
+
 // ---------------------------------------------------------------------------
 // CoreGraphics geometry types
 // ---------------------------------------------------------------------------
@@ -174,7 +188,7 @@ pub fn registerClassPair(cls: Class) void {
 /// Add a method to a class.  `imp` must be a `callconv(.c)` function pointer.
 /// `types` is the ObjC type encoding (e.g. "v@:@" for void(self, _cmd, id)).
 pub fn addMethod(cls: Class, sel_name: [:0]const u8, imp: anytype, types: [:0]const u8) bool {
-    return c.class_addMethod(cls, sel(sel_name), @ptrCast(&imp), types.ptr);
+    return c.class_addMethod(cls, sel(sel_name), @ptrCast(&imp), types.ptr) != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +255,35 @@ pub const NSString = struct {
         return buf;
     }
 };
+
+// ---------------------------------------------------------------------------
+// GCD (Grand Central Dispatch) wrappers
+// ---------------------------------------------------------------------------
+
+const dispatch_c = @cImport({
+    @cInclude("dispatch/dispatch.h");
+});
+
+pub const dispatch_queue_t = *anyopaque;
+pub const dispatch_function_t = *const fn (?*anyopaque) callconv(.c) void;
+
+// libdispatch exports the main queue as the global symbol `_dispatch_main_q`.
+// The C header types it as an opaque struct, which Zig 0.16's translate-c
+// surfaces as an opaque type we cannot take the address of. Re-declare the
+// symbol with a sized type so we can obtain its address; only the address
+// matters, and the linker resolves it by name.
+extern var _dispatch_main_q: usize;
+
+/// Returns the main dispatch queue (runs on the AppKit main thread).
+pub fn dispatch_get_main_queue() dispatch_queue_t {
+    return @ptrCast(&_dispatch_main_q);
+}
+
+/// Schedule `work(context)` to run asynchronously on `queue`.
+/// Uses the _f variant (C function pointer) since Zig cannot create ObjC blocks.
+pub fn dispatch_async_f(queue: dispatch_queue_t, context: ?*anyopaque, work: dispatch_function_t) void {
+    dispatch_c.dispatch_async_f(@ptrCast(queue), context, work);
+}
 
 // ---------------------------------------------------------------------------
 // Tests
