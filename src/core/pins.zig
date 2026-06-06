@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime.zig");
 const types = @import("types.zig");
 
 pub const PinManager = struct {
@@ -37,10 +38,7 @@ pub const PinManager = struct {
     }
 
     fn loadFromFile(self: *PinManager, path: []const u8) !void {
-        const file = std.fs.openFileAbsolute(path, .{}) catch return error.FileNotFound;
-        defer file.close();
-
-        const data = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return error.ReadFailed;
+        const data = runtime.readFileAlloc(self.allocator, path, .limited(1024 * 1024)) catch return error.FileNotFound;
         defer self.allocator.free(data);
 
         try self.parseJson(data);
@@ -71,7 +69,7 @@ pub const PinManager = struct {
     }
 
     pub fn loadDefaults(self: *PinManager) !void {
-        const home = std.process.getEnvVarOwned(self.allocator, "HOME") catch return error.HomeNotFound;
+        const home = runtime.getEnvVarOwned(self.allocator, "HOME") catch return error.HomeNotFound;
         defer self.allocator.free(home);
 
         const defaults = [_]struct { name: []const u8, suffix: []const u8 }{
@@ -107,31 +105,11 @@ pub const PinManager = struct {
     pub fn save(self: *PinManager) !void {
         const fp = self.file_path orelse return error.NoFilePath;
 
-        if (std.fs.path.dirname(fp)) |parent| {
-            std.fs.makeDirAbsolute(parent) catch |err| {
-                if (err != error.PathAlreadyExists) return err;
-            };
-        }
+        if (std.fs.path.dirname(fp)) |parent| try runtime.ensureDir(parent);
 
-        var buf: std.ArrayList(u8) = .empty;
-        defer buf.deinit(self.allocator);
-        const writer = buf.writer(self.allocator);
-
-        try writer.writeAll("[\n");
-        for (self.pins.items, 0..) |pin, i| {
-            try writer.print("  {{\"name\": \"{s}\", \"path\": \"{s}\", \"is_default\": {}}}", .{
-                pin.name,
-                pin.path,
-                pin.is_default,
-            });
-            if (i < self.pins.items.len - 1) try writer.writeAll(",");
-            try writer.writeAll("\n");
-        }
-        try writer.writeAll("]\n");
-
-        const file = try std.fs.createFileAbsolute(fp, .{});
-        defer file.close();
-        try file.writeAll(buf.items);
+        const json = try pinsToJson(self.allocator, self.pins.items);
+        defer self.allocator.free(json);
+        try runtime.writeFileAbsolute(fp, json);
     }
 
     pub fn addPin(self: *PinManager, name: []const u8, path: []const u8) !void {
@@ -163,9 +141,9 @@ pub const PinManager = struct {
 };
 
 pub fn pinsToJson(allocator: std.mem.Allocator, pins: []const types.Pin) ![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    const writer = &out.writer;
 
     try writer.writeAll("[\n");
     for (pins, 0..) |pin, i| {
@@ -178,5 +156,5 @@ pub fn pinsToJson(allocator: std.mem.Allocator, pins: []const types.Pin) ![]u8 {
         try writer.writeAll("\n");
     }
     try writer.writeAll("]\n");
-    return buf.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }

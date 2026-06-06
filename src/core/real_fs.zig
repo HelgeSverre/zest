@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const fs_provider = @import("fs_provider.zig");
 const file_types = @import("file_types.zig");
+const runtime = @import("runtime.zig");
 
 const FileSystemProvider = fs_provider.FileSystemProvider;
 const FsError = fs_provider.FsError;
@@ -21,7 +22,7 @@ pub const RealFs = struct {
         .isDir = isDirImpl,
     };
 
-    fn kindFromStat(stat: std.fs.File.Stat) types.FileKind {
+    fn kindFromStat(stat: std.Io.File.Stat) types.FileKind {
         return switch (stat.kind) {
             .directory => .directory,
             .sym_link => .symlink,
@@ -29,12 +30,12 @@ pub const RealFs = struct {
         };
     }
 
-    fn mtimeToEpoch(stat: std.fs.File.Stat) i64 {
-        return @intCast(@divTrunc(stat.mtime, std.time.ns_per_s));
+    fn mtimeToEpoch(stat: std.Io.File.Stat) i64 {
+        return @intCast(@divTrunc(stat.mtime.nanoseconds, std.time.ns_per_s));
     }
 
     fn listDirImpl(_: *anyopaque, allocator: std.mem.Allocator, path: []const u8) FsError!types.DirListing {
-        var dir = std.fs.openDirAbsolute(path, .{ .iterate = true }) catch |err| {
+        var dir = std.Io.Dir.openDirAbsolute(runtime.io, path, .{ .iterate = true }) catch |err| {
             return switch (err) {
                 error.FileNotFound => FsError.NotFound,
                 error.AccessDenied => FsError.PermissionDenied,
@@ -42,7 +43,7 @@ pub const RealFs = struct {
                 else => FsError.IoError,
             };
         };
-        defer dir.close();
+        defer dir.close(runtime.io);
 
         var entries: std.ArrayList(types.FileEntry) = .empty;
         errdefer {
@@ -54,7 +55,7 @@ pub const RealFs = struct {
         }
 
         var iter = dir.iterate();
-        while (iter.next() catch return FsError.IoError) |item| {
+        while (iter.next(runtime.io) catch return FsError.IoError) |item| {
             if (item.name.len > 0 and item.name[0] == '.') continue;
 
             const name = allocator.dupe(u8, item.name) catch return FsError.OutOfMemory;
@@ -72,7 +73,7 @@ pub const RealFs = struct {
             var size: u64 = 0;
             var mtime: i64 = 0;
 
-            if (dir.statFile(item.name)) |stat| {
+            if (dir.statFile(runtime.io, item.name, .{})) |stat| {
                 size = stat.size;
                 mtime = mtimeToEpoch(stat);
             } else |_| {}
@@ -96,11 +97,11 @@ pub const RealFs = struct {
     }
 
     fn statImpl(_: *anyopaque, allocator: std.mem.Allocator, path: []const u8) FsError!types.FileEntry {
-        const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        const file = std.Io.Dir.openFileAbsolute(runtime.io, path, .{}) catch |err| {
             if (err == error.IsDir) {
-                var dir = std.fs.openDirAbsolute(path, .{}) catch return FsError.NotFound;
-                defer dir.close();
-                const s = dir.stat() catch return FsError.IoError;
+                var dir = std.Io.Dir.openDirAbsolute(runtime.io, path, .{}) catch return FsError.NotFound;
+                defer dir.close(runtime.io);
+                const s = dir.stat(runtime.io) catch return FsError.IoError;
                 const name = std.fs.path.basename(path);
                 return .{
                     .name = allocator.dupe(u8, name) catch return FsError.OutOfMemory,
@@ -117,9 +118,9 @@ pub const RealFs = struct {
                 else => FsError.IoError,
             };
         };
-        defer file.close();
+        defer file.close(runtime.io);
 
-        const stat = file.stat() catch return FsError.IoError;
+        const stat = file.stat(runtime.io) catch return FsError.IoError;
         const name = std.fs.path.basename(path);
         const kind = kindFromStat(stat);
         const cat: types.FileCategory = if (kind == .directory) .uncategorized else file_types.categorize(name);
@@ -135,13 +136,13 @@ pub const RealFs = struct {
     }
 
     fn existsImpl(_: *anyopaque, path: []const u8) bool {
-        std.fs.accessAbsolute(path, .{}) catch return false;
+        std.Io.Dir.accessAbsolute(runtime.io, path, .{}) catch return false;
         return true;
     }
 
     fn isDirImpl(_: *anyopaque, path: []const u8) bool {
-        var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-        dir.close();
+        var dir = std.Io.Dir.openDirAbsolute(runtime.io, path, .{}) catch return false;
+        dir.close(runtime.io);
         return true;
     }
 };
