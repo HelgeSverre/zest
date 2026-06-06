@@ -2,3 +2,5 @@ zig-out/
 .zig-cache/
 main
 .idea/
+.build/
+.swiftpm/
