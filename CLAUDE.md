@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Zest** is a minimal, fast Finder replacement for macOS built in Zig 0.15.2. CLI: `zest .` or `zest /path` opens a native GUI. macOS only.
+**Zest** is a minimal, fast Finder replacement for macOS built in Zig 0.16.0. CLI: `zest .` or `zest /path` opens a native GUI. macOS only.
 
 Two binaries: `zest` (GUI app) and `zest-indexer` (background daemon).
 
@@ -31,7 +31,8 @@ zig build test         # Run all tests
 
 ## Code Conventions
 
-- Zig 0.15.2 idioms and standard library patterns.
+- Zig 0.16.0 idioms and standard library patterns.
+- Filesystem/clock/env/process access goes through the global `Io` handle in `core/runtime.zig` (set once in `main` from `std.process.Init`); use its `readFileAlloc`/`writeFileAbsolute`/`ensureDir`/`getEnvVarOwned`/`nowNanos`/`unixTimestamp` helpers rather than re-deriving the 0.16 `Io` call patterns.
 - Vtable interfaces follow the `std.mem.Allocator` pattern (ptr + vtable).
 - File type categorization via `StaticStringMap` in `file_types.zig`.
 - Tests are embedded in source files (Zig's `test` blocks), listed in `build.zig`.
@@ -41,7 +42,7 @@ zig build test         # Run all tests
 ```
 src/main.zig           — CLI entry, arg parsing
 src/app.zig            — App controller (owns Navigator, PinManager, IndexReader)
-src/core/              — Types, FS abstraction, navigation, pins, file categorization
+src/core/              — Types, FS abstraction, navigation, pins, file categorization, runtime (Io handle)
 src/index/             — Binary format, builder, mmap reader, SIMD search, bitmaps, FSEvents, daemon
 src/ui/                — AppKit UI, Darcula theme
 src/config/            — Paths, defaults, exclude patterns

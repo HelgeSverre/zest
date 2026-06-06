@@ -1,6 +1,6 @@
 # Zest
 
-![Zig](https://img.shields.io/badge/lang-Zig_0.15.2-F7A41D?style=flat-square&logo=zig)
+![Zig](https://img.shields.io/badge/lang-Zig_0.16.0-F7A41D?style=flat-square&logo=zig)
 ![macOS](https://img.shields.io/badge/platform-macOS-000000?style=flat-square&logo=apple)
 ![MIT License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
@@ -30,7 +30,8 @@ $ zest ~/code/zig-finder
 ## Requirements
 
 - macOS (Apple Silicon or Intel)
-- Zig 0.15.2+
+- Zig 0.16.0
+- Xcode command line tools (the build invokes `xcrun` to locate the macOS SDK)
 
 ## Build & Run
 
@@ -207,7 +208,8 @@ graph TB
 - **No SQLite/Spotlight:** Custom mmap'd format delivers sub-5ms queries. SQLite FTS5 with trigrams is 100-500ms for 1M files.
 - **Vtable FS interface:** Same `ptr + vtable` pattern as `std.mem.Allocator`. `FakeFs` enables fast, deterministic tests with no disk I/O.
 - **ObjC runtime bridge:** Direct `@cImport("objc/runtime.h")` with typed `objc_msgSend` wrappers — no external dependencies for AppKit interop.
-- **Unmanaged ArrayLists:** Zig 0.15.2 `std.ArrayList` is unmanaged (allocator passed per-call), which we use throughout.
+- **Unmanaged ArrayLists:** Zig 0.16 `std.ArrayList` is unmanaged (allocator passed per-call), which we use throughout.
+- **Centralized `Io` handle:** Zig 0.16 routes filesystem, clock, and process access through an `Io` instance handed to `main`. We stash it once in `core/runtime.zig` (alongside small `readFileAlloc`/`writeFileAbsolute`/`ensureDir` helpers) rather than threading it through every signature — the same global-state pattern the UI uses for `delegate.state`.
 
 ## Project Structure
 
@@ -224,7 +226,8 @@ src/
 │   ├── fake_fs.zig        # In-memory fake for tests
 │   ├── file_types.zig     # Extension → category mapping (80+ extensions)
 │   ├── navigator.zig      # Path navigation with back/forward/up history
-│   └── pins.zig           # Pin manager with JSON persistence
+│   ├── pins.zig           # Pin manager with JSON persistence
+│   └── runtime.zig        # Process-wide Io/env handle + file helpers (Zig 0.16)
 ├── index/
 │   ├── format.zig         # Binary index format (header, columns, write)
 │   ├── builder.zig        # Walks filesystem, builds index via format.zig
