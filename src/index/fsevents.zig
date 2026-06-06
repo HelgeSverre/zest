@@ -1,6 +1,11 @@
 const std = @import("std");
 const c = @cImport({
-    @cInclude("CoreServices/CoreServices.h");
+    // The full CoreServices umbrella pulls in `<AE/AE.h>`, which Zig 0.16's
+    // translate-c cannot resolve through the nested sub-framework path.
+    // Include only the pieces we need: CoreFoundation for CF types and the
+    // FSEvents sub-framework directly (see the framework search path in build.zig).
+    @cInclude("CoreFoundation/CoreFoundation.h");
+    @cInclude("FSEvents/FSEvents.h");
 });
 
 pub const FSEventCallback = *const fn (paths: []const []const u8) void;

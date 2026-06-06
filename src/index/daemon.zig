@@ -2,9 +2,14 @@ const std = @import("std");
 const builder = @import("builder.zig");
 const config = @import("../config/config.zig");
 const fsevents = @import("fsevents.zig");
+const runtime = @import("../core/runtime.zig");
+const humanize = @import("../core/humanize.zig");
 
 const c = @cImport({
-    @cInclude("CoreServices/CoreServices.h");
+    // Only CFRunLoop is needed here, which lives in CoreFoundation. Avoid the
+    // CoreServices umbrella, whose `<AE/AE.h>` include breaks Zig 0.16's
+    // translate-c (see fsevents.zig).
+    @cInclude("CoreFoundation/CoreFoundation.h");
 });
 
 /// Accumulated FSEvents dirty paths, accessed from the run-loop callback.
@@ -28,13 +33,10 @@ const event_threshold: usize = 1000;
 const plist_label = "dev.zest.indexer";
 const plist_filename = plist_label ++ ".plist";
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     // Check for subcommands
     if (args.len >= 2) {
@@ -57,7 +59,7 @@ pub fn main() !void {
     }
 
     // Default to $HOME
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
+    const home = runtime.getEnvVarOwned(allocator, "HOME") catch {
         std.debug.print("error: HOME not set\n", .{});
         return;
     };
@@ -77,7 +79,7 @@ pub fn main() !void {
 }
 
 fn plistPath(allocator: std.mem.Allocator) ![]u8 {
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
+    const home = runtime.getEnvVarOwned(allocator, "HOME") catch {
         std.debug.print("error: HOME not set\n", .{});
         return error.HomeNotSet;
     };
@@ -85,12 +87,15 @@ fn plistPath(allocator: std.mem.Allocator) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}/Library/LaunchAgents/{s}", .{ home, plist_filename });
 }
 
-fn runLaunchctl(allocator: std.mem.Allocator, verb: []const u8, path: []const u8) !void {
+fn runLaunchctl(verb: []const u8, path: []const u8) !void {
     const argv: []const []const u8 = &.{ "launchctl", verb, path };
-    var child = std.process.Child.init(argv, allocator);
-    const result = try child.spawnAndWait();
-    if (result.Exited != 0) {
-        std.debug.print("warning: launchctl {s} exited with code {d}\n", .{ verb, result.Exited });
+    var child = try std.process.spawn(runtime.io, .{ .argv = argv });
+    const term = try child.wait(runtime.io);
+    switch (term) {
+        .exited => |code| if (code != 0) {
+            std.debug.print("warning: launchctl {s} exited with code {d}\n", .{ verb, code });
+        },
+        else => std.debug.print("warning: launchctl {s} terminated abnormally\n", .{verb}),
     }
 }
 
@@ -119,8 +124,8 @@ fn install(allocator: std.mem.Allocator, args: []const []const u8) !void {
     // Try to detect self exe path if no override was given
     if (!has_override) {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (std.fs.selfExePath(&buf)) |self_path| {
-            binary_path_owned = try allocator.dupe(u8, self_path);
+        if (std.process.executablePath(runtime.io, &buf)) |len| {
+            binary_path_owned = try allocator.dupe(u8, buf[0..len]);
             binary_path = binary_path_owned.?;
         } else |_| {}
     }
@@ -135,19 +140,15 @@ fn install(allocator: std.mem.Allocator, args: []const []const u8) !void {
 
     // Ensure LaunchAgents directory exists
     const parent = std.fs.path.dirname(plist_dest) orelse return error.NoParentDir;
-    std.fs.makeDirAbsolute(parent) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
+    try runtime.ensureDir(parent);
 
     // Write the plist file
-    const file = try std.fs.createFileAbsolute(plist_dest, .{});
-    try file.writeAll(plist_content);
-    file.close();
+    try runtime.writeFileAbsolute(plist_dest, plist_content);
 
     std.debug.print("Wrote plist to {s}\n", .{plist_dest});
 
     // Load via launchctl
-    runLaunchctl(allocator, "load", plist_dest) catch |err| {
+    runLaunchctl("load", plist_dest) catch |err| {
         std.debug.print("error: launchctl load failed: {}\n", .{err});
         return err;
     };
@@ -161,10 +162,10 @@ fn uninstall(allocator: std.mem.Allocator) !void {
     defer allocator.free(plist_dest);
 
     // Unload via launchctl (ignore errors if not loaded)
-    runLaunchctl(allocator, "unload", plist_dest) catch {};
+    runLaunchctl("unload", plist_dest) catch {};
 
     // Delete the plist file
-    std.fs.deleteFileAbsolute(plist_dest) catch |err| {
+    std.Io.Dir.deleteFileAbsolute(runtime.io, plist_dest) catch |err| {
         if (err == error.FileNotFound) {
             std.debug.print("Plist not found at {s}, nothing to remove.\n", .{plist_dest});
             return;
@@ -190,7 +191,7 @@ fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
 
     std.debug.print("Watcher active. Polling for changes (rebuild every 30s or 1000+ events).\n", .{});
 
-    var last_rebuild = std.time.nanoTimestamp();
+    var last_rebuild = runtime.nowNanos();
     var last_full_rescan = last_rebuild;
 
     // Run indefinitely, servicing the CFRunLoop for FSEvents callbacks
@@ -200,7 +201,7 @@ fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
         // Returns when the timeout expires or CFRunLoopStop is called.
         _ = c.CFRunLoopRunInMode(c.kCFRunLoopDefaultMode, poll_interval_s, 0);
 
-        const now = std.time.nanoTimestamp();
+        const now = runtime.nowNanos();
         const elapsed = now - last_rebuild;
         const since_full_rescan = now - last_full_rescan;
 
@@ -228,7 +229,7 @@ fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
                 continue;
             };
 
-            const rebuild_time = std.time.nanoTimestamp();
+            const rebuild_time = runtime.nowNanos();
             last_rebuild = rebuild_time;
             if (daily_rescan_due) {
                 last_full_rescan = rebuild_time;
@@ -252,22 +253,24 @@ fn runFullScan(allocator: std.mem.Allocator, root: []const u8) !void {
 
     // Ensure parent directory exists
     const parent = std.fs.path.dirname(idx_path) orelse return error.NoParentDir;
-    std.fs.makeDirAbsolute(parent) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
+    try runtime.ensureDir(parent);
 
-    // Write tmp
-    const file = try std.fs.createFileAbsolute(tmp_path, .{});
-    try file.writeAll(index_data);
-    file.close();
+    // Write tmp, then atomic rename
+    const t_write = runtime.nowNanos();
+    try runtime.writeFileAbsolute(tmp_path, index_data);
 
     // Atomic rename
-    std.fs.renameAbsolute(tmp_path, idx_path) catch |err| {
+    std.Io.Dir.renameAbsolute(tmp_path, idx_path, runtime.io) catch |err| {
         std.debug.print("error: failed to rename index: {}\n", .{err});
         return err;
     };
 
-    std.debug.print("Index built: {d} bytes at {s}\n", .{ index_data.len, idx_path });
+    var write_buf: [16]u8 = undefined;
+    var size_buf: [16]u8 = undefined;
+    std.debug.print("  timing: write={s}\n", .{
+        humanize.duration(&write_buf, @divTrunc(runtime.nowNanos() - t_write, std.time.ns_per_ms)),
+    });
+    std.debug.print("Index built: {s} at {s}\n", .{ humanize.bytes(&size_buf, index_data.len), idx_path });
 }
 
 /// Generate a launchd plist for the indexer daemon.

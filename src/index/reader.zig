@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const format = @import("format.zig");
 const bitmap_mod = @import("bitmap.zig");
+const runtime = @import("../core/runtime.zig");
 
 /// Read-only access to a serialized index (from memory buffer or mmap).
 pub const IndexReader = struct {
@@ -12,14 +13,24 @@ pub const IndexReader = struct {
 
     pub fn init(allocator: std.mem.Allocator, data: []const u8) !IndexReader {
         if (data.len < format.HEADER_SIZE) return error.IndexTooSmall;
-        var fbs = std.io.fixedBufferStream(data[0..format.HEADER_SIZE]);
-        const header = format.Header.deserialize(fbs.reader()) catch return error.InvalidIndex;
+        var header_reader = std.Io.Reader.fixed(data[0..format.HEADER_SIZE]);
+        const header = format.Header.deserialize(&header_reader) catch return error.InvalidIndex;
 
-        return .{
+        var reader = IndexReader{
             .data = data,
             .header = header,
             .allocator = allocator,
         };
+
+        // Eagerly initialize category bitmaps for thread safety —
+        // after init, the reader is safe to use from any thread.
+        reader.category_bitmaps = bitmap_mod.readCategoryBitmaps(
+            allocator,
+            data,
+            @intCast(header.bitmap_offset),
+        ) catch null;
+
+        return reader;
     }
 
     pub fn deinit(self: *IndexReader) void {
@@ -121,6 +132,48 @@ pub const IndexReader = struct {
         return self.data[start..end];
     }
 
+    /// Read the deduplicated directory id for entry `idx` (cheap: one u32 read).
+    /// Entries sharing a directory share an id, so a depth-1 folder listing can
+    /// match on this instead of building + comparing each entry's dir_path.
+    pub fn getParentId(self: IndexReader, idx: u32) ?u32 {
+        const num: usize = @intCast(self.header.num_entries);
+        if (idx >= num) return null;
+        const parent_ids_start: usize = @intCast(self.header.paths_offset);
+        const pid_offset = parent_ids_start + idx * 4;
+        if (pid_offset + 4 > self.data.len) return null;
+        return std.mem.readInt(u32, self.data[pid_offset..][0..4], .little);
+    }
+
+    /// Resolve an absolute directory path to its dir-table id, or null if the
+    /// directory is not present in the index. Linear scan of the (deduplicated)
+    /// directory table — far cheaper than scanning all entries.
+    pub fn findDirId(self: IndexReader, path: []const u8) ?u32 {
+        const num: usize = @intCast(self.header.num_entries);
+        const parent_ids_start: usize = @intCast(self.header.paths_offset);
+        const dir_count_offset = parent_ids_start + num * 4;
+        if (dir_count_offset + 4 > self.data.len) return null;
+        const dir_count = std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
+
+        const dir_offsets_start = dir_count_offset + 4;
+        const dir_blob_len_pos = dir_offsets_start + dir_count * 4;
+        if (dir_blob_len_pos + 4 > self.data.len) return null;
+        const dir_blob_len = std.mem.readInt(u32, self.data[dir_blob_len_pos..][0..4], .little);
+        const dir_blob_start = dir_blob_len_pos + 4;
+        if (dir_blob_start + dir_blob_len > self.data.len) return null;
+
+        var d: u32 = 0;
+        while (d < dir_count) : (d += 1) {
+            const off = std.mem.readInt(u32, self.data[dir_offsets_start + d * 4 ..][0..4], .little);
+            const next = if (d + 1 < dir_count)
+                std.mem.readInt(u32, self.data[dir_offsets_start + (d + 1) * 4 ..][0..4], .little)
+            else
+                dir_blob_len;
+            if (next < off or next > dir_blob_len) continue;
+            if (std.mem.eql(u8, self.data[dir_blob_start + off .. dir_blob_start + next], path)) return d;
+        }
+        return null;
+    }
+
     pub fn getMeta(self: IndexReader, idx: u32) ?struct { size: u64, mtime: i64, kind: types.FileKind, category: types.FileCategory } {
         const num: usize = @intCast(self.header.num_entries);
         if (idx >= num) return null;
@@ -153,19 +206,11 @@ pub const IndexReader = struct {
     }
 
     pub fn openFile(allocator: std.mem.Allocator, path: []const u8) !IndexReader {
-        const file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
-        const stat = try file.stat();
-        const size = stat.size;
-        if (size < format.HEADER_SIZE) return error.IndexTooSmall;
-
-        const data = try allocator.alloc(u8, size);
-        const bytes_read = try file.readAll(data);
-        if (bytes_read != size) {
+        const data = try runtime.readFileAlloc(allocator, path, .unlimited);
+        if (data.len < format.HEADER_SIZE) {
             allocator.free(data);
-            return error.IncompleteRead;
+            return error.IndexTooSmall;
         }
-
         return try init(allocator, data);
     }
 };

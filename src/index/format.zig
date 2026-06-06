@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
+const runtime = @import("../core/runtime.zig");
 
 pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 pub const VERSION: u32 = 1;
@@ -28,20 +29,20 @@ pub const Header = struct {
     }
 
     pub fn deserialize(reader: anytype) !Header {
-        const magic = try reader.readInt(u64, .little);
+        const magic = try reader.takeInt(u64, .little);
         if (magic != MAGIC) return error.InvalidMagic;
-        const version = try reader.readInt(u32, .little);
+        const version = try reader.takeInt(u32, .little);
         if (version != VERSION) return error.UnsupportedVersion;
-        _ = try reader.readInt(u32, .little); // padding
+        _ = try reader.takeInt(u32, .little); // padding
         return .{
             .magic = magic,
             .version = version,
-            .num_entries = try reader.readInt(u64, .little),
-            .created_at = try reader.readInt(u64, .little),
-            .names_offset = try reader.readInt(u64, .little),
-            .paths_offset = try reader.readInt(u64, .little),
-            .meta_offset = try reader.readInt(u64, .little),
-            .bitmap_offset = try reader.readInt(u64, .little),
+            .num_entries = try reader.takeInt(u64, .little),
+            .created_at = try reader.takeInt(u64, .little),
+            .names_offset = try reader.takeInt(u64, .little),
+            .paths_offset = try reader.takeInt(u64, .little),
+            .meta_offset = try reader.takeInt(u64, .little),
+            .bitmap_offset = try reader.takeInt(u64, .little),
         };
     }
 };
@@ -55,10 +56,32 @@ pub const IndexEntry = struct {
     category: types.FileCategory,
 };
 
+/// Little-endian append helper over an `ArrayList(u8)`. Zig 0.16 dropped
+/// `ArrayList.writer`, and this column format needs to read `buf.items.len`
+/// between writes, so a direct-append shim is simpler than a buffered writer.
+const BufWriter = struct {
+    buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+
+    fn writeInt(self: BufWriter, comptime T: type, value: T, endian: std.builtin.Endian) !void {
+        var bytes: [@sizeOf(T)]u8 = undefined;
+        std.mem.writeInt(T, &bytes, value, endian);
+        try self.buf.appendSlice(self.allocator, &bytes);
+    }
+
+    fn writeAll(self: BufWriter, bytes: []const u8) !void {
+        try self.buf.appendSlice(self.allocator, bytes);
+    }
+
+    fn writeByte(self: BufWriter, value: u8) !void {
+        try self.buf.append(self.allocator, value);
+    }
+};
+
 pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    const writer = BufWriter{ .buf = &buf, .allocator = allocator };
 
     const num = entries.len;
 
@@ -77,6 +100,11 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     defer name_blob.deinit(allocator);
     var lower_blob: std.ArrayList(u8) = .empty;
     defer lower_blob.deinit(allocator);
+
+    // Pre-size the name blobs (~16 bytes/name heuristic) to avoid repeated
+    // doubling reallocations while appending millions of entries.
+    try name_blob.ensureTotalCapacity(allocator, num * 16);
+    try lower_blob.ensureTotalCapacity(allocator, num * 16);
 
     for (entries, 0..) |entry, i| {
         name_offsets[i] = @intCast(name_blob.items.len);
@@ -122,6 +150,8 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     var dir_blob: std.ArrayList(u8) = .empty;
     defer dir_blob.deinit(allocator);
 
+    try dir_offsets.ensureTotalCapacity(allocator, dir_list.items.len);
+
     for (dir_list.items) |d| {
         try dir_offsets.append(allocator, @intCast(dir_blob.items.len));
         try dir_blob.appendSlice(allocator, d);
@@ -166,7 +196,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     }
 
     // === Write header ===
-    const now: u64 = @intCast(std.time.timestamp());
+    const now: u64 = @intCast(runtime.unixTimestamp());
     const header = Header{
         .magic = MAGIC,
         .version = VERSION,
@@ -179,8 +209,8 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     };
 
     var header_buf: [HEADER_SIZE]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&header_buf);
-    try header.serialize(fbs.writer());
+    var header_writer = std.Io.Writer.fixed(&header_buf);
+    try header.serialize(&header_writer);
     @memcpy(buf.items[0..HEADER_SIZE], &header_buf);
 
     return buf.toOwnedSlice(allocator);
