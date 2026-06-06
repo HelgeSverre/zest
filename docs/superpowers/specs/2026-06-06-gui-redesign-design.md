@@ -3,8 +3,9 @@
 **Date:** 2026-06-06
 **Status:** Approved direction + foundation + stack; pending implementation plan
 **Stack decision:** **Swift AppKit UI + Zig core via a C ABI** (engine stays Zig)
-**Visual + behavior reference (golden):** `prototypes/zest-redesign.html` (interactive, resizable)
-**Captures:** `prototypes/shot-*.png`
+**Visual + behavior reference (golden):** `prototypes/zest-redesignv2.html` (interactive, resizable; dark+light; deep-links `?mode=` `?accent=` `?theme=` `?path=` `?expand=` `?dialog=`)
+**Captures:** `prototypes/v2-*.png`, `prototypes/v2b-*.png`, `prototypes/v2c-*.png`
+**Amended by §15 (prototype-v2 fold-in).** (v1 `zest-redesign.html` kept for reference.)
 
 > Ground-up rebuild of the UI as a **Swift AppKit app** linking the existing Zig
 > engine as a **C-ABI static library**. Built in parallel and swapped at parity.
@@ -104,12 +105,29 @@ size_t    zest_query_count(const ZestQuery *);
 ZestRow   zest_query_row(const ZestQuery *, size_t i);  // ptr valid until zest_query_free
 void      zest_query_free(ZestQuery *);                 // releases buffer + snapshot ref
 
-// ---- pins / filters / config (thin pass-throughs) ----
+// ---- category histogram (NEW: scope-aware aggregation for the sidebar tree) ----
+typedef struct ZestHistogram ZestHistogram;
+typedef struct { uint8_t category; uint32_t count; } ZestCatCount;
+typedef struct { ZestStr ext; uint32_t count; } ZestExtCount;
+ZestHistogram *zest_histogram(ZestCore *, const char *scope_root, uint32_t max_depth);
+size_t        zest_histogram_cats(const ZestHistogram *);
+ZestCatCount  zest_histogram_cat(const ZestHistogram *, size_t i);
+size_t        zest_histogram_exts(const ZestHistogram *, uint8_t category);   // lazy: on expand
+ZestExtCount  zest_histogram_ext(const ZestHistogram *, uint8_t category, size_t i);
+void          zest_histogram_free(ZestHistogram *);
+
+// ---- pins / saved filters / folder colors / config (thin pass-throughs) ----
 size_t    zest_pins_count(ZestCore *);
-ZestRow   zest_pin(ZestCore *, size_t i);   // name + path
+ZestRow   zest_pin(ZestCore *, size_t i);                       // name + path
 bool      zest_pin_add(ZestCore *, const char *name, const char *path);
 void      zest_pin_remove(ZestCore *, const char *path);
-// ... saved filters, folder colors, accent config similar ...
+// saved filters — manager-window CRUD, backed by FilterStore
+size_t    zest_filters_count(ZestCore *);
+ZestRow   zest_filter(ZestCore *, size_t i);                    // name + query
+bool      zest_filter_upsert(ZestCore *, size_t i, const char *name, const char *query); // i==SIZE_MAX → add
+void      zest_filter_remove(ZestCore *, size_t i);
+// folder colors — breadcrumb + row tinting (returns false when unset)
+bool      zest_folder_color(ZestCore *, const char *path, uint8_t *r, uint8_t *g, uint8_t *b);
 ```
 
 **Ownership & lifetime (the important part):**
@@ -159,11 +177,19 @@ derived family, so it can follow the system accent.
 `border #272C33` · `borderSoft #1D2127` · `text #E9ECEF` · `textSecondary #868E99` ·
 `textTertiary #565E68`.
 
-### 4.2 Accent family — `Theme.deriveAccent(_ base: NSColor)` (match prototype `applyAccent()`)
-`accent = base` · `accentHi = mix(base, .white, .22)` · `accentSoft = base.alpha(.13)` ·
-`accentLine = base.alpha(.55)` · `glow = base.alpha(.16)` ·
-`onAccent = base.luminance > .6 ? #0C0E12 : .white`.
-Source: config `appearance.accent` = `auto` (→ `NSColor.controlAccentColor.usingColorSpace(.sRGB)`) | preset | hex. Default **lime `#B8FF3C`**. Optional live update via KVO on `NSApp.effectiveAppearance` / `NSColor` change notification.
+### 4.2 Accent — one base hue, theme-shifted, family derived
+Two layers (prototype v2): **`accentBase`** = the chosen hue (default lime `#B8FF3C`), and
+**`accent`** = the *effective* color the UI draws with.
+- **Dark:** `accent = accentBase`.
+- **Light:** `accent = mix(accentBase, .black, ~0.42)` — darken the hue so it keeps real
+  contrast on white (bright neon accents are unusable as text/rails on light).
+
+Family derived from the **effective** `accent`: `accentHi = mix(accent, .white, .22)` ·
+`accentSoft = accent.alpha(.13)` · `accentLine = accent.alpha(.55)` · `glow = accent.alpha(.16)`.
+`onAccent` = **light → `.white`** (effective accent is dark) · **dark →
+`accentBase.luminance > .6 ? #0C0E12 : .white`**. Derive perceptually (mix in OKLCH/P3,
+mirroring the prototype's `color-mix(in oklch …)`).
+Source: config `appearance.accent` = `auto` (→ `NSColor.controlAccentColor`) | preset | hex.
 
 ### 4.3 Category colors (fixed)
 folder `#6E9BE0` · code `#46C26A` · images `#E0A3FF` · documents `#C9A2FF` ·
@@ -174,6 +200,15 @@ UI `NSFont.systemFont(13)`; data `NSFont.monospacedSystemFont(11/12)`; header 11
 window 1180×760 (min 800×600) · sidebar 190–260 (`NSSplitViewItem` thickness) ·
 toolbar 58 · filter bar 42 · status bar 28 · row 34 / 48 (two-line) · radius 8 ·
 `hairline = 1/backingScaleFactor` · traffic-light inset 88.
+
+### 4.5 Theming (dark + light)
+The whole palette is tokens, so **dark and light are a token flip** (prototype v2 proves
+it). Light overrides the neutrals + semantic surfaces (`sheen`, `scrim`, `grainOpacity`,
+`shadowWin/Pop/Dialog`, desktop bg) and darkens the effective accent (§4.2). A
+`Design/ThemeManager` resolves tokens from `appearance.theme` = `auto` (follow
+`NSApp.effectiveAppearance`) | `dark` | `light`, and re-resolves on appearance change.
+Category colors are theme-independent. Tokenize beyond the neutrals: add `sheen`,
+`scrim`, `grainOpacity`, `shadowWin/Pop/Dialog`.
 
 ---
 
@@ -259,17 +294,19 @@ indicator while the off-main query runs) · No index (icon + copy +
 
 ## 7. Row rendering (`Browser/FileRowView` + `FileCellView`)
 
+Columns (v2): **Name · Size · Modified · Kind · Ext**.
+
 ```
-┌ row (34 / 48) ──────────────────────────────────────────────────────────┐
-│ [icon 18²] filename            (system 13 semibold, text, tail-ellipsis)  │
-│            project/…/leaf      (mono 11, textTertiary, MIDDLE-truncate)   │ ← search
-│                         Size      Modified      Kind                       │
-└───────────────────────────────────────────────────────────────────────────┘
+┌ row (34 / 48) ─────────────────────────────────────────────────────────────────────┐
+│ [icon 18²] filename        Size    2026-01-01  5mo ago    ● Kind     ext             │
+│            project/…/leaf  (mono)  (date mono · timeago dim)  (dot+label)  (mono)    │ ← search
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
-- Filename never middle-truncates; path keeps project root + leaf.
+- Filename never middle-truncates; search rows add the dimmed mono path line (project root + leaf).
 - `tableView(_:heightOfRow:)` → 34/48 from the §6.1 flag.
-- Size: dirs **"N items"** dim / files mono; Modified mono dim; Kind dot+label
-  (category color); `kind==dir` → "Folder".
+- **Size:** dirs **"N items"** dim / files mono. **Modified:** ISO `YYYY-MM-DD` (mono) + a
+  dimmer relative `5mo ago` (computed from `mtime` in Swift), baseline-aligned. **Kind:**
+  dot + label (category color); `kind==dir` → "Folder". **Ext:** mono dim, `—` for folders.
 - Selection: `FileRowView.draw` paints `accentSoft` fill + 3pt `accent` rail
   (`selectionHighlightStyle = .none`).
 - Icons via `NSImage(systemSymbolName:)` tinted by category.
@@ -388,7 +425,57 @@ Engine internals (index, search, builder, daemon, bitmap, fsevents) — **untouc
 5. **Design confirmations** (carry over): status bar in · folder Size = "N items" ·
    breadcrumb-that-edits · Categories group phase 2 · default accent Lime (`auto` available).
 6. Keep the old Zig `src/ui/*` as reference until P6 swap (rec) vs delete up front.
+7. **Default theme** — `auto` (follow macOS appearance) vs ship dark-default. (Rec `auto`.)
+8. **Category histogram cost** — aggregating category/extension counts over a deep scope
+   touches many entries. Reuse the category bitmaps (cheap), tally extensions only on
+   expand, bound to top-N, compute off-main. Confirm the budget.
+9. **Light-accent darkening ratio** — confirm ~0.42 toward black (§4.2); tune per accent.
 
 ## 14. Out of scope
-Preview/detail pane · command-palette-as-primary-nav · gallery/Miller views · light
-mode · multi-window · iCloud/remote volumes.
+Preview/detail pane · command-palette-as-primary-nav · gallery/Miller views ·
+multi-window · iCloud/remote volumes. *(Light mode is now **in scope** — §4.5.)*
+
+---
+
+## 15. Prototype-v2 fold-in (amends §3.2, §3.3, §4, §5, §6, §7, §13)
+
+The v2 golden (`prototypes/zest-redesignv2.html`) adds the following. Each is small and
+maps onto the existing architecture; new FFI is already in §3.2.
+
+**A. Editable breadcrumb (the #1 daily-use win).** `Shell/Breadcrumb` is a custom NSView
+that renders styled path tokens — home `~` (accent), parent dirs dim, **current segment
+emphasized**, each segment **tinted by its directory's folder color** (`zest_folder_color`),
+`/Volumes/…` distinct — and on click swaps to an `NSTextField` pre-filled with the
+absolute path, fully selected: **paste + ⏎ navigates** (parse `~`/`~/`/abs/rel exactly
+like the engine's `resolveEnteredPath`), Esc reverts. Replaces today's plain path field.
+
+**B. Scope-aware Categories tree (NEW engine work).** `Sidebar/CategoryTree`: expandable
+category rows (dot + name + count) that expand to their **extensions** with counts,
+computed over the **current scope** (this folder vs recursive). Backed by the new
+`zest_histogram(scope_root, max_depth)` — reuses category bitmaps; extension tallies
+lazily on expand, off-main (§13.8). Click category → `cat:` token; extension → `ext:`
+token (toggle), mirrored into the search field + chips.
+
+**C. Saved-filters manager.** A real window/sheet (`SavedFiltersWindow`, or a SwiftUI
+island) — bookmark-manager CRUD over `FilterStore` via `zest_filters_*`. Opened from the
+toolbar `Saved ▾` popover → "Manage…". The prototype's reusable **overlay/dialog** = an
+AppKit sheet (`beginSheet`) or child window; factor a `Shell/Dialog` host.
+
+**D. Status indexed-count.** Space thousand-separators (`1 240 118`); click-to-copy to
+`NSPasteboard` with a brief flash (no toast).
+
+**E. Columns + Modified format.** Per §7 (amended): 5 columns; Modified = ISO date + dim
+relative time, baseline-aligned.
+
+**F. Theming.** Per §4.2 / §4.5 (amended): dark + light via token flip; one accent base,
+theme-shifted darker on light; OKLCH-style perceptual derivation.
+
+**G. Global polish.** Consistent keyboard focus ring (`accentLine`) on every control;
+smooth expand animation when a list row opens into an inline edit form (no jarring jump);
+body text antialiasing.
+
+**New Swift components (added to §3.3):** `Shell/Breadcrumb`, `Shell/Dialog`,
+`Sidebar/CategoryTree`, `SavedFiltersWindow` (or SwiftUI island), `Design/ThemeManager`.
+
+**Build-order placement:** breadcrumb + columns + count → P2/P3; category histogram +
+saved-filters window → P4; theming starts at P0 (tokens), refined through P4.

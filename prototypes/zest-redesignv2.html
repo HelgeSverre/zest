@@ -31,7 +31,8 @@
   /* accent: ONE base; the family is derived in CSS via color-mix (perceptual
      oklch for lightening, srgb for the alpha fades) so it stays consistent and
      works in both dark and light themes. JS only sets --accent + --on-accent. */
-  --accent:    #B8FF3C;
+  --accent-base: #B8FF3C;          /* the chosen hue (set by the accent picker) */
+  --accent:    var(--accent-base); /* effective accent — a theme may shift its lightness */
   --accent-hi: color-mix(in oklch, var(--accent) 78%, white);
   --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
   --accent-line: color-mix(in srgb, var(--accent) 55%, transparent);
@@ -65,6 +66,8 @@
   --bg: #FBFBFD; --panel: #F1F2F5; --panel-2: #EAECEF; --elevated: #E4E7EB;
   --hover: #ECEEF1; --border: #D8DCE2; --border-soft: #E7E9ED;
   --text: #1B1F26; --text-2: #5C6470; --text-3: #8B93A0;
+  /* darken the chosen accent so it has real contrast on white surfaces */
+  --accent: color-mix(in oklch, var(--accent-base) 58%, black);
   --desk-1: #E8ECF2; --desk-2: #D7DCE5; --desk-3: #c9cfda;
   --sheen: rgba(255,255,255,.7); --sheen-2: rgba(0,0,0,.025); --swatch-ring: rgba(0,0,0,.12);
   --scrim: rgba(22,26,32,.32); --grain-opacity: .015;
@@ -760,13 +763,21 @@ function mix(c,amt){return c.map(v=>Math.round(v+(255-v)*amt));}
 function rgbStr(c){return `rgb(${c[0]},${c[1]},${c[2]})`;}
 function rgba(c,a){return `rgba(${c[0]},${c[1]},${c[2]},${a})`;}
 function luminance(c){return (0.299*c[0]+0.587*c[1]+0.114*c[2])/255;}
+let accentBaseHex = '#B8FF3C';
+function refreshOnAccent(){
+  // Light theme darkens the effective accent (see [data-theme="light"]), so white
+  // reads on it; dark uses the base hue, so flip by the base's own luminance.
+  const light = root.getAttribute('data-theme') === 'light';
+  const darkChoice = luminance(hexToRgb(accentBaseHex)) > 0.6 ? '#0c0e12' : '#ffffff';
+  root.style.setProperty('--on-accent', light ? '#ffffff' : darkChoice);
+}
 function applyAccent(hex){
-  const base = hexToRgb(hex);
-  // Only set the base + its contrast color. --accent-hi/soft/line/glow derive
-  // from --accent in CSS via color-mix (see :root), so they stay perceptually
-  // consistent and recompute automatically in both dark and light themes.
-  root.style.setProperty('--accent', hex);
-  root.style.setProperty('--on-accent', luminance(base) > 0.6 ? '#0c0e12' : '#ffffff');
+  // JS only sets the chosen hue (--accent-base) + the contrast color. The whole
+  // accent family (--accent-hi/soft/line/glow) derives from --accent in CSS via
+  // color-mix, and the light theme shifts --accent's lightness automatically.
+  accentBaseHex = hex;
+  root.style.setProperty('--accent-base', hex);
+  refreshOnAccent();
 }
 document.getElementById('accentRow').addEventListener('click', e => {
   const b = e.target.closest('button[data-accent]'); if (!b) return;
@@ -782,6 +793,7 @@ document.getElementById('themeSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.theme === 'light') root.setAttribute('data-theme', 'light'); else root.removeAttribute('data-theme');
   [...e.currentTarget.children].forEach(x => x.classList.toggle('on', x === b));
+  refreshOnAccent();
 });
 
 /* ============================ Mode / scope ========================== */
@@ -965,7 +977,7 @@ const pAccent = params.get('accent');
 const pMode = params.get('mode');
 applyAccent(pAccent ? ('#' + pAccent.replace('#', '')) : '#B8FF3C');
 if (pAccent) document.querySelectorAll('#accentRow button[data-accent]').forEach(x => x.classList.remove('on'));
-if (params.get('theme') === 'light') { root.setAttribute('data-theme', 'light'); document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === 'light')); }
+if (params.get('theme') === 'light') { root.setAttribute('data-theme', 'light'); document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === 'light')); refreshOnAccent(); }
 if (pMode && ['browse', 'search', 'empty'].includes(pMode)) { setMode(pMode); if (pMode === 'search') setScope('all'); }
 const pPath = params.get('path'); if (pPath) currentPath = pPath;
 const pExpand = params.get('expand'); if (pExpand) pExpand.split(',').forEach(c => expandedCats.add(c));
