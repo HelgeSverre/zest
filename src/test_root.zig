@@ -20,4 +20,7 @@ comptime {
     _ = @import("index/reader.zig");
     _ = @import("index/search.zig");
     _ = @import("index/builder.zig");
+
+    // C ABI
+    _ = @import("capi/zest_core.zig");
 }
