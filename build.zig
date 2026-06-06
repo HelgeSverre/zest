@@ -4,6 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // FSEvents now ships as a sub-framework nested inside CoreServices. Add its
+    // directory to the framework search path so `<FSEvents/FSEvents.h>` resolves
+    // without dragging in the CoreServices umbrella (which breaks translate-c).
+    const sdk_path = std.mem.trimEnd(u8, b.run(&.{ "xcrun", "--show-sdk-path" }), "\n");
+    const coreservices_frameworks = b.pathJoin(&.{
+        sdk_path,
+        "System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks",
+    });
+
     // === Binary 1: zest (GUI/CLI app) ===
     const zest = b.addExecutable(.{
         .name = "zest",
@@ -13,6 +22,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    zest.root_module.addSystemFrameworkPath(.{ .cwd_relative = coreservices_frameworks });
     zest.root_module.linkFramework("CoreServices", .{});
     zest.root_module.linkFramework("AppKit", .{});
     zest.root_module.linkSystemLibrary("c", .{});
@@ -27,9 +37,16 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    indexer.root_module.addSystemFrameworkPath(.{ .cwd_relative = coreservices_frameworks });
     indexer.root_module.linkFramework("CoreServices", .{});
     indexer.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(indexer);
+
+    // Indexer-only build step (`zig build indexer`). Lets the perf-sensitive
+    // justfile recipes build just the daemon in ReleaseFast without depending on
+    // the GUI target.
+    const indexer_step = b.step("indexer", "Build only zest-indexer");
+    indexer_step.dependOn(&b.addInstallArtifact(indexer, .{}).step);
 
     // === Run step ===
     const run_step = b.step("run", "Run the zest app");
@@ -49,6 +66,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // builder.zig (imported by test_root) transitively pulls in bulk_scan.zig,
+    // which references the libc `getattrlistbulk` symbol.
+    tests.root_module.linkSystemLibrary("c", .{});
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run all tests");
