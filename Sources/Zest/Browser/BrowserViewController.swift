@@ -7,6 +7,7 @@ import AppKit
 struct FileItem {
     let name: String
     let path: String              // absolute path (dirPath + "/" + name)
+    let dirPath: String           // containing directory (for the search-mode path line)
     let isDirectory: Bool
     let sizeText: String          // "1.8 KB" / "—"
     let isoDate: String           // "2026-01-01"
@@ -26,6 +27,9 @@ struct FileItem {
 final class BrowserViewController: NSViewController {
     private let coordinator: AppCoordinator
     private var items: [FileItem] = []
+    /// Snapshot of the coordinator's search mode at the last `reload()`, so cell
+    /// builders + `heightOfRow` agree within a single table pass.
+    private var searchMode = false
 
     private let scrollView = NSScrollView()
     private let tableView = ZestTableView()
@@ -73,16 +77,19 @@ final class BrowserViewController: NSViewController {
 
     // MARK: Data
 
-    /// Re-run the coordinator's listing for the current folder, remap, and
-    /// refresh the table (or empty state). Reselects row 0 when non-empty.
+    /// Re-run the coordinator's query (query/scope/sort aware), remap, and refresh
+    /// the table (or empty state). Picks the row height (34 browse / 48 search) and
+    /// reselects row 0 when non-empty.
     func reload() {
-        items = coordinator.currentListing().map { Self.makeItem(from: $0) }
+        searchMode = coordinator.isSearchMode
+        items = coordinator.results().map { Self.makeItem(from: $0) }
+        updateSortIndicator()
 
         let isEmpty = items.isEmpty
         scrollView.isHidden = isEmpty
         emptyLabel?.isHidden = !isEmpty
 
-        tableView.reloadData()
+        tableView.reloadData()  // re-asks heightOfRow, so the 34/48 switch applies
         if isEmpty {
             tableView.deselectAll(nil)
         } else {
@@ -126,6 +133,7 @@ final class BrowserViewController: NSViewController {
         return FileItem(
             name: r.name,
             path: path,
+            dirPath: r.dirPath,
             isDirectory: isDir,
             sizeText: sizeText,
             isoDate: iso,
@@ -224,10 +232,25 @@ final class BrowserViewController: NSViewController {
         col.minWidth = min
         col.maxWidth = max
         col.title = title
-        // Header drawing is handled by ZestTableHeaderCell; set the styled string too.
+        // Header drawing is handled by ZestHeaderCell; set the styled string too.
         col.headerCell = ZestHeaderCell(textCell: title)
         (col.headerCell as? ZestHeaderCell)?.alignment = alignment
         tableView.addTableColumn(col)
+    }
+
+    /// Reflect the coordinator's active sort on the column headers: the sorted
+    /// column shows a ↑/↓ glyph in `Theme.text`; others render plain.
+    private func updateSortIndicator() {
+        let activeID = Self.identifier(for: coordinator.sortColumn)
+        for col in tableView.tableColumns {
+            guard let cell = col.headerCell as? ZestHeaderCell else { continue }
+            if col.identifier == activeID {
+                cell.sortIndicator = coordinator.sortAscending ? .ascending : .descending
+            } else {
+                cell.sortIndicator = .none
+            }
+        }
+        tableView.headerView?.needsDisplay = true
     }
 }
 
@@ -235,6 +258,45 @@ final class BrowserViewController: NSViewController {
 
 extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
+
+    /// 48pt two-line rows in search mode, 34pt single-line rows when browsing.
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        searchMode ? 48 : 34
+    }
+
+    /// Header clicks drive the client-side sort: clicking the active column flips
+    /// direction, clicking another column switches to it (ascending). The
+    /// coordinator's `onResultsChange` triggers a reload through RootViewController.
+    func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        guard let col = Self.sortColumn(for: tableColumn.identifier) else { return }
+        if coordinator.sortColumn == col {
+            coordinator.sortAscending.toggle()
+        } else {
+            coordinator.sortColumn = col
+            coordinator.sortAscending = true
+        }
+    }
+
+    private static func sortColumn(for id: NSUserInterfaceItemIdentifier) -> AppCoordinator.SortColumn? {
+        switch id {
+        case colName: return .name
+        case colSize: return .size
+        case colMod:  return .modified
+        case colKind: return .kind
+        case colExt:  return .ext
+        default:      return nil
+        }
+    }
+
+    private static func identifier(for column: AppCoordinator.SortColumn) -> NSUserInterfaceItemIdentifier {
+        switch column {
+        case .name:     return colName
+        case .size:     return colSize
+        case .modified: return colMod
+        case .kind:     return colKind
+        case .ext:      return colExt
+        }
+    }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let id = NSUserInterfaceItemIdentifier("FileRowView")
@@ -254,7 +316,7 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
         switch id {
         case BrowserViewController.colName:
             let cell = dequeueName()
-            cell.configure(item)
+            cell.configure(item, searchMode: searchMode)
             return cell
         case BrowserViewController.colMod:
             let cell = dequeueLabel(id, alignment: .left, leading: 0, trailing: 12)
@@ -368,8 +430,14 @@ private final class ZestTableHeaderView: NSTableHeaderView {
     }
 }
 
-/// Uppercase, tracked, tertiary 11pt header cell on the dark strip.
+/// Uppercase, tracked, tertiary 11pt header cell on the dark strip. The active
+/// sort column draws a ↑/↓ glyph (accent) and brightens its title.
 private final class ZestHeaderCell: NSTableHeaderCell {
+    enum SortIndicator { case none, ascending, descending }
+    var sortIndicator: SortIndicator = .none
+
+    private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         drawInterior(withFrame: cellFrame, in: controlView)
     }
@@ -378,35 +446,69 @@ private final class ZestHeaderCell: NSTableHeaderCell {
         Theme.background.setFill()
         cellFrame.fill()
 
+        let active = sortIndicator != .none
         let style = NSMutableParagraphStyle()
         style.alignment = alignment
         style.lineBreakMode = .byTruncatingTail
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: Theme.textTertiary,
+            .foregroundColor: active ? Theme.text : Theme.textTertiary,
             .kern: 0.8,
             .paragraphStyle: style,
         ]
         let text = (stringValue as NSString)
         let inset: CGFloat = alignment == .right ? 0 : 14
         let rect = cellFrame.insetBy(dx: 0, dy: 0).offsetBy(dx: 0, dy: 5)
+        // Reserve room on the trailing side for the sort glyph when active.
+        let glyphSpace: CGFloat = active ? 14 : 0
         let drawRect = NSRect(
             x: rect.minX + (alignment == .right ? 6 : inset),
             y: rect.minY,
-            width: rect.width - inset - (alignment == .right ? 6 : 0),
+            width: rect.width - inset - (alignment == .right ? 6 : 0) - (alignment == .right ? 0 : glyphSpace),
             height: rect.height
         )
         text.draw(in: drawRect, withAttributes: attrs)
+
+        guard active else { return }
+        let arrow = sortIndicator == .ascending ? "\u{2191}" : "\u{2193}"  // ↑ / ↓
+        let arrowAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: ZestHeaderCell.accent.accent,
+        ]
+        let arrowSize = (arrow as NSString).size(withAttributes: arrowAttrs)
+        // Glyph trails the title for left-aligned columns; precedes for right-aligned.
+        let glyphX: CGFloat
+        if alignment == .right {
+            glyphX = drawRect.minX
+        } else {
+            let titleWidth = min(text.size(withAttributes: attrs).width, drawRect.width)
+            glyphX = min(drawRect.minX + titleWidth + 5, cellFrame.maxX - arrowSize.width - 4)
+        }
+        let arrowRect = NSRect(x: glyphX, y: rect.minY, width: arrowSize.width + 2, height: rect.height)
+        (arrow as NSString).draw(in: arrowRect, withAttributes: arrowAttrs)
     }
 }
 
 // MARK: - Name cell (icon + label)
 
-/// 18×18 SF Symbol tinted by category + a name label. Label weight bumps to
-/// semibold when the row is selected.
+/// 18×18 SF Symbol tinted by category + a name label. In search mode a second
+/// line shows the containing path (mono 11, `Theme.textTertiary`, middle-
+/// truncated). The name weight bumps to semibold when the row is selected.
 final class NameCellView: NSTableCellView {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
+    private let pathLabel = NSTextField(labelWithString: "")
+
+    /// Drives the icon's vertical anchoring + path-line visibility.
+    private var searchMode = false
+    private var rawDirPath = ""
+
+    // Two vertical-centering modes: single-line centers the label; two-line
+    // stacks name above path. We toggle which constraints are active.
+    private var labelCenterY: NSLayoutConstraint!
+    private var labelTop: NSLayoutConstraint!
+    private var iconCenterY: NSLayoutConstraint!
+    private var iconTop: NSLayoutConstraint!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -417,6 +519,7 @@ final class NameCellView: NSTableCellView {
     private func setup() {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyUpOrDown
+
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 13, weight: .regular)
         label.textColor = Theme.text
@@ -424,28 +527,86 @@ final class NameCellView: NSTableCellView {
         label.cell?.truncatesLastVisibleLine = true
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        pathLabel.textColor = Theme.textTertiary
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        pathLabel.cell?.truncatesLastVisibleLine = true
+        pathLabel.isHidden = true
+        pathLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
         addSubview(icon)
         addSubview(label)
+        addSubview(pathLabel)
         self.textField = label
+
+        labelCenterY = label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        labelTop = label.topAnchor.constraint(equalTo: topAnchor, constant: 7)
+        iconCenterY = icon.centerYAnchor.constraint(equalTo: centerYAnchor)
+        iconTop = icon.topAnchor.constraint(equalTo: topAnchor, constant: 8)
 
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 18),
             icon.heightAnchor.constraint(equalToConstant: 18),
 
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 11),
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            pathLabel.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            pathLabel.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 2),
         ])
+        applyLayoutMode()
     }
 
-    func configure(_ item: FileItem) {
+    func configure(_ item: FileItem, searchMode: Bool) {
         let img = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.kindLabel)
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         icon.image = img?.withSymbolConfiguration(config)
         icon.contentTintColor = item.symbolColor
         label.stringValue = item.name
+        rawDirPath = item.dirPath
+
+        if self.searchMode != searchMode {
+            self.searchMode = searchMode
+            applyLayoutMode()
+        }
+        if searchMode {
+            pathLabel.isHidden = false
+            pathLabel.stringValue = Self.condensePath(item.dirPath)
+            pathLabel.toolTip = item.dirPath
+        } else {
+            pathLabel.isHidden = true
+            pathLabel.toolTip = nil
+        }
+    }
+
+    /// Switch between single-line (centered) and two-line (stacked) layouts.
+    private func applyLayoutMode() {
+        if searchMode {
+            labelCenterY.isActive = false
+            iconCenterY.isActive = false
+            labelTop.isActive = true
+            iconTop.isActive = true
+        } else {
+            labelTop.isActive = false
+            iconTop.isActive = false
+            labelCenterY.isActive = true
+            iconCenterY.isActive = true
+        }
+    }
+
+    /// Condense a long absolute path to `first/…/lastTwo` so the meaningful head
+    /// (the project root) and the leaf folders survive. `.byTruncatingMiddle` on
+    /// the label handles the final pixel-level fit; this keeps the string short
+    /// and semantic to begin with. Short paths pass through unchanged.
+    static func condensePath(_ path: String) -> String {
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count > 4 else { return path }
+        let head = parts[0]
+        let tail = parts.suffix(2).joined(separator: "/")
+        return "\(head)/…/\(tail)"
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {

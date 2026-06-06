@@ -9,6 +9,7 @@ final class RootViewController: NSViewController {
     private let coordinator = AppCoordinator()
 
     private var toolbar: ToolbarView!
+    private var filterBar: FilterBarView!
     private var sidebar: SidebarViewController!
     private var browser: BrowserViewController!
 
@@ -31,7 +32,8 @@ final class RootViewController: NSViewController {
         let toolbar = ToolbarView(coordinator: coordinator)
         self.toolbar = toolbar
         let h1 = Hairline()
-        let filterBar = PlaceholderBand(title: "FILTER BAR — scope · chips · count · sort", fill: Theme.panel)
+        let filterBar = FilterBarView(coordinator: coordinator)
+        self.filterBar = filterBar
         let h2 = Hairline()
         let h3 = Hairline()
         let statusBar = PlaceholderBand(title: "STATUS BAR — indexed count · selection · freshness", fill: Theme.panel)
@@ -86,16 +88,28 @@ final class RootViewController: NSViewController {
         ]
         NSLayoutConstraint.activate(c)
 
-        // The coordinator is the single source of truth: any navigation (toolbar,
-        // sidebar, breadcrumb, double-click) refreshes all three observers.
+        // The coordinator is the single source of truth. Navigation (toolbar,
+        // sidebar, breadcrumb, double-click) resets the query+scope, then refreshes
+        // every observer — toolbar clears the search field, filter bar resets to
+        // "This folder" + recomputes the count.
         coordinator.onChange = { [weak self] in
             guard let self else { return }
             self.browser.reload()
             self.toolbar.refresh()
+            self.filterBar.refresh()
             self.sidebar.refresh()
         }
-        // Initial refresh so the breadcrumb/sidebar reflect the start path.
+        // Query/scope/sort changes (search field, scope control, header click)
+        // refresh the list + count + filter bar without a full navigation.
+        coordinator.onResultsChange = { [weak self] in
+            guard let self else { return }
+            self.browser.reload()
+            self.filterBar.refresh()
+            self.toolbar.refresh()
+        }
+        // Initial refresh so the breadcrumb/sidebar/filter bar reflect the start.
         toolbar.refresh()
+        filterBar.refresh()
         sidebar.refresh()
     }
 }
