@@ -24,6 +24,7 @@ typedef struct Query Query;  // opaque
 // Borrows index_bytes until zest_close (caller keeps them mapped).
 Core  *zest_open(const uint8_t *index_bytes, size_t len);
 void   zest_close(Core *core);
+size_t zest_count(Core *core); // total indexed entries (files + dirs)
 
 // scope_root "" or "/" = whole index; max_depth 1 = folder listing, large = subtree.
 Query *zest_query(Core *core, const char *query_utf8, const char *scope_root,

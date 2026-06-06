@@ -43,6 +43,9 @@ final class ZestCore {
         munmap(mapBase, mapSize)
     }
 
+    /// Total number of indexed entries (files + directories) — for the status bar.
+    var totalCount: Int { Int(zest_count(handle)) }
+
     /// Synchronous (runs in Zig); callers dispatch off-main in later phases.
     func query(_ q: String, scope: String = "/", maxDepth: UInt32 = .max, maxResults: UInt32 = 100_000) -> [Row] {
         guard let qp = zest_query(handle, q, scope, maxDepth, maxResults) else { return [] }

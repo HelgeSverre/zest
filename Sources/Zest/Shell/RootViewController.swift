@@ -12,6 +12,7 @@ final class RootViewController: NSViewController {
     private var filterBar: FilterBarView!
     private var sidebar: SidebarViewController!
     private var browser: BrowserViewController!
+    private var statusBar: StatusBarView!
 
     override func loadView() {
         view = NSView()
@@ -36,7 +37,8 @@ final class RootViewController: NSViewController {
         self.filterBar = filterBar
         let h2 = Hairline()
         let h3 = Hairline()
-        let statusBar = PlaceholderBand(title: "STATUS BAR — indexed count · selection · freshness", fill: Theme.panel)
+        let statusBar = StatusBarView(coordinator: coordinator)
+        self.statusBar = statusBar
 
         // Sidebar | content split (sidebar is the leading item).
         let sidebar = SidebarViewController(coordinator: coordinator)
@@ -98,6 +100,7 @@ final class RootViewController: NSViewController {
             self.toolbar.refresh()
             self.filterBar.refresh()
             self.sidebar.refresh()
+            self.statusBar.refresh()
         }
         // Query/scope/sort changes (search field, scope control, header click)
         // refresh the list + count + filter bar without a full navigation.
@@ -106,10 +109,19 @@ final class RootViewController: NSViewController {
             self.browser.reload()
             self.filterBar.refresh()
             self.toolbar.refresh()
+            self.statusBar.refresh()
         }
-        // Initial refresh so the breadcrumb/sidebar/filter bar reflect the start.
+        // The browser's selection drives the status bar's center summary.
+        browser.onSelectionChange = { [weak self] summary in
+            self?.statusBar.setSelection(summary)
+        }
+        // Initial refresh so the breadcrumb/sidebar/filter bar/status bar reflect the start.
         toolbar.refresh()
         filterBar.refresh()
         sidebar.refresh()
+        statusBar.refresh()
+        // Seed the center summary from the browser's default (row 0) selection —
+        // its first `reload()` ran before `onSelectionChange` was wired.
+        statusBar.setSelection(browser.currentSelectionSummary())
     }
 }

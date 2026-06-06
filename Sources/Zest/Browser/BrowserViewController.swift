@@ -66,12 +66,18 @@ final class BrowserViewController: NSViewController {
         view = v
     }
 
+    /// Fired when the selected row changes; carries a status-bar summary
+    /// (`"<name> — <Kind>"` plus `" · <size>"` for files) or nil for no selection.
+    var onSelectionChange: ((String?) -> Void)?
+
     override func viewDidLoad() {
         super.viewDidLoad()
         buildTable()
         buildEmptyState()
         tableView.target = self
         tableView.doubleAction = #selector(handleDoubleClick)
+        tableView.onActivateSelection = { [weak self] in self?.activate(row: self?.tableView.selectedRow ?? -1) }
+        tableView.menuForRow = { [weak self] row in self?.buildContextMenu(for: row) }
         reload()
     }
 
@@ -96,16 +102,111 @@ final class BrowserViewController: NSViewController {
             tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             tableView.scrollRowToVisible(0)
         }
+        // Push the current selection summary directly: `selectRowIndexes` only
+        // posts a change notification when the row actually changes, so a reload
+        // that lands on the same row would otherwise leave the status bar stale.
+        pushSelectionSummary()
+    }
+
+    /// Compute + emit the status-bar summary for the current selection.
+    private func pushSelectionSummary() {
+        onSelectionChange?(currentSelectionSummary())
+    }
+
+    /// The status-bar summary for the current selection: `"<name> — <Kind>"`,
+    /// plus `" · <size>"` for files. Nil when nothing is selected. Used both to
+    /// emit on change and to seed the status bar after the callback is wired.
+    func currentSelectionSummary() -> String? {
+        let row = tableView.selectedRow
+        guard row >= 0, row < items.count else { return nil }
+        let item = items[row]
+        var summary = "\(item.name) — \(item.kindLabel)"
+        if !item.isDirectory { summary += " · \(item.sizeText)" }
+        return summary
     }
 
     @objc private func handleDoubleClick() {
-        let row = tableView.clickedRow
+        activate(row: tableView.clickedRow)
+    }
+
+    /// Open a row: folders navigate the browser, files open in their default app.
+    private func activate(row: Int) {
         guard row >= 0, row < items.count else { return }
         let item = items[row]
         if item.isDirectory {
             coordinator.navigate(to: item.path)
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
         }
-        // Files: no-op for now (opening files comes later).
+    }
+
+    // MARK: Context menu
+
+    /// Build a per-click menu targeting `row` (the right-clicked row). Actions
+    /// capture the item so they fire against the clicked row, not the selection.
+    private func buildContextMenu(for row: Int) -> NSMenu? {
+        guard row >= 0, row < items.count else { return nil }
+        let item = items[row]
+        let menu = NSMenu()
+
+        let open = NSMenuItem(title: item.isDirectory ? "Open" : "Open", action: #selector(menuOpen(_:)), keyEquivalent: "")
+        open.target = self
+        open.representedObject = item.path
+        menu.addItem(open)
+
+        menu.addItem(.separator())
+
+        let reveal = NSMenuItem(title: "Reveal in Finder", action: #selector(menuReveal(_:)), keyEquivalent: "")
+        reveal.target = self
+        reveal.representedObject = item.path
+        menu.addItem(reveal)
+
+        let copy = NSMenuItem(title: "Copy Path", action: #selector(menuCopyPath(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.representedObject = item.path
+        menu.addItem(copy)
+
+        let term = NSMenuItem(title: "Open in Terminal", action: #selector(menuOpenTerminal(_:)), keyEquivalent: "")
+        term.target = self
+        // Files open Terminal at their containing folder; folders at themselves.
+        term.representedObject = item.isDirectory ? item.path : item.dirPath
+        menu.addItem(term)
+
+        return menu
+    }
+
+    @objc private func menuOpen(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        if isDir.boolValue {
+            coordinator.navigate(to: path)
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        }
+    }
+
+    @objc private func menuReveal(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    @objc private func menuCopyPath(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(path, forType: .string)
+    }
+
+    /// Open Terminal at the given directory. Robust: if Terminal can't be
+    /// located, no-op rather than throwing.
+    @objc private func menuOpenTerminal(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? String else { return }
+        let dirURL = URL(fileURLWithPath: dir)
+        let ws = NSWorkspace.shared
+        guard let termURL = ws.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        ws.open([dirURL], withApplicationAt: termURL, configuration: config, completionHandler: nil)
     }
 
     private static func makeItem(from r: ZestCore.Row) -> FileItem {
@@ -259,6 +360,12 @@ final class BrowserViewController: NSViewController {
 extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
+    /// Selection changes emit a status-bar summary: `"<name> — <Kind>"`, plus
+    /// `" · <size>"` for files (nil when nothing is selected).
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        pushSelectionSummary()
+    }
+
     /// 48pt two-line rows in search mode, 34pt single-line rows when browsing.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         searchMode ? 48 : 34
@@ -376,6 +483,30 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
 
 private final class ZestTableView: NSTableView {
     override var isOpaque: Bool { true }
+
+    /// Fired on Return/Enter for the selected row; the controller opens it.
+    var onActivateSelection: (() -> Void)?
+    /// Builds the context menu for a right-clicked row (or nil to suppress).
+    var menuForRow: ((Int) -> NSMenu?)?
+
+    override func keyDown(with event: NSEvent) {
+        // Return (36) / Enter (76) activate the selection; everything else
+        // (arrow up/down selection, page keys, …) flows to AppKit.
+        if event.keyCode == 36 || event.keyCode == 76 {
+            onActivateSelection?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    /// Build the menu against the right-clicked row so actions target it even
+    /// when it differs from the current selection.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else { return nil }
+        return menuForRow?(row)
+    }
 }
 
 // MARK: - Row view: accent-soft fill + leading rail when selected

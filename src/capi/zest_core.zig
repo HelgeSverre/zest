@@ -54,6 +54,12 @@ export fn zest_close(core: *Core) void {
     alloc.destroy(core);
 }
 
+/// Total number of entries in the index (every file + directory). Drives the
+/// status bar's "files indexed" count. Cheap: a header field read.
+export fn zest_count(core: *Core) usize {
+    return @intCast(core.reader.numEntries());
+}
+
 /// Run one query. `scope_root` "" or "/" means the whole index. `max_depth` 1 =
 /// direct children (folder listing), large = subtree. Returns null on error.
 /// `query_utf8` is used verbatim — the caller trims whitespace.
