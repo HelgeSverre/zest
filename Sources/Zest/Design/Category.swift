@@ -7,30 +7,40 @@ import AppKit
 enum Category {
     struct Meta {
         let label: String
+        /// Sidebar/tree label (plural) — "Code", "Images", "Documents", …
+        let pluralLabel: String
+        /// Query token key the engine's `cat:` parser accepts (`cat:<key>`).
+        let queryKey: String
         let color: NSColor
         let symbol: String
     }
 
     // Indexed 0–8 by the index's category byte.
     static let byIndex: [Meta] = [
-        Meta(label: "Other",       color: hex(0x86, 0x8E, 0x99), symbol: "doc"),                                       // 0 uncategorized
-        Meta(label: "Image",       color: hex(0xE0, 0xA3, 0xFF), symbol: "photo"),                                     // 1 images
-        Meta(label: "Text",        color: hex(0x9A, 0xA4, 0xB0), symbol: "doc.text"),                                  // 2 text
-        Meta(label: "Document",    color: hex(0xC9, 0xA2, 0xFF), symbol: "doc.richtext"),                              // 3 documents
-        Meta(label: "Spreadsheet", color: hex(0x3F, 0xC9, 0xA0), symbol: "tablecells"),                                // 4 spreadsheets
-        Meta(label: "Audio",       color: hex(0xFF, 0x8C, 0xC8), symbol: "music.note"),                                // 5 audio
-        Meta(label: "Video",       color: hex(0xFF, 0x7B, 0x72), symbol: "film"),                                      // 6 video
-        Meta(label: "Code",        color: Theme.catCode,         symbol: "chevron.left.forwardslash.chevron.right"),   // 7 code
-        Meta(label: "Archive",     color: hex(0x8C, 0x95, 0xA0), symbol: "archivebox"),                                // 8 archives
+        Meta(label: "Other",       pluralLabel: "Other",        queryKey: "other",        color: hex(0x86, 0x8E, 0x99), symbol: "doc"),                                       // 0 uncategorized
+        Meta(label: "Image",       pluralLabel: "Images",       queryKey: "images",       color: hex(0xE0, 0xA3, 0xFF), symbol: "photo"),                                     // 1 images
+        Meta(label: "Text",        pluralLabel: "Text",         queryKey: "text",         color: hex(0x9A, 0xA4, 0xB0), symbol: "doc.text"),                                  // 2 text
+        Meta(label: "Document",    pluralLabel: "Documents",    queryKey: "documents",    color: hex(0xC9, 0xA2, 0xFF), symbol: "doc.richtext"),                              // 3 documents
+        Meta(label: "Spreadsheet", pluralLabel: "Spreadsheets", queryKey: "spreadsheets", color: hex(0x3F, 0xC9, 0xA0), symbol: "tablecells"),                                // 4 spreadsheets
+        Meta(label: "Audio",       pluralLabel: "Audio",        queryKey: "audio",        color: hex(0xFF, 0x8C, 0xC8), symbol: "music.note"),                                // 5 audio
+        Meta(label: "Video",       pluralLabel: "Video",        queryKey: "video",        color: hex(0xFF, 0x7B, 0x72), symbol: "film"),                                      // 6 video
+        Meta(label: "Code",        pluralLabel: "Code",         queryKey: "code",         color: Theme.catCode,         symbol: "chevron.left.forwardslash.chevron.right"),   // 7 code
+        Meta(label: "Archive",     pluralLabel: "Archives",     queryKey: "archives",     color: hex(0x8C, 0x95, 0xA0), symbol: "archivebox"),                                // 8 archives
     ]
 
-    static let folder = Meta(label: "Folder", color: Theme.catFolder, symbol: "folder")
+    static let folder = Meta(label: "Folder", pluralLabel: "Folders", queryKey: "folder", color: Theme.catFolder, symbol: "folder")
 
     /// Presentation for a row. Directories (`kind == 1`) override the category.
     static func meta(kind: UInt8, category: UInt8) -> Meta {
         if kind == 1 { return folder }
         let i = Int(category)
         return (i >= 0 && i < byIndex.count) ? byIndex[i] : byIndex[0]
+    }
+
+    /// Presentation for a bare category index (0–8), independent of any row's
+    /// `kind`. Used by the sidebar Categories tree.
+    static func meta(category index: Int) -> Meta {
+        (index >= 0 && index < byIndex.count) ? byIndex[index] : byIndex[0]
     }
 
     private static func hex(_ r: Int, _ g: Int, _ b: Int) -> NSColor {

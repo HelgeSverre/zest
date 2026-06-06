@@ -40,6 +40,26 @@ final class AppCoordinator {
         didSet { guard sortAscending != oldValue else { return }; fireResultsChange() }
     }
 
+    /// The `cat:` query key currently active in `queryText`, if any.
+    /// Parsed lazily so observers can highlight the matching sidebar category.
+    var activeCategoryQueryKey: String? {
+        parseFilterKey(in: queryText, prefix: "cat:")
+    }
+
+    /// The `ext:` filter value currently active in `queryText`, if any.
+    var activeExtensionFilter: String? {
+        parseFilterKey(in: queryText, prefix: "ext:")
+    }
+
+    private func parseFilterKey(in text: String, prefix: String) -> String? {
+        let lower = text.lowercased()
+        guard let range = lower.range(of: prefix) else { return nil }
+        let after = lower[range.upperBound...]
+        let end = after.firstIndex(where: { $0.isWhitespace || $0 == "\"" }) ?? after.endIndex
+        let key = String(after[..<end])
+        return key.isEmpty ? nil : key
+    }
+
     init() {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

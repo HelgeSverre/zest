@@ -109,6 +109,7 @@ final class RootViewController: NSViewController {
             self.browser.reload()
             self.filterBar.refresh()
             self.toolbar.refresh()
+            self.sidebar.refresh()
             self.statusBar.refresh()
         }
         // The browser's selection drives the status bar's center summary.
