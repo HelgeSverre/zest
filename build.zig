@@ -42,6 +42,24 @@ pub fn build(b: *std.Build) void {
     indexer.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(indexer);
 
+    // === Library: zest-core (C ABI for the Swift UI) ===
+    // Pure-CPU engine surface (reader + search). No frameworks, no Io.
+    const core_lib = b.addLibrary(.{
+        .name = "zest-core",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zest_core_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    core_lib.root_module.linkSystemLibrary("c", .{});
+    b.installArtifact(core_lib);
+
+    // `zig build core` — build only the static library (what the Swift app links).
+    const core_step = b.step("core", "Build only libzest-core.a");
+    core_step.dependOn(&b.addInstallArtifact(core_lib, .{}).step);
+
     // Indexer-only build step (`zig build indexer`). Lets the perf-sensitive
     // justfile recipes build just the daemon in ReleaseFast without depending on
     // the GUI target.
