@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="browse">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zest — GUI Redesign Prototype v2</title>
+<style>
+/* ============================================================================
+   ZEST v2 — bespoke pro file browser. Ink graphite base + one derived accent.
+   v2 changes: editable breadcrumb · expandable scope-aware categories ·
+   spaced indexed-count w/ click-copy · saved-filters manager overlay ·
+   ISO date + timeago · separate Kind/Ext columns · no row animation.
+   ========================================================================== */
+
+:root {
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+
+  /* Ink graphite (fixed neutral base) */
+  --bg:        #0F1115;
+  --panel:     #16191E;
+  --panel-2:   #1A1E23;
+  --elevated:  #1F242A;
+  --hover:     #20252B;
+  --border:    #272C33;
+  --border-soft:#1D2127;
+  --text:      #E9ECEF;
+  --text-2:    #868E99;
+  --text-3:    #565E68;
+
+  /* accent: ONE base; the family is derived in CSS via color-mix (perceptual
+     oklch for lightening, srgb for the alpha fades) so it stays consistent and
+     works in both dark and light themes. JS only sets --accent + --on-accent. */
+  --accent:    #B8FF3C;
+  --accent-hi: color-mix(in oklch, var(--accent) 78%, white);
+  --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 55%, transparent);
+  --glow:      color-mix(in srgb, var(--accent) 16%, transparent);
+  --on-accent: #0c0e12;   /* recomputed by JS from accent luminance */
+
+  /* category colors (fixed, theme-independent) */
+  --c-folder: #6E9BE0; --c-code: #46C26A; --c-images: #E0A3FF; --c-text: #9AA4B0;
+  --c-documents: #C9A2FF; --c-audio: #FF8CC8; --c-video: #FF7B72;
+  --c-spreadsheets: #3FC9A0; --c-archives: #8C95A0;
+
+  /* desktop + semantic surfaces (tokenized so a light theme can flip them) */
+  --desk-1: #181c20; --desk-2: #0b0d10; --desk-3: #050505;
+  --sheen:   rgba(255,255,255,.05);   /* top-edge highlight */
+  --sheen-2: rgba(255,255,255,.04);   /* faint fills (segmented bg) */
+  --swatch-ring: rgba(255,255,255,.15);
+  --scrim:   rgba(5,7,10,.62);        /* dialog backdrop */
+  --grain-opacity: .025;
+  --shadow-win:    0 0 0 1px rgba(0,0,0,.5), 0 40px 90px -20px rgba(0,0,0,.7), 0 12px 30px -10px rgba(0,0,0,.6);
+  --shadow-pop:    0 16px 40px -12px rgba(0,0,0,.7);
+  --shadow-dialog: 0 30px 70px -20px rgba(0,0,0,.8);
+
+  --radius-win: 12px; --radius-md: 8px; --radius-sm: 6px; --radius-pill: 999px;
+  --row-h: 34px; --row-h-search: 48px;
+  --grid: 1fr 92px 178px 116px 64px;   /* Name | Size | Modified | Kind | Ext */
+}
+
+/* Light variant — every surface is a token flip; the accent family and category
+   colors are reused unchanged. Toggle via the harness (sets data-theme). */
+[data-theme="light"] {
+  --bg: #FBFBFD; --panel: #F1F2F5; --panel-2: #EAECEF; --elevated: #E4E7EB;
+  --hover: #ECEEF1; --border: #D8DCE2; --border-soft: #E7E9ED;
+  --text: #1B1F26; --text-2: #5C6470; --text-3: #8B93A0;
+  --desk-1: #E8ECF2; --desk-2: #D7DCE5; --desk-3: #c9cfda;
+  --sheen: rgba(255,255,255,.7); --sheen-2: rgba(0,0,0,.025); --swatch-ring: rgba(0,0,0,.12);
+  --scrim: rgba(22,26,32,.32); --grain-opacity: .015;
+  --shadow-win:    0 0 0 1px rgba(20,30,50,.06), 0 30px 70px -24px rgba(20,30,50,.26), 0 8px 24px -10px rgba(20,30,50,.16);
+  --shadow-pop:    0 14px 34px -12px rgba(20,30,50,.22);
+  --shadow-dialog: 0 28px 64px -22px rgba(20,30,50,.30);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+/* consistent keyboard focus ring on every interactive control */
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body {
+  font-family: var(--ui);
+  background:
+    radial-gradient(1200px 700px at 50% -10%, var(--desk-1), transparent 60%),
+    linear-gradient(160deg, var(--desk-2), var(--desk-3));
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  display: flex; flex-direction: column; align-items: center;
+  min-height: 100%; padding: 26px 26px 40px; gap: 18px;
+}
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; opacity: var(--grain-opacity); z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- harness ------------------------------------------------------------- */
+.harness { width: 100%; max-width: 1180px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
+.harness .brand { font-weight: 600; letter-spacing: .02em; color: var(--text); display: flex; align-items: center; gap: 9px; }
+.harness .brand .zmark { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(135deg, var(--accent), var(--accent-hi)); display: grid; place-items: center; color: var(--on-accent); font-weight: 800; font-size: 12px; box-shadow: 0 2px 8px var(--glow); }
+.harness .spacer { flex: 1; }
+.harness label { color: var(--text-3); margin-right: 2px; }
+.seg { display: inline-flex; background: var(--sheen-2); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 3px; gap: 2px; }
+.seg button { font: inherit; font-size: 11.5px; color: var(--text-2); background: transparent; border: 0; cursor: pointer; padding: 5px 13px; border-radius: var(--radius-pill); transition: all .18s ease; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: 0 1px 6px var(--glow); }
+.accents { display: inline-flex; gap: 7px; align-items: center; }
+.accents button { width: 18px; height: 18px; border-radius: 50%; border: 0; cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px var(--swatch-ring); transition: transform .12s ease; }
+.accents button:hover { transform: scale(1.18); }
+.accents button.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px currentColor, 0 0 12px var(--glow); }
+.accents .sys { width: auto; border-radius: 999px; padding: 4px 9px; font: inherit; font-size: 10.5px; background: var(--panel); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--border); }
+.accents .sys:hover { color: var(--text); }
+
+/* ---- window -------------------------------------------------------------- */
+.window {
+  position: relative;
+  width: 1180px; max-width: 100%; height: 760px;
+  resize: both; min-width: 680px; min-height: 460px;
+  background: var(--bg); border-radius: var(--radius-win); border: 1px solid var(--border);
+  box-shadow: var(--shadow-win);
+  overflow: hidden; display: flex; flex-direction: column;
+}
+
+/* ---- toolbar ------------------------------------------------------------- */
+.toolbar { height: 56px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: linear-gradient(var(--panel-2), var(--panel)); border-bottom: 1px solid var(--border); position: relative; }
+.toolbar::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 1px; background: rgba(255,255,255,.05); }
+.traffic { display: flex; gap: 8px; align-items: center; padding-right: 6px; }
+.traffic i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.traffic .r { background: #FF5F57; } .traffic .y { background: #FEBC2E; } .traffic .g { background: #28C840; }
+.navbtns { display: flex; gap: 2px; }
+.iconbtn { width: 30px; height: 30px; border-radius: var(--radius-sm); display: grid; place-items: center; color: var(--text-2); background: transparent; border: 0; cursor: pointer; transition: all .15s ease; }
+.iconbtn:hover { background: var(--hover); color: var(--text); }
+.iconbtn svg { width: 16px; height: 16px; }
+.iconbtn.disabled { opacity: .32; pointer-events: none; }
+
+/* editable breadcrumb */
+.crumbs {
+  display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 10px;
+  border-radius: var(--radius-sm); cursor: text; user-select: none;
+  max-width: 360px; min-width: 0; overflow: hidden; flex: 0 1 auto;
+  border: 1px solid transparent; transition: background .15s ease, border-color .15s ease;
+}
+.crumbs:hover { background: var(--hover); }
+.crumbs.editing { background: var(--bg); border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); cursor: text; flex: 1 1 auto; max-width: none; }
+.crumb-root { color: var(--text-3); font-size: 12.5px; padding-right: 2px; }
+.crumb-sep { color: var(--text-3); font-size: 13px; opacity: .7; }
+.crumb { font-size: 12.5px; padding: 3px 5px; border-radius: 4px; white-space: nowrap; }
+.crumb-parent { color: var(--text-3); }
+.crumb-current { color: var(--text); font-weight: 600; }
+.crumb-current.crumb-colored { font-weight: 600; }
+.crumb-home { color: var(--accent); font-weight: 600; font-family: var(--mono); }
+.crumb-vol { color: var(--accent-hi); font-weight: 600; }   /* /Volumes/… hook (future) */
+.crumb-input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 13px; font-family: var(--mono); letter-spacing: -.1px; }
+
+.search { flex: 1; min-width: 180px; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+.search.focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); }
+.search svg { width: 15px; height: 15px; color: var(--text-3); flex: none; }
+.search.focus svg { color: var(--accent); }
+.search .tokens { display: flex; gap: 5px; flex: none; }
+.token { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px 0 8px; background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--accent-hi); border-radius: var(--radius-sm); font-family: var(--mono); font-size: 11px; white-space: nowrap; animation: pop .18s ease; }
+.token .x { cursor: pointer; opacity: .65; font-size: 13px; line-height: 1; }
+.token .x:hover { opacity: 1; }
+@keyframes pop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.search input { flex: 1; min-width: 40px; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 13px; }
+.search input::placeholder { color: var(--text-3); }
+.search .clear { width: 18px; height: 18px; border-radius: 50%; display: none; place-items: center; cursor: pointer; color: var(--text-3); flex: none; }
+.search .clear:hover { color: var(--text); background: var(--hover); }
+.search.has-text .clear { display: grid; }
+
+.toolbtn { height: 34px; padding: 0 12px; display: flex; align-items: center; gap: 7px; background: var(--panel); border: 1px solid var(--border); color: var(--text-2); border-radius: var(--radius-md); font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; transition: all .15s ease; flex: none; }
+.toolbtn:hover { background: var(--hover); color: var(--text); border-color: var(--accent-line); }
+.toolbtn svg { width: 13px; height: 13px; }
+
+/* ---- filter bar ---------------------------------------------------------- */
+.filterbar { height: 42px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.scope { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px; gap: 2px; flex: none; }
+.scope button { font: inherit; font-size: 11.5px; color: var(--text-2); background: transparent; border: 0; cursor: pointer; padding: 4px 10px; border-radius: 4px; transition: all .15s ease; display: flex; align-items: center; gap: 5px; }
+.scope button svg { width: 12px; height: 12px; }
+.scope button:hover { color: var(--text); }
+.scope button.on { background: var(--elevated); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+.scope button.on svg { color: var(--accent); }
+.chips { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px 0 9px; background: var(--elevated); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-pill); font-size: 11.5px; white-space: nowrap; font-family: var(--mono); flex: none; }
+.chip b { font-weight: 600; color: var(--text-2); font-family: var(--ui); }
+.chip .x { cursor: pointer; color: var(--text-3); font-size: 13px; line-height: 1; }
+.chip .x:hover { color: var(--text); }
+.result-count { font-size: 12px; color: var(--text-3); white-space: nowrap; flex: none; }
+.result-count b { color: var(--text-2); font-weight: 600; }
+.sortbtn { height: 26px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid transparent; color: var(--text-2); border-radius: var(--radius-sm); font: inherit; font-size: 12px; cursor: pointer; transition: all .15s ease; flex: none; }
+.sortbtn:hover { background: var(--hover); color: var(--text); }
+.sortbtn svg { width: 12px; height: 12px; }
+
+/* ---- body ---------------------------------------------------------------- */
+.body { flex: 1; display: flex; min-height: 0; }
+.sidebar { width: 220px; flex: none; background: var(--panel); border-right: 1px solid var(--border); padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.side-group { margin-bottom: 14px; }
+.side-head { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--text-3); padding: 4px 8px 6px; display: flex; align-items: center; justify-content: space-between; }
+.side-head .add { cursor: pointer; opacity: .6; font-size: 13px; }
+.side-head .add:hover { opacity: 1; color: var(--text); }
+.side-item { height: 30px; padding: 0 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 9px; cursor: pointer; color: var(--text-2); font-size: 13px; position: relative; transition: background .14s ease, color .14s ease; }
+.side-item:hover { background: var(--hover); color: var(--text); }
+.side-item.on { background: var(--accent-soft); color: var(--text); }
+.side-item.on::before { content: ""; position: absolute; left: -10px; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.side-item svg { width: 16px; height: 16px; flex: none; }
+.side-item .count { margin-left: auto; font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+
+/* category tree */
+.cat-tree { display: flex; flex-direction: column; gap: 2px; }
+.cat-row { height: 28px; padding: 0 8px 0 4px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-2); font-size: 13px; transition: background .14s ease, color .14s ease; }
+.cat-row:hover { background: var(--hover); color: var(--text); }
+.cat-row.sel { background: var(--accent-soft); color: var(--text); }
+.cat-caret { width: 16px; height: 16px; display: grid; place-items: center; color: var(--text-3); flex: none; transition: transform .15s ease; }
+.cat-caret.open { transform: rotate(90deg); }
+.cat-caret svg { width: 10px; height: 10px; }
+.cat-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.cat-name { flex: 1; }
+.cat-count { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+.cat-children { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 3px; }
+.cat-ext { height: 25px; padding: 0 8px 0 34px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-3); font-size: 12px; transition: background .14s ease, color .14s ease; }
+.cat-ext:hover { background: var(--hover); color: var(--text); }
+.cat-ext.sel { background: var(--accent-soft); color: var(--text); }
+.cat-ext .e { font-family: var(--mono); flex: 1; }
+.cat-ext .c { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+
+/* ---- list ---------------------------------------------------------------- */
+.list-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.list-head { height: 30px; flex: none; display: grid; grid-template-columns: var(--grid); column-gap: 18px; align-items: center; padding: 0 16px 0 14px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+.list-head > div { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.list-head > div:hover { color: var(--text-2); }
+.list-head .sort-ind { opacity: 0; transition: opacity .15s; }
+.list-head > div.sorted { color: var(--text); }
+.list-head > div.sorted .sort-ind { opacity: 1; color: var(--accent); }
+.list-head .right { justify-content: flex-end; }
+.rows { flex: 1; overflow-y: auto; padding: 4px 6px; }
+.row { display: grid; grid-template-columns: var(--grid); column-gap: 18px; align-items: center; height: var(--row-h); padding: 0 10px 0 8px; border-radius: var(--radius-sm); position: relative; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--accent-soft); }
+.row.sel::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.cell-name { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.ficon { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
+.ficon svg { width: 18px; height: 18px; }
+.name-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.fname { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.sel .fname { font-weight: 600; }
+[data-mode="search"] .row { height: var(--row-h-search); }
+.fpath { font-family: var(--mono); font-size: 11px; color: var(--text-3); display: none; align-items: center; max-width: 100%; }
+[data-mode="search"] .fpath { display: flex; }
+.fpath .head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fpath .tail { white-space: nowrap; flex: none; color: var(--text-2); }
+.cell-size, .cell-kind, .cell-ext { font-size: 12px; color: var(--text-2); }
+.cell-size { font-family: var(--mono); text-align: right; }
+.cell-size.dim { color: var(--text-3); }
+.cell-mod { font-family: var(--mono); font-size: 12px; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.cell-mod .date { color: var(--text-2); }
+.cell-mod .ago { color: var(--text-3); font-size: 11px; }
+.cell-ext { font-family: var(--mono); color: var(--text-3); }
+.cell-kind { display: flex; }
+.kind-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); }
+.kind-pill .dot { width: 7px; height: 7px; border-radius: 2px; flex: none; }
+
+/* empty */
+.empty { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 40px; }
+[data-mode="empty"] .empty { display: flex; }
+[data-mode="empty"] .list-head, [data-mode="empty"] .rows { display: none; }
+.empty .icon { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--accent); }
+.empty .icon svg { width: 30px; height: 30px; }
+.empty h2 { font-size: 17px; font-weight: 600; color: var(--text); }
+.empty p { font-size: 13px; color: var(--text-2); max-width: 360px; line-height: 1.55; }
+.empty .cmd { margin-top: 4px; font-family: var(--mono); font-size: 12.5px; color: var(--accent-hi); background: var(--panel); border: 1px solid var(--accent-line); padding: 9px 14px; border-radius: var(--radius-md); box-shadow: 0 0 0 4px var(--accent-soft); }
+
+/* ---- status bar ---------------------------------------------------------- */
+.status { height: 28px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-3); }
+.status .mid { flex: 1; text-align: center; color: var(--text-2); font-family: var(--mono); }
+.status .ix { display: flex; align-items: center; gap: 6px; }
+.status .ix .live { width: 7px; height: 7px; border-radius: 50%; background: var(--c-code); box-shadow: 0 0 8px var(--c-code); animation: pulse 2.4s ease infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+.status b { color: var(--text-2); font-weight: 600; font-family: var(--mono); }
+.copyable { cursor: pointer; border-radius: 4px; padding: 1px 4px; transition: color .15s ease, background .15s ease; }
+.copyable:hover { color: var(--text-2); background: var(--hover); }
+.copyable.flash { animation: flash .45s ease; }
+@keyframes flash { 0% { color: var(--accent); background: var(--accent-soft); } 100% { color: inherit; background: transparent; } }
+
+/* ---- saved popover ------------------------------------------------------- */
+.popover { position: absolute; top: 52px; right: 14px; width: 280px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: 6px; z-index: 40; display: none; }
+.popover.open { display: block; animation: pop .14s ease; }
+.popover .ph { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); padding: 6px 8px; }
+.popover-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12.5px; color: var(--text); }
+.popover-item:hover { background: var(--hover); }
+.popover-item .pq { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.popover-sep { height: 1px; background: var(--border); margin: 5px 4px; }
+.popover-item.manage { color: var(--accent-hi); }
+
+/* ---- overlay dialog ------------------------------------------------------ */
+.overlay { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center; z-index: 60; }
+.overlay.open { display: flex; animation: fade .16s ease; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.ovl-panel { width: 560px; max-width: 90%; max-height: 80%; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-win); box-shadow: var(--shadow-dialog); display: flex; flex-direction: column; overflow: hidden; }
+.ovl-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.ovl-head h2 { font-size: 14px; font-weight: 600; color: var(--text); }
+.ovl-head p { font-size: 11.5px; color: var(--text-3); }
+.ovl-head .x { margin-left: auto; cursor: pointer; color: var(--text-3); width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--radius-sm); }
+.ovl-head .x:hover { background: var(--hover); color: var(--text); }
+.ovl-body { padding: 10px; overflow-y: auto; }
+.sf-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer; transition: background .14s ease; }
+.sf-row:hover { background: var(--hover); }
+.sf-row .grip { color: var(--text-3); cursor: grab; font-size: 14px; }
+.sf-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sf-name { font-size: 13px; color: var(--text); font-weight: 500; }
+.sf-query { font-family: var(--mono); font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sf-actions { display: flex; gap: 4px; }
+.sf-actions button { width: 26px; height: 26px; border: 0; background: transparent; color: var(--text-3); border-radius: var(--radius-sm); cursor: pointer; display: grid; place-items: center; }
+.sf-actions button:hover { background: var(--elevated); color: var(--text); }
+.sf-actions button.del:hover { color: var(--c-video); }
+.sf-edit { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); margin: 4px 0; overflow: hidden; animation: sfExpand .22s cubic-bezier(.2,.8,.2,1); }
+@keyframes sfExpand { from { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; transform: translateY(-4px); } to { max-height: 280px; opacity: 1; } }
+.sf-edit .field { display: flex; flex-direction: column; gap: 4px; }
+.sf-edit label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.sf-edit input { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 12.5px; padding: 7px 9px; outline: none; }
+.sf-edit input.q { font-family: var(--mono); font-size: 12px; }
+.sf-edit input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sf-edit .erow { display: flex; gap: 8px; justify-content: flex-end; }
+.ovl-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.btn { height: 30px; padding: 0 14px; border-radius: var(--radius-sm); font: inherit; font-size: 12.5px; cursor: pointer; border: 1px solid var(--border); background: var(--elevated); color: var(--text); }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { color: var(--text); background: var(--hover); }
+.ovl-foot .spacer { flex: 1; }
+
+/* scrollbars */
+.rows::-webkit-scrollbar, .sidebar::-webkit-scrollbar, .ovl-body::-webkit-scrollbar { width: 10px; }
+.rows::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb, .ovl-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+
+.footnote { font-size: 11.5px; color: var(--text-3); max-width: 1180px; width: 100%; text-align: center; line-height: 1.7; }
+.footnote kbd { font-family: var(--mono); font-size: 10.5px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; color: var(--text-2); }
+</style>
+</head>
+<body>
+
+<!-- ===================== PROTOTYPE HARNESS ============================== -->
+<div class="harness">
+  <div class="brand"><span class="zmark">Z</span> Zest — GUI redesign prototype <b style="color:var(--accent-hi);font-weight:600">v2</b></div>
+  <div class="spacer"></div>
+  <label>Accent</label>
+  <div class="accents" id="accentRow">
+    <button data-accent="#B8FF3C" class="on" style="color:#B8FF3C;background:#B8FF3C" title="Lime (default)"></button>
+    <button data-accent="#F5A623" style="color:#F5A623;background:#F5A623" title="Amber"></button>
+    <button data-accent="#7C7CFF" style="color:#7C7CFF;background:#7C7CFF" title="Indigo"></button>
+    <button data-accent="#3B82F6" style="color:#3B82F6;background:#3B82F6" title="macOS Blue"></button>
+    <button data-accent="#FF7AB6" style="color:#FF7AB6;background:#FF7AB6" title="Pink"></button>
+    <button class="sys" id="sysAccent" title="Demo: follow macOS accent">⌘ follow macOS</button>
+  </div>
+  <label>View</label>
+  <div class="seg" id="modeSeg">
+    <button data-mode="browse" class="on">Browse</button>
+    <button data-mode="search">Search</button>
+    <button data-mode="empty">No index</button>
+  </div>
+  <label>Theme</label>
+  <div class="seg" id="themeSeg">
+    <button data-theme="dark" class="on">Dark</button>
+    <button data-theme="light">Light</button>
+  </div>
+</div>
+
+<!-- ========================== APP WINDOW =============================== -->
+<div class="window">
+
+  <!-- toolbar -->
+  <div class="toolbar">
+    <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+    <div class="navbtns">
+      <button class="iconbtn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <button class="iconbtn disabled" title="Forward"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+      <button class="iconbtn" title="Enclosing folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+    </div>
+
+    <div class="crumbs" id="crumbs" tabindex="0" title="Click to edit — paste a path and press ⏎"></div>
+
+    <div class="search" id="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <div class="tokens" id="tokens"></div>
+      <input id="searchInput" type="text" placeholder="Search — try kind:folder, ext:pdf, size:&gt;1mb" />
+      <span class="clear" id="searchClear"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+    </div>
+
+    <button class="toolbtn" id="savedBtn" title="Saved filters">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg>
+      Saved
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+
+  <!-- filter bar -->
+  <div class="filterbar">
+    <div class="scope" id="scope">
+      <button class="on" data-scope="folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>This folder</button>
+      <button data-scope="sub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8M8 16h5"/></svg>Subfolders</button>
+      <button data-scope="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/></svg>Everywhere</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="result-count" id="count"></div>
+    <button class="sortbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/></svg>Name</button>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <div class="sidebar">
+      <div class="side-group">
+        <div class="side-head">Pinned <span class="add">+</span></div>
+        <div class="side-item" data-path="/Users/helge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10"/></svg> Home</div>
+        <div class="side-item" data-path="/Users/helge/Desktop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg> Desktop</div>
+        <div class="side-item" data-path="/Users/helge/Documents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h7l5 5v15H6z"/><path d="M13 2v5h5"/></svg> Documents</div>
+        <div class="side-item" data-path="/Users/helge/Downloads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M5 21h14"/></svg> Downloads</div>
+        <div class="side-item on" data-path="/Users/helge/code"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> code <span class="count">14</span></div>
+      </div>
+      <div class="side-group">
+        <div class="side-head" id="catHead">Categories</div>
+        <div class="cat-tree" id="catTree"></div>
+      </div>
+    </div>
+
+    <div class="list-wrap">
+      <div class="list-head" id="listHead">
+        <div class="sorted" data-sort="name">Name <span class="sort-ind">▲</span></div>
+        <div class="right" data-sort="size">Size <span class="sort-ind">▲</span></div>
+        <div data-sort="mod">Modified <span class="sort-ind">▲</span></div>
+        <div data-sort="kind">Kind <span class="sort-ind">▲</span></div>
+        <div data-sort="ext">Ext <span class="sort-ind">▲</span></div>
+      </div>
+      <div class="rows" id="rows"></div>
+      <div class="empty">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 13h6"/></svg></div>
+        <h2>No search index yet</h2>
+        <p>Zest reads from a shared memory-mapped index for sub-5&nbsp;ms queries. Build it once, then the background daemon keeps it fresh.</p>
+        <div class="cmd">$ zest-indexer --full-scan ~</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div class="status">
+    <div class="ix"><span class="live"></span> <span class="copyable" id="ixCount" title="Click to copy"></span>&nbsp;files indexed</div>
+    <div class="mid" id="statusMid">code — 14 items</div>
+    <div>updated <b>2m</b> ago</div>
+  </div>
+
+  <!-- saved popover -->
+  <div class="popover" id="savedPopover">
+    <div class="ph">Saved filters</div>
+    <div id="savedList"></div>
+    <div class="popover-sep"></div>
+    <div class="popover-item manage" id="manageFilters">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+      Manage filters…
+    </div>
+  </div>
+
+  <!-- overlay dialog: saved-filters manager -->
+  <div class="overlay" id="overlay">
+    <div class="ovl-panel">
+      <div class="ovl-head">
+        <div><h2>Saved Filters</h2><p>Create, edit, and organize reusable searches</p></div>
+        <div class="x" id="ovlClose"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+      </div>
+      <div class="ovl-body" id="sfBody"></div>
+      <div class="ovl-foot">
+        <button class="btn" id="sfNew">+ New filter</button>
+        <div class="spacer"></div>
+        <button class="btn primary" id="ovlDone">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footnote">
+  v2 prototype · <b>click the breadcrumb</b> to edit/paste a path · expand a category to drill into extensions · click the indexed-count to copy · <b>Saved ▾ → Manage…</b> · drag the window corner to resize<br/>
+  <kbd>↑</kbd><kbd>↓</kbd> move selection · <kbd>⏎</kbd> commit path · <kbd>Esc</kbd> cancel
+</div>
+
+<script>
+/* ============================ Icons ================================== */
+const ICON = {
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  code:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h9l4 4v12H6z"/><path d="M14 4v4h4"/><path d="M10.5 12.5L9 14l1.5 1.5M13.5 12.5L15 14l-1.5 1.5"/></svg>',
+  text:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h9l4 4v12H6z"/><path d="M14 4v4h4"/><path d="M9 13h6M9 16h4"/></svg>',
+  doc:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h9l4 4v12H6z"/><path d="M14 4v4h4"/><path d="M9 13h6M9 16h6M9 10h2"/></svg>',
+  image:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l4.5-4 3 2.5L16 12l3 3"/></svg>',
+  video:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="12" rx="2"/><path d="M17 10l4-2v8l-4-2z"/></svg>',
+  audio:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="2.5"/><circle cx="16" cy="16" r="2.5"/></svg>',
+  sheet:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/></svg>',
+  archive:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/><path d="M11 13h2"/></svg>',
+};
+const caretSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+
+/* category metadata (matches src/core/file_types.zig + types.zig) */
+const CAT = {
+  folder:       { label:'Folder',      plural:'Folders',      color:'var(--c-folder)',       icon:'folder' },
+  code:         { label:'Code',        plural:'Code',         color:'var(--c-code)',         icon:'code' },
+  images:       { label:'Image',       plural:'Images',       color:'var(--c-images)',       icon:'image' },
+  text:         { label:'Text',        plural:'Text',         color:'var(--c-text)',         icon:'text' },
+  documents:    { label:'Document',    plural:'Documents',    color:'var(--c-documents)',    icon:'doc' },
+  audio:        { label:'Audio',       plural:'Audio',        color:'var(--c-audio)',        icon:'audio' },
+  video:        { label:'Video',       plural:'Video',        color:'var(--c-video)',        icon:'video' },
+  spreadsheets: { label:'Spreadsheet', plural:'Spreadsheets', color:'var(--c-spreadsheets)', icon:'sheet' },
+  archives:     { label:'Archive',     plural:'Archives',     color:'var(--c-archives)',     icon:'archive' },
+};
+
+/* ============================ Data =================================== */
+const HOME = '/Users/helge';
+// folder-color map (mirrors folder_colors.zig getColor — keyed by segment for the demo)
+const FOLDER_COLORS = {
+  helge:   [111,168,246],  // Blue
+  project: [122,184,126],  // Green
+  Desktop: [214,180,89],   // Yellow
+  Downloads: [205,116,108],// Red
+};
+let currentPath = '/Users/helge/code';
+
+const BROWSE = [
+  { name:'crescat-app',       cat:'folder', items:128, iso:'2025-02-25' },
+  { name:'kassalapp-android', cat:'folder', items:96,  iso:'2025-06-17' },
+  { name:'sema-lisp',         cat:'folder', items:212, iso:'2025-02-25' },
+  { name:'harness-eval',      cat:'folder', items:54,  iso:'2026-04-08' },
+  { name:'cloner',            cat:'folder', items:340, iso:'2025-09-25' },
+  { name:'zig-finder',        cat:'folder', items:42,  iso:'2026-06-06' },
+  { name:'build.zig',         cat:'code',  size:'1.8 KB', iso:'2026-06-01', ext:'zig' },
+  { name:'README.md',         cat:'text',  size:'3.6 KB', iso:'2025-10-02', ext:'md' },
+  { name:'justfile',          cat:'code',  size:'742 B',  iso:'2026-06-02', ext:'' },
+  { name:'deploy.sh',         cat:'code',  size:'1.1 KB', iso:'2026-05-20', ext:'sh' },
+  { name:'demo.mov',          cat:'video', size:'48 MB',  iso:'2026-05-30', ext:'mov' },
+  { name:'logo.png',          cat:'images', size:'94 KB', iso:'2026-05-12', ext:'png' },
+  { name:'notes.csv',         cat:'spreadsheets', size:'12 KB', iso:'2026-04-19', ext:'csv' },
+  { name:'release-2.0.zip',   cat:'archives', size:'18 MB', iso:'2026-03-03', ext:'zip' },
+];
+
+const SEARCH = [
+  { name:'mergeLibDexDebug',     cat:'folder', path:'crescat-app/build/app/intermediates/dex/debug', iso:'2025-02-25', items:6 },
+  { name:'mergeProjectDexDebug', cat:'folder', path:'crescat-app/build/app/intermediates/dex/debug', iso:'2025-02-25', items:4 },
+  { name:'mergeExtDexDebug',     cat:'folder', path:'kassalapp-android/app/build/intermediates/dex',  iso:'2025-06-17', items:9 },
+  { name:'MergeRequest.kt',      cat:'code',  path:'crescat-app/src/main/kotlin/net/crescat/git',   iso:'2026-01-14', size:'4.2 KB', ext:'kt' },
+  { name:'merge-strategy.md',    cat:'text',  path:'sema-lisp/docs/architecture',                    iso:'2026-02-25', size:'7.1 KB', ext:'md' },
+  { name:'merged-export.csv',    cat:'spreadsheets', path:'harness-eval/results/default',            iso:'2026-04-08', size:'2.3 MB', ext:'csv' },
+  { name:'auto-merge.yml',       cat:'code',  path:'zig-finder/.github/workflows',                   iso:'2026-06-01', size:'612 B', ext:'yml' },
+  { name:'merge_conflicts.log',  cat:'text',  path:'cloner/helgesver-re/_next/static/logs',          iso:'2025-09-25', size:'880 KB', ext:'log' },
+  { name:'premerge-backup.zip',  cat:'archives', path:'crescat-app/build/tmp',                       iso:'2025-02-24', size:'42 MB', ext:'zip' },
+  { name:'merge-diagram.png',    cat:'images', path:'workflow-builder/specs/001-visual-workflow',    iso:'2025-10-04', size:'310 KB', ext:'png' },
+];
+
+// scope-aware category histogram (an index aggregation in the real app)
+const CAT_HISTOGRAM = {
+  browse: [
+    { cat:'code',         count:5, exts:[{ext:'zig',count:2},{ext:'sh',count:1},{ext:'yml',count:1},{ext:'lua',count:1}] },
+    { cat:'text',         count:3, exts:[{ext:'md',count:2},{ext:'txt',count:1}] },
+    { cat:'images',       count:1, exts:[{ext:'png',count:1}] },
+    { cat:'video',        count:1, exts:[{ext:'mov',count:1}] },
+    { cat:'spreadsheets', count:1, exts:[{ext:'csv',count:1}] },
+    { cat:'archives',     count:1, exts:[{ext:'zip',count:1}] },
+  ],
+  everywhere: [
+    { cat:'code',         count:2143, exts:[{ext:'ts',count:820},{ext:'js',count:540},{ext:'css',count:255},{ext:'zig',count:142},{ext:'py',count:138},{ext:'go',count:96},{ext:'rs',count:74},{ext:'fs',count:38},{ext:'swift',count:40}] },
+    { cat:'text',         count:412,  exts:[{ext:'md',count:281},{ext:'txt',count:118},{ext:'log',count:13}] },
+    { cat:'images',       count:840,  exts:[{ext:'png',count:512},{ext:'jpg',count:240},{ext:'svg',count:88}] },
+    { cat:'documents',    count:312,  exts:[{ext:'pdf',count:300},{ext:'docx',count:12}] },
+    { cat:'archives',     count:128,  exts:[{ext:'zip',count:90},{ext:'gz',count:38}] },
+    { cat:'video',        count:56,   exts:[{ext:'mov',count:30},{ext:'mp4',count:26}] },
+    { cat:'spreadsheets', count:47,   exts:[{ext:'csv',count:40},{ext:'xlsx',count:7}] },
+  ],
+};
+
+let savedFilters = [
+  { name:'Big videos',  query:'cat:video size:>100mb' },
+  { name:'Recent code', query:'cat:code date:week' },
+  { name:'Screenshots', query:'ext:png path:Desktop' },
+];
+
+/* ============================ State ================================== */
+const root = document.documentElement;
+const rowsEl = document.getElementById('rows');
+const searchInput = document.getElementById('searchInput');
+const searchBox = document.getElementById('search');
+const tokensEl = document.getElementById('tokens');
+const chipsEl = document.getElementById('chips');
+const countEl = document.getElementById('count');
+const statusMid = document.getElementById('statusMid');
+
+let tokens = [];                  // {k,v} qualifiers
+let selectedIndex = 0;
+let currentRows = [];
+let crumbEditing = false;
+let expandedCats = new Set();
+let sfEditingIndex = null;        // saved-filter row being edited (or 'new')
+const KNOWN_QUAL = ['kind','ext','size','date','cat','path'];
+const INDEXED = 1240118;
+const REF = new Date('2026-06-06T00:00:00');
+
+/* ============================ Helpers ================================ */
+function iconFor(cat) { return ICON[CAT[cat].icon] || ICON.text; }
+function formatCount(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+function timeAgo(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  const days = Math.floor((REF - d) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return days + 'd ago';
+  if (days < 365) return Math.floor(days / 30) + 'mo ago';
+  const y = Math.floor(days / 365); return y + (y === 1 ? 'y ago' : 'y ago');
+}
+function pathHTML(p) {
+  const parts = p.split('/'); const tail = parts.pop(); const head = parts.join('/') + '/';
+  return `<span class="head">${head}</span><span class="tail">${tail}</span>`;
+}
+function scopeKey() { return root.getAttribute('data-mode') === 'browse' ? 'browse' : 'everywhere'; }
+function currentDataset() { return root.getAttribute('data-mode') === 'search' ? SEARCH.slice() : BROWSE.slice(); }
+function hasToken(k, v) { return tokens.some(t => t.k === k && t.v === v); }
+
+/* ============================ Breadcrumb ============================= */
+function renderCrumbs() {
+  if (crumbEditing) return;
+  const el = document.getElementById('crumbs');
+  el.classList.remove('editing');
+  if (currentPath === HOME) { el.innerHTML = `<span class="crumb crumb-home">~</span>`; return; }
+  const segs = currentPath.split('/').filter(Boolean);
+  let html = '';
+  const isVol = segs[0] === 'Volumes';
+  html += `<span class="crumb-root">/</span>`;
+  segs.forEach((name, i) => {
+    if (i > 0) html += `<span class="crumb-sep">⁄</span>`;
+    const isCurrent = i === segs.length - 1;
+    const col = FOLDER_COLORS[name];
+    let cls = 'crumb ' + (isCurrent ? 'crumb-current' : 'crumb-parent');
+    if (col) cls += ' crumb-colored';
+    if (isVol && i === 0) cls += ' crumb-vol';
+    const style = col ? ` style="color:rgb(${col[0]},${col[1]},${col[2]})"` : '';
+    html += `<span class="${cls}"${style}>${name}</span>`;
+  });
+  el.innerHTML = html;
+}
+function enterCrumbEdit() {
+  if (crumbEditing) return;
+  crumbEditing = true;
+  const el = document.getElementById('crumbs');
+  el.classList.add('editing');
+  el.innerHTML = `<input class="crumb-input" id="crumbInput" type="text" spellcheck="false" autocomplete="off" />`;
+  const inp = document.getElementById('crumbInput');
+  inp.value = currentPath;
+  requestAnimationFrame(() => { inp.focus(); inp.select(); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commitCrumb(inp.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); crumbEditing = false; renderCrumbs(); }
+  });
+  inp.addEventListener('blur', () => { crumbEditing = false; renderCrumbs(); });
+}
+function commitCrumb(v) {
+  let p = (v || '').trim();
+  if (p === '~') p = HOME;
+  else if (p.startsWith('~/')) p = HOME + p.slice(1);
+  else if (!p.startsWith('/')) p = currentPath + '/' + p;     // relative (resolveEnteredPath parity)
+  p = p.replace(/\/+$/, ''); if (p === '') p = '/';
+  currentPath = p;
+  crumbEditing = false;
+  renderCrumbs();
+  // fake "navigation": drop to browse listing of the new folder
+  setMode('browse'); setScope('folder');
+  updateStatus();
+}
+document.getElementById('crumbs').addEventListener('mousedown', e => {
+  if (!crumbEditing) { e.preventDefault(); enterCrumbEdit(); }
+});
+
+/* ============================ Categories ============================= */
+function renderCats() {
+  const tree = document.getElementById('catTree');
+  document.getElementById('catHead').textContent =
+    scopeKey() === 'browse' ? 'Categories — this folder' : 'Categories — everywhere';
+  const hist = CAT_HISTOGRAM[scopeKey()];
+  tree.innerHTML = hist.map(c => {
+    const meta = CAT[c.cat];
+    const open = expandedCats.has(c.cat);
+    const catSel = hasToken('cat', c.cat);
+    const children = open ? `<div class="cat-children">${c.exts.map(e => {
+      const esel = hasToken('ext', e.ext);
+      return `<div class="cat-ext ${esel ? 'sel' : ''}" data-ext="${e.ext}"><span class="e">.${e.ext}</span><span class="c">${formatCount(e.count)}</span></div>`;
+    }).join('')}</div>` : '';
+    return `<div>
+      <div class="cat-row ${catSel ? 'sel' : ''}" data-cat="${c.cat}">
+        <span class="cat-caret ${open ? 'open' : ''}" data-caret="${c.cat}">${caretSVG}</span>
+        <span class="cat-dot" style="background:${meta.color}"></span>
+        <span class="cat-name">${meta.plural}</span>
+        <span class="cat-count">${formatCount(c.count)}</span>
+      </div>${children}</div>`;
+  }).join('');
+}
+document.getElementById('catTree').addEventListener('click', e => {
+  const caret = e.target.closest('[data-caret]');
+  if (caret) { const k = caret.dataset.caret; expandedCats.has(k) ? expandedCats.delete(k) : expandedCats.add(k); renderCats(); return; }
+  const ext = e.target.closest('[data-ext]');
+  if (ext) { toggleToken('ext', ext.dataset.ext); return; }
+  const cat = e.target.closest('[data-cat]');
+  if (cat) {
+    if (!expandedCats.has(cat.dataset.cat)) expandedCats.add(cat.dataset.cat);
+    toggleToken('cat', cat.dataset.cat);
+  }
+});
+
+/* ============================ Tokens ================================= */
+function toggleToken(k, v) {
+  const i = tokens.findIndex(t => t.k === k && t.v === v);
+  if (i >= 0) tokens.splice(i, 1); else tokens.push({ k, v });
+  renderTokens(); renderCats(); selectedIndex = 0; render();
+}
+function renderTokens() {
+  tokensEl.innerHTML = tokens.map((t, i) => `<span class="token">${t.k}:${t.v}<span class="x" data-tok="${i}">×</span></span>`).join('');
+  chipsEl.innerHTML = tokens.map((t, i) => `<span class="chip"><b>${t.k}</b> ${t.v}<span class="x" data-tok="${i}">×</span></span>`).join('');
+}
+
+/* ============================ Render list =========================== */
+function render() {
+  const mode = root.getAttribute('data-mode');
+  const q = searchInput.value.trim().toLowerCase();
+  let data = currentDataset();
+  if (q) data = data.filter(d => d.name.toLowerCase().includes(q) || (d.path || '').toLowerCase().includes(q));
+  for (const t of tokens) {
+    if (t.k === 'kind') { const folder = (t.v === 'folder' || t.v === 'dir'); data = data.filter(d => folder ? d.cat === 'folder' : d.cat !== 'folder'); }
+    else if (t.k === 'cat') data = data.filter(d => d.cat === t.v);
+    else if (t.k === 'ext') data = data.filter(d => (d.ext || '') === t.v);
+  }
+  currentRows = data;
+  rowsEl.innerHTML = data.map((d, i) => {
+    const meta = CAT[d.cat]; const color = meta.color; const icon = iconFor(d.cat);
+    const sizeCell = d.cat === 'folder'
+      ? `<div class="cell-size dim">${d.items} items</div>`
+      : `<div class="cell-size">${d.size || '—'}</div>`;
+    const pathLine = (mode === 'search' && d.path) ? `<div class="fpath">${pathHTML(d.path)}</div>` : '';
+    const ext = d.cat === 'folder' ? '—' : (d.ext ? d.ext : '—');
+    return `<div class="row ${i === selectedIndex ? 'sel' : ''}" data-i="${i}">
+      <div class="cell-name"><span class="ficon" style="color:${color}">${icon}</span>
+        <span class="name-text"><span class="fname">${d.name}</span>${pathLine}</span></div>
+      ${sizeCell}
+      <div class="cell-mod"><span class="date">${d.iso}</span><span class="ago">${timeAgo(d.iso)}</span></div>
+      <div class="cell-kind"><span class="kind-pill"><span class="dot" style="background:${color}"></span>${meta.label}</span></div>
+      <div class="cell-ext">${ext}</div>
+    </div>`;
+  }).join('');
+  const n = data.length;
+  countEl.innerHTML = mode === 'empty' ? '' : `<b>${n}</b> ${mode === 'search' ? 'result' : 'item'}${n !== 1 ? 's' : ''}`;
+  updateStatus();
+}
+function updateStatus() {
+  if (root.getAttribute('data-mode') === 'empty') { statusMid.textContent = 'Waiting for index'; return; }
+  const d = currentRows[selectedIndex];
+  if (d) statusMid.textContent = `${d.name} — ${CAT[d.cat].label}${d.size ? ' · ' + d.size : (d.items ? ' · ' + d.items + ' items' : '')}`;
+  else statusMid.textContent = 'No selection';
+}
+
+/* ============================ Accent ================================ */
+function hexToRgb(h){h=h.replace('#','');return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+function mix(c,amt){return c.map(v=>Math.round(v+(255-v)*amt));}
+function rgbStr(c){return `rgb(${c[0]},${c[1]},${c[2]})`;}
+function rgba(c,a){return `rgba(${c[0]},${c[1]},${c[2]},${a})`;}
+function luminance(c){return (0.299*c[0]+0.587*c[1]+0.114*c[2])/255;}
+function applyAccent(hex){
+  const base = hexToRgb(hex);
+  // Only set the base + its contrast color. --accent-hi/soft/line/glow derive
+  // from --accent in CSS via color-mix (see :root), so they stay perceptually
+  // consistent and recompute automatically in both dark and light themes.
+  root.style.setProperty('--accent', hex);
+  root.style.setProperty('--on-accent', luminance(base) > 0.6 ? '#0c0e12' : '#ffffff');
+}
+document.getElementById('accentRow').addEventListener('click', e => {
+  const b = e.target.closest('button[data-accent]'); if (!b) return;
+  applyAccent(b.dataset.accent);
+  document.querySelectorAll('#accentRow button').forEach(x => x.classList.toggle('on', x === b));
+});
+document.getElementById('sysAccent').addEventListener('click', () => {
+  const apple = ['#007AFF','#34C759','#FF9500','#FF2D55','#AF52DE','#5856D6','#FF3B30'];
+  applyAccent(apple[(currentRows.length + selectedIndex + searchInput.value.length) % apple.length]);
+  document.querySelectorAll('#accentRow button[data-accent]').forEach(x => x.classList.remove('on'));
+});
+document.getElementById('themeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.theme === 'light') root.setAttribute('data-theme', 'light'); else root.removeAttribute('data-theme');
+  [...e.currentTarget.children].forEach(x => x.classList.toggle('on', x === b));
+});
+
+/* ============================ Mode / scope ========================== */
+function setMode(m) {
+  root.setAttribute('data-mode', m);
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x.dataset.mode === m));
+  document.getElementById('crumbs').style.opacity = (m === 'search') ? '.6' : '1';
+}
+function setScope(name) { document.querySelectorAll('#scope button').forEach(b => b.classList.toggle('on', b.dataset.scope === name)); }
+document.getElementById('modeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  setMode(b.dataset.mode);
+  if (b.dataset.mode === 'search') setScope('all'); else setScope('folder');
+  selectedIndex = 0; renderCats(); render();
+});
+document.getElementById('scope').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  setScope(b.dataset.scope);
+  if (b.dataset.scope !== 'folder' && root.getAttribute('data-mode') !== 'search') setMode('search');
+  if (b.dataset.scope === 'folder') setMode('browse');
+  selectedIndex = 0; renderCats(); render();
+});
+
+/* ============================ Search input ========================== */
+searchInput.addEventListener('focus', () => searchBox.classList.add('focus'));
+searchInput.addEventListener('blur',  () => searchBox.classList.remove('focus'));
+searchInput.addEventListener('input', () => {
+  searchBox.classList.toggle('has-text', searchInput.value.length > 0);
+  const val = searchInput.value;
+  const m = val.match(/(!?)(\w+):([^\s]+)\s$/);
+  if (m && KNOWN_QUAL.includes(m[2].toLowerCase())) {
+    tokens.push({ k: m[2].toLowerCase(), v: m[3].toLowerCase() });
+    searchInput.value = val.slice(0, m.index).trim();
+    if (root.getAttribute('data-mode') !== 'search') { setMode('search'); setScope('all'); }
+    renderTokens(); renderCats();
+  }
+  selectedIndex = 0; render();
+});
+document.getElementById('searchClear').addEventListener('click', () => {
+  searchInput.value = ''; tokens = []; searchBox.classList.remove('has-text');
+  renderTokens(); renderCats(); selectedIndex = 0; render();
+});
+document.body.addEventListener('click', e => {
+  const x = e.target.closest('[data-tok]');
+  if (x) { tokens.splice(+x.dataset.tok, 1); renderTokens(); renderCats(); render(); }
+});
+
+/* ============================ Rows / sidebar / sort ================= */
+rowsEl.addEventListener('click', e => {
+  const r = e.target.closest('.row'); if (!r) return;
+  selectedIndex = +r.dataset.i;
+  rowsEl.querySelectorAll('.row').forEach(x => x.classList.toggle('sel', x === r));
+  updateStatus();
+});
+document.querySelector('.sidebar').addEventListener('click', e => {
+  const it = e.target.closest('.side-item'); if (!it) return;
+  document.querySelectorAll('.side-item').forEach(x => x.classList.remove('on'));
+  it.classList.add('on');
+  if (it.dataset.path) { currentPath = it.dataset.path; renderCrumbs(); setMode('browse'); setScope('folder'); }
+  selectedIndex = 0; renderCats(); render();
+});
+document.getElementById('listHead').addEventListener('click', e => {
+  const c = e.target.closest('[data-sort]'); if (!c) return;
+  const head = document.getElementById('listHead');
+  [...head.children].forEach(x => x.classList.remove('sorted'));
+  c.classList.add('sorted');
+  const ind = c.querySelector('.sort-ind'); ind.textContent = ind.textContent === '▲' ? '▼' : '▲';
+});
+document.addEventListener('keydown', e => {
+  if (crumbEditing) return;
+  if (document.activeElement === searchInput && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    selectedIndex += (e.key === 'ArrowDown' ? 1 : -1);
+    selectedIndex = Math.max(0, Math.min(currentRows.length - 1, selectedIndex));
+    rowsEl.querySelectorAll('.row').forEach((x, i) => x.classList.toggle('sel', i === selectedIndex));
+    const sel = rowsEl.querySelector('.row.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+    updateStatus();
+  } else if (e.key === 'Escape') {
+    closePopover(); closeOverlay();
+  }
+});
+
+/* ============================ Indexed count copy ==================== */
+const ixCount = document.getElementById('ixCount');
+ixCount.textContent = formatCount(INDEXED);
+ixCount.addEventListener('click', () => {
+  const txt = ixCount.textContent;
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+  ixCount.classList.remove('flash'); void ixCount.offsetWidth; ixCount.classList.add('flash');
+});
+
+/* ============================ Saved filters ========================= */
+const popover = document.getElementById('savedPopover');
+const overlay = document.getElementById('overlay');
+function renderSavedList() {
+  document.getElementById('savedList').innerHTML = savedFilters.length
+    ? savedFilters.map((f, i) => `<div class="popover-item" data-apply="${i}">${f.name}<span class="pq">${f.query}</span></div>`).join('')
+    : `<div class="popover-item" style="color:var(--text-3)">No saved filters</div>`;
+}
+function openPopover() { renderSavedList(); popover.classList.add('open'); }
+function closePopover() { popover.classList.remove('open'); }
+document.getElementById('savedBtn').addEventListener('click', e => {
+  e.stopPropagation(); popover.classList.contains('open') ? closePopover() : openPopover();
+});
+popover.addEventListener('click', e => {
+  const ap = e.target.closest('[data-apply]');
+  if (ap) { const f = savedFilters[+ap.dataset.apply]; applySavedQuery(f.query); closePopover(); }
+});
+document.body.addEventListener('mousedown', e => {
+  if (popover.classList.contains('open') && !popover.contains(e.target) && e.target.id !== 'savedBtn' && !e.target.closest('#savedBtn')) closePopover();
+});
+function applySavedQuery(query) {
+  // parse "k:v" qualifiers into tokens, the rest into free text
+  tokens = []; let text = [];
+  query.split(/\s+/).forEach(tok => {
+    const m = tok.match(/^(!?)(\w+):(.+)$/);
+    if (m && KNOWN_QUAL.includes(m[2].toLowerCase())) tokens.push({ k: m[2].toLowerCase(), v: m[3].toLowerCase() });
+    else text.push(tok);
+  });
+  searchInput.value = text.join(' ');
+  searchBox.classList.toggle('has-text', searchInput.value.length > 0);
+  setMode('search'); setScope('all');
+  renderTokens(); renderCats(); selectedIndex = 0; render();
+}
+
+/* manager overlay */
+function openOverlay() { sfEditingIndex = null; renderSfBody(); overlay.classList.add('open'); }
+function closeOverlay() { sfEditingIndex = null; overlay.classList.remove('open'); }
+document.getElementById('manageFilters').addEventListener('click', () => { closePopover(); openOverlay(); });
+document.getElementById('ovlClose').addEventListener('click', closeOverlay);
+document.getElementById('ovlDone').addEventListener('click', closeOverlay);
+overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeOverlay(); });
+document.getElementById('sfNew').addEventListener('click', () => { sfEditingIndex = 'new'; renderSfBody(); });
+
+function editFormHTML(name, query) {
+  return `<div class="sf-edit">
+    <div class="field"><label>Name</label><input id="sfNameInput" type="text" value="${name}" placeholder="Filter name" /></div>
+    <div class="field"><label>Query</label><input id="sfQueryInput" class="q" type="text" value="${query}" placeholder="cat:code date:week" /></div>
+    <div class="erow"><button class="btn ghost" data-cancel>Cancel</button><button class="btn primary" data-save>Save</button></div>
+  </div>`;
+}
+function renderSfBody() {
+  const body = document.getElementById('sfBody');
+  let html = '';
+  savedFilters.forEach((f, i) => {
+    if (sfEditingIndex === i) { html += editFormHTML(f.name, f.query); return; }
+    html += `<div class="sf-row" data-row="${i}">
+      <span class="grip">⠿</span>
+      <div class="sf-main"><div class="sf-name">${f.name}</div><div class="sf-query">${f.query}</div></div>
+      <div class="sf-actions">
+        <button data-edit="${i}" title="Edit"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+        <button class="del" data-del="${i}" title="Delete"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button>
+      </div></div>`;
+  });
+  if (sfEditingIndex === 'new') html += editFormHTML('', '');
+  body.innerHTML = html || `<div style="color:var(--text-3);padding:20px;text-align:center">No saved filters yet — add one below.</div>`;
+  const ni = document.getElementById('sfNameInput'); if (ni) requestAnimationFrame(() => ni.focus());
+}
+document.getElementById('sfBody').addEventListener('click', e => {
+  const dl = e.target.closest('[data-del]'); if (dl) { savedFilters.splice(+dl.dataset.del, 1); sfEditingIndex = null; renderSfBody(); return; }
+  if (e.target.closest('[data-cancel]')) { sfEditingIndex = null; renderSfBody(); return; }
+  if (e.target.closest('[data-save]')) {
+    const name = document.getElementById('sfNameInput').value.trim();
+    const query = document.getElementById('sfQueryInput').value.trim();
+    if (name) {
+      if (sfEditingIndex === 'new') savedFilters.push({ name, query });
+      else savedFilters[sfEditingIndex] = { name, query };
+    }
+    sfEditingIndex = null; renderSfBody();
+    return;
+  }
+  // the whole row is the edit hit-target (delete/save handled above)
+  const row = e.target.closest('.sf-row');
+  if (row && row.dataset.row != null) { sfEditingIndex = +row.dataset.row; renderSfBody(); }
+});
+
+/* ============================ Boot ================================== */
+const params = new URLSearchParams(location.search);
+const pAccent = params.get('accent');
+const pMode = params.get('mode');
+applyAccent(pAccent ? ('#' + pAccent.replace('#', '')) : '#B8FF3C');
+if (pAccent) document.querySelectorAll('#accentRow button[data-accent]').forEach(x => x.classList.remove('on'));
+if (params.get('theme') === 'light') { root.setAttribute('data-theme', 'light'); document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('on', b.dataset.theme === 'light')); }
+if (pMode && ['browse', 'search', 'empty'].includes(pMode)) { setMode(pMode); if (pMode === 'search') setScope('all'); }
+const pPath = params.get('path'); if (pPath) currentPath = pPath;
+const pExpand = params.get('expand'); if (pExpand) pExpand.split(',').forEach(c => expandedCats.add(c));
+renderCrumbs(); renderTokens(); renderCats(); render();
+if (params.get('dialog') === 'saved') openOverlay();
+if (params.get('sfedit') !== null && params.get('sfedit') !== undefined && params.get('dialog') === 'saved') {
+  const v = params.get('sfedit'); sfEditingIndex = v === 'new' ? 'new' : (+v || 0); renderSfBody();
+}
+if (params.get('popover') === 'saved') openPopover();
+if (params.get('edit') === 'crumb') enterCrumbEdit();
+</script>
+</body>
+</html>
