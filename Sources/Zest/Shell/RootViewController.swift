@@ -6,6 +6,11 @@ import AppKit
 /// instead of stretching it full-width, so we constrain everything directly.)
 final class RootViewController: NSViewController {
     private let splitVC = NSSplitViewController()
+    private let coordinator = AppCoordinator()
+
+    private var toolbar: ToolbarView!
+    private var sidebar: SidebarViewController!
+    private var browser: BrowserViewController!
 
     override func loadView() {
         view = NSView()
@@ -23,7 +28,8 @@ final class RootViewController: NSViewController {
         bg.state = .followsWindowActiveState
 
         // Chrome bands + 1px dividers.
-        let toolbar = PlaceholderBand(title: "TOOLBAR — nav · breadcrumb · search · saved", fill: Theme.panel, leadingInset: 88)
+        let toolbar = ToolbarView(coordinator: coordinator)
+        self.toolbar = toolbar
         let h1 = Hairline()
         let filterBar = PlaceholderBand(title: "FILTER BAR — scope · chips · count · sort", fill: Theme.panel)
         let h2 = Hairline()
@@ -31,8 +37,10 @@ final class RootViewController: NSViewController {
         let statusBar = PlaceholderBand(title: "STATUS BAR — indexed count · selection · freshness", fill: Theme.panel)
 
         // Sidebar | content split (sidebar is the leading item).
-        let sidebar = SidebarViewController()
-        let browser = BrowserViewController()
+        let sidebar = SidebarViewController(coordinator: coordinator)
+        let browser = BrowserViewController(coordinator: coordinator)
+        self.sidebar = sidebar
+        self.browser = browser
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = 190
         sidebarItem.maximumThickness = 260
@@ -77,5 +85,17 @@ final class RootViewController: NSViewController {
             statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ]
         NSLayoutConstraint.activate(c)
+
+        // The coordinator is the single source of truth: any navigation (toolbar,
+        // sidebar, breadcrumb, double-click) refreshes all three observers.
+        coordinator.onChange = { [weak self] in
+            guard let self else { return }
+            self.browser.reload()
+            self.toolbar.refresh()
+            self.sidebar.refresh()
+        }
+        // Initial refresh so the breadcrumb/sidebar reflect the start path.
+        toolbar.refresh()
+        sidebar.refresh()
     }
 }

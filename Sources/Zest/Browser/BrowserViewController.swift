@@ -6,6 +6,7 @@ import AppKit
 /// table delegate does no formatting work per cell draw.
 struct FileItem {
     let name: String
+    let path: String              // absolute path (dirPath + "/" + name)
     let isDirectory: Bool
     let sizeText: String          // "1.8 KB" / "—"
     let isoDate: String           // "2026-01-01"
@@ -23,7 +24,7 @@ struct FileItem {
 /// (the home-folder listing, depth 1). Replaces the placeholder. Columns and
 /// row chrome follow the redesign spec §7 + the v2 prototype's browse mode.
 final class BrowserViewController: NSViewController {
-    private let core: ZestCore?
+    private let coordinator: AppCoordinator
     private var items: [FileItem] = []
 
     private let scrollView = NSScrollView()
@@ -47,11 +48,8 @@ final class BrowserViewController: NSViewController {
         return f
     }()
 
-    init() {
-        let fm = FileManager.default
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        let indexURL = support?.appendingPathComponent("zest/index.zst")
-        self.core = indexURL.flatMap { ZestCore(indexPath: $0.path) }
+    init(coordinator: AppCoordinator) {
+        self.coordinator = coordinator
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -66,31 +64,41 @@ final class BrowserViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        loadHomeListing()
-        if items.isEmpty {
-            showEmptyState()
-        } else {
-            buildTable()
-            tableView.reloadData()
-            // Select the first row by default.
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        }
+        buildTable()
+        buildEmptyState()
+        tableView.target = self
+        tableView.doubleAction = #selector(handleDoubleClick)
+        reload()
     }
 
     // MARK: Data
 
-    private func loadHomeListing() {
-        guard let core else { return }  // no index → empty state
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let rows = core.query("", scope: home, maxDepth: 1, maxResults: 100_000)
+    /// Re-run the coordinator's listing for the current folder, remap, and
+    /// refresh the table (or empty state). Reselects row 0 when non-empty.
+    func reload() {
+        items = coordinator.currentListing().map { Self.makeItem(from: $0) }
 
-        var mapped = rows.map { Self.makeItem(from: $0) }
-        // Folders first, then by name ascending (case-insensitive).
-        mapped.sort { a, b in
-            if a.isDirectory != b.isDirectory { return a.isDirectory }
-            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        let isEmpty = items.isEmpty
+        scrollView.isHidden = isEmpty
+        emptyLabel?.isHidden = !isEmpty
+
+        tableView.reloadData()
+        if isEmpty {
+            tableView.deselectAll(nil)
+        } else {
+            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            tableView.scrollRowToVisible(0)
         }
-        items = mapped
+    }
+
+    @objc private func handleDoubleClick() {
+        let row = tableView.clickedRow
+        guard row >= 0, row < items.count else { return }
+        let item = items[row]
+        if item.isDirectory {
+            coordinator.navigate(to: item.path)
+        }
+        // Files: no-op for now (opening files comes later).
     }
 
     private static func makeItem(from r: ZestCore.Row) -> FileItem {
@@ -113,8 +121,11 @@ final class BrowserViewController: NSViewController {
             ext = "—"
         }
 
+        let path = (r.dirPath as NSString).appendingPathComponent(r.name)
+
         return FileItem(
             name: r.name,
+            path: path,
             isDirectory: isDir,
             sizeText: sizeText,
             isoDate: iso,
@@ -147,11 +158,15 @@ final class BrowserViewController: NSViewController {
 
     // MARK: Empty state
 
-    private func showEmptyState() {
-        let label = NSTextField(labelWithString: "No index — run zest-indexer --full-scan ~")
+    /// Build the empty-state label once; `reload()` toggles its visibility.
+    /// Now means "this folder has no indexed entries" (which is fine).
+    private func buildEmptyState() {
+        guard emptyLabel == nil else { return }
+        let label = NSTextField(labelWithString: "No indexed entries in this folder")
         label.font = .systemFont(ofSize: 13, weight: .regular)
         label.textColor = Theme.textSecondary
         label.alignment = .center
+        label.isHidden = true
         label.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(label)
         NSLayoutConstraint.activate([
