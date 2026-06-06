@@ -4,28 +4,16 @@
 ![macOS](https://img.shields.io/badge/platform-macOS-000000?style=flat-square&logo=apple)
 ![MIT License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
-A minimal, fast Finder replacement for macOS built in Zig. Two binaries: `zest` (file browser) and `zest-indexer` (background daemon that keeps the search index up to date).
+A minimal, fast Finder replacement for macOS built in Zig. Two binaries: `zest` (native file browser) and `zest-indexer` (background daemon that keeps the search index up to date).
 
-```
-$ zest ~/code/zig-finder
+`zest <path>` opens a native AppKit window backed entirely by the memory-mapped index:
 
-  Zest — /Users/helge/code/zig-finder
+- A **sidebar** of pinned folders (Home, Desktop, Documents, Downloads by default — add your own).
+- A **file list** with sortable Name / Size / Date / Type columns and native file icons.
+- A **search field** with qualifier filters — `ext:pdf`, `kind:folder`, `size:>1mb`, `category:images`, and `!` negation — that searches the current folder's subtree.
+- **View options:** keep folders on top, show full paths, per-folder color tags, open in terminal, pin/unpin, save filters.
 
-  Pinned:
-    Home         /Users/helge
-    Desktop      /Users/helge/Desktop
-    Documents    /Users/helge/Documents
-    Downloads    /Users/helge/Downloads
-
-  Name                           Size       Type
-  ----------------------------------------------------
-  📁 src                         --         Other
-  📁 docs                        --         Other
-  📄 build.zig                   1.8 KB     Code
-  📄 README.md                   3.6 KB     Text
-
-  Index: loaded
-```
+Browsing and searching are the same mechanism: every list is a single query against the index.
 
 ## Requirements
 
@@ -37,10 +25,21 @@ $ zest ~/code/zig-finder
 
 ```sh
 zig build                        # Build both binaries → zig-out/bin/{zest,zest-indexer}
-zig build run -- .               # Run zest on current directory
-zig build run -- ~/Documents     # Run zest on a specific path
+zig build run -- .               # Run zest on the current directory (Debug)
 zig build test                   # Run all tests (no real FS or UI needed)
 ```
+
+A `justfile` wraps the common workflows:
+
+```sh
+just run            # Build + run (Debug — fast to compile)
+just run-fast       # Build + run in ReleaseFast (folder switching ~6ms vs ~80ms Debug)
+just index          # Build the indexer (ReleaseFast) and scan ~
+just dev            # Build everything ReleaseFast, scan ~, then launch
+just test           # Run tests
+```
+
+Run in **ReleaseFast** (`just run-fast`) for real use — it's dramatically snappier than a Debug build.
 
 ## Search Index
 
@@ -56,7 +55,7 @@ zig-out/bin/zest-indexer --full-scan ~
 zig-out/bin/zest-indexer install
 ```
 
-The indexer walks the filesystem, skipping excluded directories (`.git`, `node_modules`, `.Trash`, `__pycache__`, `Library/Caches`, etc.), and writes a columnar binary file.
+The indexer scans the filesystem in parallel using macOS `getattrlistbulk` — a fixed worker pool over a shared directory queue, each worker streaming entries to its own temp file. This is ~6.6× faster than a per-file `stat` walk (a ~5.7M-file home directory scans in ~24s). It skips excluded directories (`.git`, `node_modules`, `__pycache__`, `~/Library/Caches`, `~/Library/Developer`, etc.) and writes a columnar binary file.
 
 ### Index lifecycle
 
@@ -90,7 +89,7 @@ block-beta
     columns 1
     H["Header (64B): magic, version, entry count, column offsets"]
     N["Names Column: offsets[] | lengths[] | name blob | lowercase blob"]
-    P["Paths Column: parent_ids[] | dir table (prefix-deduplicated)"]
+    P["Paths Column: parent_ids[] | dir table (deduplicated)"]
     M["Metadata Column: sizes[] | mtimes[] | kinds[] | categories[]"]
     B["Bitmaps: sorted-array bitmaps per FileCategory"]
 ```
@@ -103,6 +102,8 @@ block-beta
 | **Bitmaps** | One sorted array of entry indices per file category (images, code, documents, etc.). Used for fast intersection with search results. |
 
 ### How search works
+
+Browsing and searching are one mechanism: the file list is always a single query against the index, parameterized by a **scope** (the current folder) and a **depth**. An empty query lists the folder's direct children (depth 1); typing free text or a qualifier filter (`ext:`, `kind:`, `size:`, `category:`, with `!` negation) searches the whole subtree under the scope. Text matching itself works like this:
 
 ```mermaid
 sequenceDiagram
@@ -124,16 +125,19 @@ sequenceDiagram
 1. The query is lowercased, then scanned against the lowercase name blob
 2. For each position, a first-char + last-char check provides a fast reject before full `memcmp`
 3. Matching byte positions are mapped to entry indices via binary search on the offsets array
-4. If a category filter is active, results are intersected with the pre-computed bitmap
-5. Typical query time: <5ms for 1M files
+4. Category filters intersect with the pre-computed bitmap; other qualifiers (`ext:`, `kind:`, `size:`) match per result
+5. **Folder listings** (empty query, depth 1) skip the substring scan: the scope resolves to a directory id and matches the compact parent-id column, so listing a folder in a 5.7M-file index takes ~6ms instead of a full scan
+6. Typical text query: ~3–5ms over 1M+ files
 
 ### Benchmarking
 
 ```sh
-zig build run -- --benchmark "invoice"
+zig build run -- --benchmark "invoice"          # text-search latency, p50/p99 over 1000 runs (µs)
+zig build run -- --benchmark-list ~/Documents   # folder-listing latency, p50/p99 (ms)
+just bench "invoice"                             # same, built ReleaseFast
 ```
 
-Runs the query 1000 times against the loaded index and prints p50/p99 latency in microseconds.
+`--benchmark` runs a text query 1000 times against the loaded index; `--benchmark-list` times a depth-1 folder listing (what the UI runs on every folder switch).
 
 ## Background Daemon
 
@@ -173,19 +177,25 @@ Default pins: Home, Desktop, Documents, Downloads. Custom pins are persisted to 
 ```mermaid
 graph TB
     subgraph "zest binary"
-        Main[main.zig<br/>CLI entry] --> App[app.zig<br/>Controller]
+        Main[main.zig<br/>CLI entry] --> UI[ui/<br/>AppKit window]
+        UI --> App[app.zig<br/>Controller]
         App --> Nav[navigator.zig<br/>Back/Forward/Up]
-        App --> Pins[pins.zig<br/>JSON persistence]
+        App --> Pins[pins.zig]
+        App --> Colors[folder_colors.zig]
+        App --> FStore[filter_store.zig<br/>Saved filters]
+        App --> AS[async_search.zig<br/>Background queries]
         App --> IR[reader.zig<br/>Index reader]
         App --> FS[fs_provider.zig<br/>Vtable interface]
         FS --> RealFs[real_fs.zig]
         FS --> FakeFs[fake_fs.zig<br/>Tests only]
-        IR --> Search[search.zig]
+        AS --> Search[search.zig]
+        Search --> IR
         IR --> Bitmap[bitmap.zig]
     end
 
     subgraph "zest-indexer binary"
-        Daemon[daemon.zig<br/>Main loop] --> Builder[builder.zig<br/>FS walker]
+        Daemon[daemon.zig<br/>Main loop] --> Builder[builder.zig<br/>Scan → columns]
+        Builder --> Bulk[bulk_scan.zig<br/>parallel getattrlistbulk]
         Daemon --> FSE[fsevents.zig<br/>macOS FSEvents]
         Builder --> Format[format.zig<br/>Binary format]
     end
@@ -193,7 +203,7 @@ graph TB
     subgraph "Shared"
         Index[(index.zst)]
         Config[config.zig<br/>Paths & excludes]
-        Types[types.zig<br/>FileEntry, etc.]
+        Types[types.zig]
         FT[file_types.zig<br/>Extension map]
     end
 
@@ -206,6 +216,7 @@ graph TB
 ### Design decisions
 
 - **No SQLite/Spotlight:** Custom mmap'd format delivers sub-5ms queries. SQLite FTS5 with trigrams is 100-500ms for 1M files.
+- **Parallel `getattrlistbulk` scan:** The indexer reads directory metadata in bulk across a worker pool instead of one `stat` per file — ~6.6× faster on a 5.7M-file tree. (Parallelizing the per-file `stat` walk barely helped; the `std.Io` path serializes, while the raw bulk syscall scales.)
 - **Vtable FS interface:** Same `ptr + vtable` pattern as `std.mem.Allocator`. `FakeFs` enables fast, deterministic tests with no disk I/O.
 - **ObjC runtime bridge:** Direct `@cImport("objc/runtime.h")` with typed `objc_msgSend` wrappers — no external dependencies for AppKit interop.
 - **Unmanaged ArrayLists:** Zig 0.16 `std.ArrayList` is unmanaged (allocator passed per-call), which we use throughout.
@@ -215,33 +226,46 @@ graph TB
 
 ```
 src/
-├── main.zig              # CLI entry point, arg parsing, --benchmark
-├── indexer_main.zig      # Daemon entry point (delegates to daemon.zig)
-├── app.zig               # Application controller (navigator + pins + index + FS)
-├── test_root.zig         # Test root importing all modules
+├── main.zig              # CLI entry: arg parsing, --benchmark / --benchmark-list, launches the GUI
+├── indexer_main.zig      # Daemon entry point (sets up runtime, delegates to daemon.zig)
+├── app.zig               # App controller (navigator, pins, folder colors, saved filters, index reader)
+├── test_root.zig         # Test root importing all modules with embedded tests
 ├── core/
-│   ├── types.zig          # FileEntry, FileKind, FileCategory, Pin, DirListing
+│   ├── types.zig          # FileKind, FileCategory, FileEntry, Pin, SearchResult, DirListing
 │   ├── fs_provider.zig    # FileSystemProvider vtable interface
-│   ├── real_fs.zig        # Real filesystem implementation
+│   ├── real_fs.zig        # Real filesystem implementation (isDir/openFile)
 │   ├── fake_fs.zig        # In-memory fake for tests
 │   ├── file_types.zig     # Extension → category mapping (80+ extensions)
 │   ├── navigator.zig      # Path navigation with back/forward/up history
-│   ├── pins.zig           # Pin manager with JSON persistence
+│   ├── pins.zig           # Pinned folders, JSON persistence
+│   ├── folder_colors.zig  # Per-folder color tags, JSON persistence
+│   ├── filters.zig        # Filter criteria (ext/kind/size/category) + matching
+│   ├── query_parser.zig   # Parse a query string into free text + qualifier filters
+│   ├── filter_store.zig   # Saved/named filters, JSON persistence
+│   ├── async_search.zig   # Background search coordinator (threads + GCD delivery)
+│   ├── humanize.zig       # Human-friendly size / duration / count formatters
 │   └── runtime.zig        # Process-wide Io/env handle + file helpers (Zig 0.16)
 ├── index/
-│   ├── format.zig         # Binary index format (header, columns, write)
-│   ├── builder.zig        # Walks filesystem, builds index via format.zig
+│   ├── format.zig         # Columnar binary index format (header, columns, write)
+│   ├── builder.zig        # Drives the scan, parses results, builds the index
+│   ├── bulk_scan.zig      # Parallel macOS getattrlistbulk directory scanner
 │   ├── reader.zig         # Read-only index access (names, paths, metadata, bitmaps)
-│   ├── search.zig         # Substring search over name blob + bitmap filtering
+│   ├── search.zig         # Scoped query: substring search, filters, sort, folder listings
 │   ├── bitmap.zig         # Sorted-array bitmaps (AND, OR, contains, iterate)
 │   ├── fsevents.zig       # FSEvents C interop wrapper
 │   └── daemon.zig         # Background indexer: scan, watch, rebuild, launchd
-├── ui/
-│   ├── theme.zig          # Darcula dark theme color constants
-│   ├── objc.zig           # ObjC runtime bridge (msgSend wrappers, NSString)
-│   └── appkit.zig         # AppKit UI (stub — CLI fallback for now)
+├── ui/                    # Native AppKit UI (GitHub Dark theme)
+│   ├── appkit.zig         # App bootstrap (NSApplication + run loop)
+│   ├── delegate.zig       # AppState + ObjC callbacks (table/sidebar/menus/actions)
+│   ├── window.zig         # Window, toolbar, split view, main menu
+│   ├── file_list.zig      # NSTableView file list
+│   ├── sidebar.zig        # Pinned-folders sidebar
+│   ├── icons.zig          # File icons (NSWorkspace)
+│   ├── theme.zig          # GitHub Dark theme color constants
+│   └── objc.zig           # ObjC runtime bridge (msgSend wrappers, NSString)
 └── config/
-    └── config.zig         # App paths, exclude patterns, directory setup
+    ├── config.zig         # App paths, exclude patterns, directory setup
+    └── user_config.zig    # ~/.config/zest/config.json (e.g. preferred terminal)
 ```
 
 ## Testing
@@ -253,13 +277,16 @@ zig build test     # Run all tests via src/test_root.zig
 ```
 
 Test coverage:
-- File type categorization (extensions, edge cases, dotfiles, compound extensions)
+- File type categorization (extensions, dotfiles, compound extensions)
+- Query parsing and filter matching (`ext`/`kind`/`size`/`category`, negation)
+- Saved filters and folder colors (JSON roundtrip)
 - Bitmap operations (contains, AND intersection, OR union, iteration)
-- Index format roundtrip (write → read, verify all columns)
-- Search correctness (substring, case-insensitive, category filter, empty query, no results)
-- Pin manager (JSON roundtrip, add/remove, duplicate detection, malformed JSON)
-- Navigator (back/forward/up, root boundary, forward stack clearing)
-- ObjC bridge (selector lookup, class lookup, NSObject lifecycle, NSString roundtrip)
+- Index format roundtrip (write → read, all columns) and scan-file parsing
+- Search (substring, case-insensitive, qualifier/category filters, scope + depth folder listings, column sort incl. folders-on-top)
+- Pin manager and navigator (history, root boundary, forward-stack clearing)
+- Config excludes, terminal-candidate resolution, and humanize formatters
+
+The UI layer (`ui/*`) is exercised by hand, not in the test suite, per project convention.
 
 ## License
 
