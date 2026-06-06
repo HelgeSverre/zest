@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.appearance = NSAppearance(named: .darkAqua)
         win.title = "Zest"
         win.contentViewController = RootViewController()
+        win.setContentSize(NSSize(width: 1180, height: 760))   // contentViewController otherwise collapses to minSize
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
