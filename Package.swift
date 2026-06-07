@@ -7,7 +7,7 @@ let zigLibDir = "zig-out/lib"
 
 let package = Package(
     name: "Zest",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         // C module exposing zest_core.h (header-only; impl is the Zig static lib).
         .target(name: "CZestCore"),

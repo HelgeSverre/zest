@@ -1,0 +1,287 @@
+# Zest — Architecture
+
+A minimal, fast Finder replacement for macOS. Three artifacts (one daemon, one
+static lib, one GUI app) cooperate through a single shared file: the columnar
+index on disk.
+
+> **One-line summary**: `zest-indexer` (Zig daemon) walks `~/` and writes a
+> mmap-friendly binary index; `Zest.app` (Swift/AppKit) mmaps the same file and
+> calls `libzest-core.a` (Zig, C ABI) to search it.
+
+## The three artifacts
+
+| Artifact            | Type          | Source root                     | What it does                                                                |
+| ------------------- | ------------- | ------------------------------- | --------------------------------------------------------------------------- |
+| `zest-indexer`      | CLI / daemon  | `src/indexer_main.zig`          | Walks the filesystem, writes the index, watches for changes.               |
+| `libzest-core.a`    | Static lib    | `src/zest_core_lib.zig`         | Pure-CPU search engine exposed as a C ABI (reader + query + bitmap filter). |
+| `Zest.app`          | Swift GUI     | `Sources/Zest/...`              | Native AppKit window; links `libzest-core.a`; mmaps the index.              |
+
+There is a fourth, in-progress binary (`zest`, the old Zig AppKit GUI) that's
+been superseded by the Swift app — the `justfile` no longer references it.
+
+## Roles of the two languages
+
+### Zig — the engine
+
+- The whole "is this file big / new / a PDF / named report" decision is Zig.
+- The index format, the bulk scanner, the FSEvents watcher, the SIMD substring
+  search, the bitmap intersection, and the `cat:` / `ext:` / `kind:` parser are
+  all Zig.
+- The daemon is a small, focused process. It has no UI, no networking, no
+  shared state. It just produces one file.
+- The static library has *no* `main` and *no* `Io` handle — it borrows caller-
+  provided bytes (a Swift mmap) for the lifetime of the Core. This makes it
+  trivial to embed in any host.
+
+### Swift — the shell
+
+- Window chrome, AppKit wiring, keyboard shortcuts, table view, sidebar tree,
+  context menus, the "Open in Finder" / "Open in Terminal" calls, the
+  pin/filter config persistence.
+- Nothing search-shaped is in Swift. The UI never iterates an index — it
+  asks `ZestCore.query(...)` and gets back a borrowed `Row` struct for each hit.
+- A single `ZestCore` instance owns the mmap for the index file and the Core
+  handle from `zest_open`. Every other component goes through it.
+
+## The shared file: `index.zst`
+
+The indexer and the GUI agree on a single file:
+
+```
+~/Library/Application Support/zest/index.zst
+```
+
+It's a custom binary format (`src/index/format.zig`, magic `"ZESTINDX"`,
+64-byte header) with a columnar layout:
+
+```
+┌────────────────────── HEADER (64 bytes) ──────────────────────┐
+│ magic │ version │ num_entries │ created_at │ 4 × section_off  │
+├──────────────────── NAMES column ─────────────────────────────┤
+│ u32 offsets[num] │ u16 lengths[num] │ u32 blob_len │ blob     │
+│                                       │ u32 lower_len │ lower  │
+├──────────────────── PATHS column ─────────────────────────────┤
+│ u32 parent_id[num]  (entry → dir table)                        │
+│ u32 dir_count                                                    │
+│ u32 dir_offsets[dir_count] │ u32 dir_blob_len │ dir_blob       │
+├──────────────────── METADATA column ──────────────────────────┤
+│ u64 size[num] │ i64 mtime[num] │ u8 kind[num] │ u8 cat[num]    │
+├──────────────────── BITMAPS ───────────────────────────────────┤
+│ u32 num_bitmaps                                                  │
+│ for each: u8 cat │ u32 count │ u32 indices[count] (sorted)      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Why columnar:
+
+- The lowercased-name blob is one contiguous `[]u8` that SIMD substring search
+  can scan in a single pass. The row index is recovered by binary search
+  through the `u32` offsets array.
+- The `u8 kind` / `u8 category` arrays plus the per-category sorted `u32` index
+  lists let the search engine eliminate rows that don't match a `cat:code` /
+  `ext:pdf` filter in O(1) per candidate (binary search on a sorted bitmap).
+- Directory paths are stored once in a prefix-deduped table; each entry holds
+  just the 4-byte `parent_id` index.
+
+## The C ABI surface
+
+`libzest-core.a` exports four functions (`src/capi/zest_core.zig`):
+
+```c
+Core*     zest_open    (const uint8_t* bytes, size_t len);   // borrow bytes
+void      zest_close   (Core*);
+size_t    zest_count   (Core*);                              // num_entries
+Query*    zest_query   (Core*, const char* q, const char* scope,
+                        uint32_t max_depth, uint32_t max_results);
+size_t    zest_query_count (const Query*);
+ZestRow   zest_query_row  (const Query*, size_t i);          // borrows into mmap
+void      zest_query_free (Query*);
+```
+
+`ZestRow` is a fixed-layout `extern struct` (name, dir_path, size, mtime, kind,
+category) that Swift consumes through a Clang-imported `zest_core.h` — the
+layout cannot drift. Strings borrow into the index mmap; Swift copies them to
+`String` immediately on receipt.
+
+## End-to-end data flow
+
+The full path of a search, from the kernel to a visible table row:
+
+```
+                     ┌─────────────────┐
+                     │ macOS filesystem│  ~/
+                     │  (kernel)       │
+                     └────────┬────────┘
+                              │ getattrlistbulk (8 worker threads)
+                              ▼
+                     ┌─────────────────┐
+                     │ bulk_scan.zig   │  per-worker .scan.tmp.N (TSV)
+                     └────────┬────────┘
+                              │ read back, build columnar
+                              ▼
+                     ┌─────────────────┐
+                     │ builder.zig     │
+                     │   → .tmp file   │  atomic rename
+                     └────────┬────────┘
+                              │
+                              ▼
+       ┌──────────────────────────────────────┐
+       │ ~/Library/Application Support/zest/  │
+       │           index.zst                  │ ◀──── mmap()'d by Swift at startup
+       │                                      │       (PROT_READ, MAP_PRIVATE)
+       └────────────────┬─────────────────────┘
+                        │
+                        ▼
+              ┌──────────────────┐         ┌──────────────────────┐
+              │ libzest-core.a   │ ◀─ FFI ─│ Zest.app (Swift)     │
+              │   zest_query(…)  │         │  NSTableView + UI    │
+              │   IndexReader    │         │  + AppCoordinator    │
+              │   search()       │         │  + ZestCore          │
+              └────────┬─────────┘         └──────────┬───────────┘
+                       │                               │
+                       │  [SearchResult] {index,name,  │ FileItem (copied
+                       │  dir_path,size,mtime,kind,   │ strings, formatted
+                       │  category} — borrows mmap    │ size, kind color)
+                       ▼                               ▼
+                raw bytes  ─────────────────────►  rendered row
+```
+
+The daemon never talks to the GUI. The GUI never talks to the daemon. They
+cooperate only by reading and writing the same file. Atomic rename + a fresh
+inode (or the Swift app re-mmapping) is the entire synchronization mechanism.
+
+## Live updates
+
+The daemon keeps the index fresh on its own (`src/index/daemon.zig`):
+
+1. **Initial scan**: parallel `getattrlistbulk` walk of `$HOME`, written to
+   `index.zst` via `.tmp` + `rename(2)`.
+2. **FSEvents watcher**: a `FSEventStream` on `$HOME` posts coalesced events
+   to a 2 s-latency callback that bumps a `dirty_count`.
+3. **Coalesced rebuild**: every 2 s the CFRunLoop wakes the daemon; when
+   `dirty_count ≥ 1000` or 30 s have passed since the last rebuild, it
+   re-scans and re-writes the index.
+4. **Daily full rescan**: every 24 h the daemon does a full rebuild regardless,
+   so it self-heals from any drift.
+5. **launchd hosting**: `just install-daemon` writes a plist to
+   `~/Library/LaunchAgents/dev.zest.indexer.plist` and `launchctl load`s it.
+   The daemon runs as `ProcessType=Background` with `LowPriorityIO` and is
+   kept alive by launchd.
+
+The Swift app doesn't poll the file: it mmaps once at startup. The next
+launch picks up the latest index. (The old Zig UI had a 5-second stat-poll
+loop in `app.zig:236`; the Swift app deliberately does not — see "Open
+questions" below.)
+
+## Threading model
+
+- **Indexer (daemon)**: 1 process, 1 thread for FSEvents + run loop,
+  8 worker threads for the parallel scan (`max_scan_threads = 8`, measured
+  sweet spot on a 12-core machine).
+- **Search engine**: synchronous. `searchCancellable` accepts an optional
+  `std.atomic.Value(u64)` generation counter; the search checks it every
+  512 positions and returns `error.SearchCancelled` if it has changed. The
+  old Zig UI used this to abort stale searches on a new keystroke; the
+  Swift UI currently runs searches synchronously and discards late results.
+- **Swift UI**: the main thread drives AppKit; the sidebar histogram kicks
+  one `userInitiated` `DispatchQueue.global` task to recompute category
+  counts in the background and hops back to main to rebuild rows.
+
+## What lives where
+
+```
+src/
+├── main.zig                ← CLI/GUI app entry (now unused; superseded by Swift)
+├── indexer_main.zig        ← daemon entry; delegates to index/daemon.zig
+├── zest_core_lib.zig       ← library entry; pulls in capi/zest_core.zig
+├── app.zig                 ← old GUI app controller (will go away)
+├── capi/
+│   └── zest_core.zig       ← C ABI surface (4 functions + ZestRow)
+├── core/                   ← types, FS abstraction, navigation, pins, query parser
+│   ├── query_parser.zig    ← "cat:code ext:pdf" → ParsedQuery { text, filters[] }
+│   ├── filters.zig         ← FilterCriterion union (kind/ext/size/date/cat/path)
+│   ├── types.zig           ← FileKind, FileCategory enum, FileEntry
+│   ├── fs_provider.zig     ← vtable interface; RealFs (OS) + FakeFs (tests)
+│   ├── real_fs.zig         ← OS-backed implementation
+│   ├── fake_fs.zig         ← in-memory implementation (for tests)
+│   ├── runtime.zig         ← global Io handle + nowNanos / readFileAlloc helpers
+│   ├── navigator.zig       ← back/forward history
+│   ├── pins.zig            ← user-pinned folders
+│   ├── folder_colors.zig   ← per-folder tint overrides
+│   ├── filter_store.zig    ← saved filter presets
+│   ├── humanize.zig        ← "1.2 MB" / "5mo ago" formatting
+│   └── file_types.zig      ← extension → FileCategory via StaticStringMap
+├── index/
+│   ├── format.zig          ← binary on-disk layout (writer)
+│   ├── reader.zig          ← reader over the mmap'd bytes
+│   ├── search.zig          ← SIMD substring + bitmap intersection
+│   ├── builder.zig         ← scan files → columnar index
+│   ├── bulk_scan.zig       ← parallel getattrlistbulk walker
+│   ├── bitmap.zig          ← sorted-array bitmap (used for category filtering)
+│   ├── fsevents.zig        ← thin wrapper over FSEventStream
+│   └── daemon.zig          ← scan + watch loop + launchd plist generator
+├── config/
+│   ├── config.zig          ← path constants, name_excludes, path_excludes
+│   └── user_config.zig     ← ~/.config/zest/config.json
+└── ui/                     ← old Zig AppKit UI (window.zig, file_list.zig, …)
+
+Sources/Zest/
+├── App/
+│   ├── main.swift          ← NSApplication entry + --snapshot mode
+│   ├── AppDelegate.swift   ← main menu (⌘↑ Go Up, ⌘↓ Open Selected)
+│   ├── AppCoordinator.swift← single source of truth (path, query, scope, sort)
+│   └── Snapshot.swift      ← off-screen render to PNG
+├── Shell/
+│   ├── RootViewController.swift  ← sidebar | split | chrome bands
+│   ├── ToolbarView.swift
+│   ├── FilterBarView.swift
+│   ├── SearchField.swift
+│   ├── Breadcrumb.swift
+│   ├── StatusBarView.swift
+│   └── PlaceholderBand.swift
+├── Sidebar/
+│   └── SidebarViewController.swift  ← PINNED + CATEGORIES tree
+├── Browser/
+│   └── BrowserViewController.swift ← NSTableView (5 cols, 34/48pt rows)
+├── Core/
+│   └── ZestCore.swift      ← mmap + zest_open + zest_query wrapper
+└── Design/
+    ├── Theme.swift         ← Darcula dark palette
+    ├── Hairline.swift
+    └── Category.swift      ← kind/category → icon + tint
+```
+
+## Index file lifecycle (one rebuild)
+
+1. **Bulk scan** — 8 worker threads, each pulling directories off a shared
+   queue, calling `getattrlistbulk` in batches, and streaming TSV lines into
+   their own `.scan.tmp.N` file under `~/Library/Application Support/zest/`.
+2. **Builder** — reads the TSV files back (any order), deduplicates paths into
+   a directory table, accumulates per-category sorted index lists, and writes
+   the columnar layout into a single contiguous `[]u8`.
+3. **Atomic write** — writes to `index.zst.tmp` then `rename(2)`s to
+   `index.zst`. The inode changes, so any process holding a stale mmap either
+   keeps its snapshot (and gets a new one next time it reopens) or remaps
+   after the rename. There is no in-process lock.
+4. **Mtime / stat** — the file's mtime + size are sufficient for any client
+   to decide "the index changed, re-mmap" without parsing the bytes.
+
+## Open questions / known gaps
+
+- **No Swift-side reload on rebuild.** The Swift `ZestCore.init` mmaps the
+  file once. A rebuild by the daemon is invisible until the app restarts.
+  The old Zig UI polled the inode every 5 s (`App.checkForIndexUpdate`,
+  `app.zig:236`); the Swift app should adopt the same pattern. Pending.
+- **No "scanning" state.** If the index file doesn't exist yet, the Swift
+  app silently returns no rows. A startup-time `stat` for `index.zst` +
+  empty-state message ("no index — run `just index`") would help.
+- **`Zest.app` is unbundled.** `main.swift` calls `NSApplication.shared` +
+  `setActivationPolicy(.regular)`. It works but doesn't have a real
+  `Info.plist` / app bundle, so Finder metadata, file-association handling,
+  and the Dock icon are minimal. A proper bundle would fix that.
+
+## See also
+
+- [CLAUDE.md](../CLAUDE.md) — build, test, and code conventions.
+- [docs/architecture.html](architecture.html) — interactive SVG diagram of
+  the same architecture.

@@ -91,4 +91,8 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_tests.step);
+    // Also install the static lib so `swift test` can link against it
+    // without a separate `zig build` first. The justfile runs `zig build test`
+    // then `swift test` in one recipe; this keeps that sequence working.
+    test_step.dependOn(b.getInstallStep());
 }

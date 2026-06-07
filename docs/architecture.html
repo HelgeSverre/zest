@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zest — Architecture</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #1e1f22;
+    --panel: #26272a;
+    --panel-2: #2d2e31;
+    --line: #383a3f;
+    --text: #d6d6d6;
+    --text-dim: #8a8c92;
+    --accent: #6cb6ff;
+    --zig: #f7a41d;
+    --swift: #f05138;
+    --mac: #c0c0c0;
+    --green: #4ec27e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 40px 32px 80px; }
+  h1 { font-size: 28px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h1 .accent { color: var(--accent); }
+  h2 { font-size: 18px; font-weight: 600; margin: 40px 0 12px; letter-spacing: -0.005em; }
+  h3 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  p { margin: 0 0 10px; color: var(--text); }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 28px; }
+  code, .mono { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  pre .c { color: var(--text-dim); }
+  pre .k { color: var(--zig); }
+  pre .s { color: var(--green); }
+  pre .t { color: var(--accent); }
+  .grid { display: grid; gap: 16px; }
+  .grid.two { grid-template-columns: 1fr 1fr; }
+  .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .card .label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .card .title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); margin: 14px 0 4px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .sw-zig { background: var(--zig); }
+  .sw-swift { background: var(--swift); }
+  .sw-disk { background: var(--mac); }
+  .sw-ffi { background: var(--accent); }
+  .meta { color: var(--text-dim); font-size: 12.5px; }
+  .diagram {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 24px 0 8px;
+  }
+  .diagram svg { display: block; width: 100%; height: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  td.m { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .toc { font-size: 13px; color: var(--text-dim); }
+  .toc a { color: var(--text-dim); }
+  .toc a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Zest <span class="accent">architecture</span></h1>
+<p class="sub">A minimal, fast Finder replacement for macOS. Three artifacts cooperate through a single shared file: the columnar index on disk.</p>
+
+<div class="toc">
+  <a href="#diagram">1. diagram</a> &nbsp;·&nbsp;
+  <a href="#artifacts">2. the three artifacts</a> &nbsp;·&nbsp;
+  <a href="#zig-vs-swift">3. what lives where</a> &nbsp;·&nbsp;
+  <a href="#index-format">4. index file format</a> &nbsp;·&nbsp;
+  <a href="#c-abi">5. C ABI surface</a> &nbsp;·&nbsp;
+  <a href="#dataflow">6. one search, end-to-end</a> &nbsp;·&nbsp;
+  <a href="#lifecycle">7. one rebuild</a> &nbsp;·&nbsp;
+  <a href="#threads">8. threading</a>
+</div>
+
+<!-- ============================================================ DIAGRAM -->
+<div class="diagram">
+<svg viewBox="0 0 1180 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Zest architecture diagram">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a8c92"/>
+    </marker>
+    <marker id="arr-thin" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6c7079"/>
+    </marker>
+    <marker id="arr-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6cb6ff"/>
+    </marker>
+    <style>
+      .box    { fill: #2d2e31; stroke: #4a4d54; stroke-width: 1; rx: 8; }
+      .box-zi { fill: #2d2e31; stroke: var(--zig); stroke-width: 1.5; rx: 8; }
+      .box-sw { fill: #2d2e31; stroke: var(--swift); stroke-width: 1.5; rx: 8; }
+      .box-dk { fill: #1a1b1d; stroke: #4a4d54; stroke-width: 1; stroke-dasharray: 4 3; rx: 8; }
+      .lbl    { font: 600 12px -apple-system, "SF Pro Text", system-ui, sans-serif; fill: #d6d6d6; }
+      .lbl-sm { font: 500 10.5px -apple-system, "SF Pro Text", system-ui, sans-serif; fill: #8a8c92; }
+      .lbl-tag{ font: 600 10px "SF Mono", "JetBrains Mono", Menlo, monospace; fill: #f7a41d; letter-spacing: 0.04em; }
+      .lbl-tag-sw { font: 600 10px "SF Mono", "JetBrains Mono", Menlo, monospace; fill: #f05138; letter-spacing: 0.04em; }
+      .arr    { stroke: #8a8c92; stroke-width: 1.5; fill: none; }
+      .arr-th { stroke: #6c7079; stroke-width: 1; fill: none; }
+      .arr-ac { stroke: #6cb6ff; stroke-width: 1.8; fill: none; }
+      .ann    { font: italic 11px -apple-system, "SF Pro Text", system-ui, sans-serif; fill: #8a8c92; }
+      .ann-m  { font: 11px "SF Mono", "JetBrains Mono", Menlo, monospace; fill: #8a8c92; }
+    </style>
+  </defs>
+
+  <!-- =========== swimlanes / grouping =========== -->
+  <!-- Kernel / FS lane (top) -->
+  <rect x="20"  y="20" width="1140" height="100" class="box-dk"/>
+  <text x="36" y="42" class="ann">macOS kernel + filesystem</text>
+  <text x="36" y="76" class="lbl">~/  (user home: files, dirs, symlinks, mtimes, sizes)</text>
+  <text x="36" y="98" class="lbl-sm">getattrlistbulk(2) · stat · openat · FSEvents</text>
+
+  <!-- Indexer lane (mid-left) -->
+  <rect x="20"  y="140" width="380" height="270" class="box-zi"/>
+  <text x="36" y="162" class="lbl-tag">ZIG DAEMON</text>
+  <text x="36" y="180" class="lbl">zest-indexer</text>
+  <text x="36" y="196" class="lbl-sm">src/indexer_main.zig → index/daemon.zig</text>
+
+  <!-- Indexer internals -->
+  <rect x="44" y="214" width="332" height="44" class="box"/>
+  <text x="60" y="232" class="lbl">bulk_scan.zig</text>
+  <text x="60" y="248" class="lbl-sm">8 worker threads · getattrlistbulk pool · → .scan.tmp.N (TSV)</text>
+
+  <rect x="44" y="266" width="332" height="44" class="box"/>
+  <text x="60" y="284" class="lbl">builder.zig</text>
+  <text x="60" y="300" class="lbl-sm">scan files → columnar IndexEntry[] → writeIndex()</text>
+
+  <rect x="44" y="318" width="332" height="44" class="box"/>
+  <text x="60" y="336" class="lbl">fsevents.zig</text>
+  <text x="60" y="352" class="lbl-sm">FSEventStream on $HOME · 2 s coalesce · CFRunLoop pump</text>
+
+  <rect x="44" y="370" width="332" height="32" class="box"/>
+  <text x="60" y="390" class="lbl-sm">rebuild on 30 s or 1000+ events · full rescan every 24 h</text>
+
+  <!-- Shared file (center) -->
+  <rect x="440" y="220" width="300" height="110" class="box-dk"/>
+  <text x="456" y="242" class="ann">shared artifact (the only sync point)</text>
+  <text x="456" y="270" class="lbl" style="font-size:13px">~/Library/Application Support/zest/</text>
+  <text x="456" y="290" class="lbl" style="font-family:'SF Mono',Menlo,monospace">index.zst</text>
+  <text x="456" y="310" class="lbl-sm">columnar · 64 B header · mmap-friendly · custom binary</text>
+  <text x="456" y="324" class="lbl-sm">writer → .tmp → atomic rename(2)</text>
+
+  <!-- Engine lib (right of center) -->
+  <rect x="780" y="140" width="380" height="270" class="box-zi"/>
+  <text x="796" y="162" class="lbl-tag">ZIG STATIC LIB (C ABI)</text>
+  <text x="796" y="180" class="lbl">libzest-core.a</text>
+  <text x="796" y="196" class="lbl-sm">src/zest_core_lib.zig → capi/zest_core.zig</text>
+
+  <rect x="804" y="214" width="332" height="44" class="box"/>
+  <text x="820" y="232" class="lbl">reader.zig · IndexReader</text>
+  <text x="820" y="248" class="lbl-sm">borrows caller bytes · no Io · thread-safe after init</text>
+
+  <rect x="804" y="266" width="332" height="44" class="box"/>
+  <text x="820" y="284" class="lbl">search.zig</text>
+  <text x="820" y="300" class="lbl-sm">SIMD substring over lower-blob · bitmap intersection · scope filter</text>
+
+  <rect x="804" y="318" width="332" height="44" class="box"/>
+  <text x="820" y="336" class="lbl">query_parser.zig · filters.zig</text>
+  <text x="820" y="352" class="lbl-sm">"cat:code ext:pdf" → ParsedQuery { text, filters[] }</text>
+
+  <rect x="804" y="370" width="332" height="32" class="box"/>
+  <text x="820" y="390" class="lbl-sm">searchCancellable accepts an atomic gen counter (abort mid-scan)</text>
+
+  <!-- Swift app (bottom-right) -->
+  <rect x="780" y="440" width="380" height="220" class="box-sw"/>
+  <text x="796" y="462" class="lbl-tag-sw">SWIFT GUI</text>
+  <text x="796" y="480" class="lbl">Zest.app  (AppKit, dark Darcula)</text>
+  <text x="796" y="496" class="lbl-sm">Sources/Zest/... · Package.swift links libzest-core.a</text>
+
+  <rect x="804" y="514" width="170" height="58" class="box"/>
+  <text x="820" y="532" class="lbl">RootViewController</text>
+  <text x="820" y="548" class="lbl-sm">toolbar · sidebar</text>
+  <text x="820" y="564" class="lbl-sm">filterbar · statusbar</text>
+
+  <rect x="986" y="514" width="170" height="58" class="box"/>
+  <text x="1002" y="532" class="lbl">BrowserViewController</text>
+  <text x="1002" y="548" class="lbl-sm">NSTableView · 5 cols</text>
+  <text x="1002" y="564" class="lbl-sm">34 pt / 48 pt rows</text>
+
+  <rect x="804" y="582" width="352" height="64" class="box"/>
+  <text x="820" y="600" class="lbl">ZestCore  (Swift veneer)</text>
+  <text x="820" y="616" class="lbl-sm">mmap(index.zst, PROT_READ, MAP_PRIVATE) once at init</text>
+  <text x="820" y="632" class="lbl-sm">→ zest_open · zest_query · copy borrowed strings into [Row]</text>
+
+  <!-- launchd box (bottom-left) -->
+  <rect x="20" y="440" width="380" height="220" class="box-dk"/>
+  <text x="36" y="462" class="ann">process supervisor</text>
+  <text x="36" y="484" class="lbl">launchd</text>
+  <text x="36" y="500" class="lbl-sm">~/Library/LaunchAgents/dev.zest.indexer.plist</text>
+
+  <rect x="44" y="514" width="332" height="50" class="box"/>
+  <text x="60" y="532" class="lbl-sm">ProcessType = Background</text>
+  <text x="60" y="548" class="lbl-sm">KeepAlive = true · RunAtLoad · LowPriorityIO = true</text>
+
+  <rect x="44" y="572" width="332" height="74" class="box"/>
+  <text x="60" y="590" class="lbl">just install-daemon</text>
+  <text x="60" y="606" class="lbl-sm">writes plist, launchctl load -w</text>
+  <text x="60" y="622" class="lbl-sm">just uninstall-daemon unloads + removes</text>
+
+  <!-- =========== arrows =========== -->
+  <!-- FS → indexer (getattrlistbulk) -->
+  <line x1="210" y1="120" x2="210" y2="138" class="arr" marker-end="url(#arr)"/>
+  <text x="222" y="132" class="ann-m">getattrlistbulk(2) × 8 workers</text>
+
+  <!-- FSEvents → daemon loop -->
+  <path d="M 60 100 Q 30 120 30 140" class="arr-th" marker-end="url(#arr-thin)"/>
+  <text x="42" y="126" class="ann-m" style="text-anchor:start">FSEvents</text>
+
+  <!-- indexer → index.zst (.tmp → rename) -->
+  <line x1="376" y1="294" x2="440" y2="288" class="arr" marker-end="url(#arr)"/>
+  <text x="380" y="282" class="ann-m" style="text-anchor:start">write + atomic rename</text>
+
+  <!-- launchd → indexer -->
+  <line x1="210" y1="440" x2="210" y2="408" class="arr" marker-end="url(#arr)"/>
+  <text x="222" y="426" class="ann-m" style="text-anchor:start">spawns + supervises</text>
+
+  <!-- index.zst → ZestCore (mmap) -->
+  <line x1="590" y1="330" x2="978" y2="582" class="arr-ac" marker-end="url(#arr-accent)"/>
+  <text x="600" y="500" class="ann" style="fill:#6cb6ff">mmap(PROT_READ, MAP_PRIVATE)</text>
+  <text x="600" y="514" class="ann-m" style="fill:#6cb6ff">borrowed bytes → zest_open</text>
+
+  <!-- ZestCore → libzest-core (FFI call, link-time) -->
+  <line x1="980" y1="582" x2="980" y2="410" class="arr-ac" marker-end="url(#arr-accent)"/>
+  <text x="990" y="498" class="ann" style="fill:#6cb6ff; text-anchor:start">FFI · zest_query(…)</text>
+
+  <!-- ZestCore → browser (file list) -->
+  <line x1="888" y1="600" x2="888" y2="572" class="arr" marker-end="url(#arr)"/>
+  <text x="780" y="606" class="ann-m" style="text-anchor:end">[Row]  (copied strings)</text>
+
+  <!-- user → browser (open selected) -->
+  <line x1="804" y1="544" x2="788" y2="544" class="arr-th" marker-end="url(#arr-thin)"/>
+  <text x="730" y="540" class="ann-m" style="text-anchor:end">activate row</text>
+
+  <!-- Zest → NSWorkspace → ~/ (open in Finder / Terminal / default app) -->
+  <path d="M 780 660 Q 600 690 460 700 Q 220 700 80 700 L 80 120" class="arr-th" marker-end="url(#arr-thin)"/>
+  <text x="380" y="700" class="ann-m">NSWorkspace.open(URL) → ~/  (default app, Finder, configured terminal)</text>
+
+  <!-- tag legend -->
+  <g transform="translate(20, 690)">
+    <rect x="0" y="-12" width="12" height="12" fill="#f7a41d" rx="2"/>
+    <text x="18" y="-2" class="lbl-sm">Zig</text>
+    <rect x="60" y="-12" width="12" height="12" fill="#f05138" rx="2"/>
+    <text x="78" y="-2" class="lbl-sm">Swift</text>
+    <rect x="130" y="-12" width="12" height="12" fill="#c0c0c0" rx="2"/>
+    <text x="148" y="-2" class="lbl-sm">on-disk / OS</text>
+    <line x1="220" y1="-6" x2="248" y2="-6" stroke="#6cb6ff" stroke-width="1.8" marker-end="url(#arr-accent)"/>
+    <text x="256" y="-2" class="lbl-sm">FFI / mmap</text>
+  </g>
+</svg>
+</div>
+
+<!-- ============================================================ ARTIFACTS -->
+<h2 id="artifacts">The three artifacts</h2>
+<div class="grid three">
+  <div class="card">
+    <div class="label">Zig · CLI / daemon</div>
+    <div class="title">zest-indexer</div>
+    <div class="meta"><code>src/indexer_main.zig</code></div>
+    <p>Walks the filesystem, writes the index, watches for changes. Default mode does an initial full scan then loops on FSEvents with a 30 s / 1000-event coalesce and a 24 h full rescan.</p>
+  </div>
+  <div class="card">
+    <div class="label">Zig · static lib</div>
+    <div class="title">libzest-core.a</div>
+    <div class="meta"><code>src/zest_core_lib.zig</code> · C ABI</div>
+    <p>Pure-CPU search engine. No <code>main</code>, no <code>Io</code> handle — it borrows caller-provided bytes (a Swift mmap) for the lifetime of the Core. Five exported functions, one <code>extern struct</code>.</p>
+  </div>
+  <div class="card">
+    <div class="label">Swift · GUI</div>
+    <div class="title">Zest.app</div>
+    <div class="meta"><code>Sources/Zest/...</code> · AppKit</div>
+    <p>Native AppKit window. Links <code>libzest-core.a</code> via Package.swift. <code>ZestCore</code> mmaps the index once and wraps the C ABI. The UI never iterates an index — it asks, gets back a borrowed <code>Row</code>, copies the strings, formats.</p>
+  </div>
+</div>
+
+<!-- ============================================================ ZIG vs SWIFT -->
+<h2 id="zig-vs-swift">What lives where</h2>
+<div class="grid two">
+  <div class="card">
+    <h3 style="margin-top:0; color:#f7a41d">Zig — the engine</h3>
+    <p>All "is this a PDF / named report / large" decisions. The index format, the bulk scanner, the FSEvents watcher, the SIMD substring search, the bitmap intersection, the <code>cat:</code>/<code>ext:</code>/<code>kind:</code> parser, the per-folder color/pin/filter stores, the daemon process management, the launchd plist generator.</p>
+    <p>No UI, no networking, no global state. The static library has no <code>main</code> and no <code>Io</code> handle, which makes it trivial to embed.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0; color:#f05138">Swift — the shell</h3>
+    <p>Window chrome, AppKit wiring, keyboard shortcuts, the table view, the sidebar tree, context menus, the "Open in Finder" / "Open in Terminal" calls, the pin/filter config persistence, the dark Darcula theme.</p>
+    <p>Nothing search-shaped lives in Swift. A single <code>ZestCore</code> owns the mmap and the Core handle; every other component goes through it via <code>AppCoordinator</code>.</p>
+  </div>
+</div>
+
+<!-- ============================================================ INDEX FORMAT -->
+<h2 id="index-format">Index file format  <span class="meta" style="font-weight:400">— <code>index.zst</code>, ~80–200 MB on a 5 M-file home, custom binary</span></h2>
+<pre><span class="c">┌────────────────────── HEADER (64 bytes) ──────────────────────┐</span>
+│ magic  │ version │ num_entries │ created_at │ 4 × section_off  │
+│"ZESTIN"│   u32   │     u64     │     u64    │ u64 each          │
+<span class="c">├──────────────────── NAMES column ─────────────────────────────┤</span>
+│ u32 offsets[num]  ·  u16 lengths[num]                           │
+│ u32 blob_len  ·  original blob   ·  u32 lower_len  ·  lower blob│
+<span class="c">├──────────────────── PATHS column ─────────────────────────────┤</span>
+│ u32 parent_id[num]    ← 4-byte index into the dir table        │
+│ u32 dir_count                                                   │
+│ u32 dir_offsets[dir_count]  ·  u32 dir_blob_len  ·  dir_blob   │
+<span class="c">├──────────────────── METADATA column ──────────────────────────┤</span>
+│ u64 size[num]  ·  i64 mtime[num]  ·  u8 kind[num]  ·  u8 cat[num]│
+<span class="c">├──────────────────── BITMAPS ───────────────────────────────────┤</span>
+│ u32 num_bitmaps                                                 │
+│ for each: u8 cat · u32 count · u32 indices[count]   (sorted)   │
+<span class="c">└──────────────────────────────────────────────────────────────┘</span></pre>
+
+<p><b>Why columnar.</b> The lowercased-name blob is one contiguous <code>[]u8</code> that SIMD substring search can scan in a single pass — the row index is recovered by binary search through the <code>u32</code> offsets array. The <code>u8 kind</code> / <code>u8 category</code> arrays plus the per-category sorted <code>u32</code> index lists let the search engine eliminate rows that don't match a <code>cat:code</code> / <code>ext:pdf</code> filter in O(1) per candidate. Directory paths are stored once in a prefix-deduped table; each entry holds just a 4-byte <code>parent_id</code>.</p>
+
+<!-- ============================================================ C ABI -->
+<h2 id="c-abi">C ABI surface  <span class="meta" style="font-weight:400">— <code>src/capi/zest_core.zig</code></span></h2>
+<pre><span class="k">Core</span>*   <span class="t">zest_open</span>   (<span class="k">const</span> uint8_t* bytes, size_t len);   <span class="c">// borrow bytes (caller's mmap)</span>
+<span class="k">void</span>    <span class="t">zest_close</span>  (<span class="k">Core</span>*);
+size_t    <span class="t">zest_count</span>  (<span class="k">Core</span>*);                              <span class="c">// header.num_entries</span>
+<span class="k">Query</span>*  <span class="t">zest_query</span>  (<span class="k">Core</span>*, <span class="k">const</span> <span class="k">char</span>* q, <span class="k">const</span> <span class="k">char</span>* scope,
+                       uint32_t max_depth, uint32_t max_results);
+size_t    <span class="t">zest_query_count</span>  (<span class="k">const</span> <span class="k">Query</span>*);
+<span class="k">ZestRow</span> <span class="t">zest_query_row</span>   (<span class="k">const</span> <span class="k">Query</span>*, size_t i);   <span class="c">// borrows into the mmap</span>
+<span class="k">void</span>    <span class="t">zest_query_free</span>  (<span class="k">Query</span>*);</pre>
+
+<p><code>ZestRow</code> is a fixed-layout <code>extern struct</code> that Swift consumes through a Clang-imported <code>zest_core.h</code> — the layout cannot drift. Strings borrow into the mmap; Swift copies them to <code>String</code> immediately on receipt. The query string is parsed with <code>query_parser.parse</code> inside <code>zest_query</code>, so <code>"cat:code"</code> reaches the bitmap path and not the text path.</p>
+
+<!-- ============================================================ DATAFLOW -->
+<h2 id="dataflow">One search, end-to-end</h2>
+<pre>┌──────────────────┐
+│ macOS filesystem │  ~/  (kernel)
+└────────┬─────────┘
+         │ getattrlistbulk(2)  ·  8 worker threads
+         ▼
+┌──────────────────┐
+│ bulk_scan.zig    │  per-worker .scan.tmp.N  (TSV)
+└────────┬─────────┘
+         │ read back, build columnar
+         ▼
+┌──────────────────┐
+│ builder.zig      │
+│   → .tmp file    │  atomic rename(2)
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────────────────────────┐
+│ ~/Library/Application Support/zest/  │
+│           index.zst                  │ ◀── mmap()'d by Swift at startup
+│                                      │     (PROT_READ, MAP_PRIVATE)
+└────────────────┬─────────────────────┘
+                 │
+                 ▼
+        ┌──────────────────┐        ┌──────────────────────┐
+        │ libzest-core.a   │ ◀─ FFI │ Zest.app  (Swift)    │
+        │   zest_query(…)  │        │  NSTableView + UI    │
+        │   IndexReader    │        │  + AppCoordinator    │
+        │   search()       │        │  + ZestCore          │
+        └────────┬─────────┘        └──────────┬───────────┘
+                 │                              │
+                 │ [SearchResult]{name,         │ FileItem  (copied
+                 │  dir_path,size,mtime,        │ strings, formatted
+                 │  kind,category}              │ size, kind color)
+                 │  — borrows mmap              │
+                 ▼                              ▼
+           raw bytes  ───────────────────►  rendered row</pre>
+
+<p>The daemon never talks to the GUI. The GUI never talks to the daemon. They cooperate only by reading and writing the same file. Atomic rename + a fresh inode is the entire synchronization mechanism.</p>
+
+<!-- ============================================================ LIFECYCLE -->
+<h2 id="lifecycle">One rebuild, in five steps</h2>
+<ol style="margin: 8px 0 0; padding-left: 22px; color: var(--text);">
+  <li><b>Bulk scan</b> — 8 worker threads, each pulling directories off a shared queue, calling <code>getattrlistbulk</code> in batches, streaming TSV lines into their own <code>.scan.tmp.N</code> file under <code>~/Library/Application Support/zest/</code>.</li>
+  <li><b>Build</b> — reads the TSV files back (any order), deduplicates paths into a directory table, accumulates per-category sorted index lists, writes the columnar layout into one contiguous <code>[]u8</code>.</li>
+  <li><b>Atomic write</b> — writes to <code>index.zst.tmp</code> then <code>rename(2)</code>s to <code>index.zst</code>. The inode changes; any process holding a stale mmap keeps its snapshot until it reopens.</li>
+  <li><b>Mtime / stat</b> — the file's mtime + size are sufficient for any client to decide "the index changed, re-mmap" without parsing the bytes.</li>
+  <li><b>Cold reload</b> — on next launch the Swift app's <code>ZestCore.init</code> mmaps the fresh file. (The old Zig UI polled every 5 s; see "open questions" below.)</li>
+</ol>
+
+<!-- ============================================================ THREADS -->
+<h2 id="threads">Threading model</h2>
+<table>
+  <tr><th>Component</th><th>Threads</th><th>Notes</th></tr>
+  <tr>
+    <td>Indexer daemon</td>
+    <td class="m">1 + 8</td>
+    <td>1 process · 1 main thread (FSEvents + CFRunLoop) · 8 scan workers (<code>max_scan_threads = 8</code>, measured sweet spot on 12-core).</td>
+  </tr>
+  <tr>
+    <td>Search engine</td>
+    <td class="m">sync, cancellable</td>
+    <td><code>searchCancellable</code> accepts an optional <code>std.atomic.Value(u64)</code> generation counter. The search checks it every 512 positions and returns <code>error.SearchCancelled</code> if it has changed. The old Zig UI used this to abort stale searches on a new keystroke.</td>
+  </tr>
+  <tr>
+    <td>Swift UI</td>
+    <td class="m">main + 1</td>
+    <td>Main thread drives AppKit. The sidebar histogram kicks one <code>userInitiated</code> <code>DispatchQueue.global</code> task to recompute category counts and hops back to main to rebuild rows.</td>
+  </tr>
+</table>
+
+<div class="card" style="margin-top: 24px;">
+  <h3 style="margin-top:0">Open questions / known gaps</h3>
+  <ul style="margin: 0; padding-left: 20px;">
+    <li><b>No Swift-side reload on rebuild.</b> The Swift <code>ZestCore.init</code> mmaps the file once. A rebuild by the daemon is invisible until the app restarts. The old Zig UI polled the inode every 5 s (<code>App.checkForIndexUpdate</code>, <code>app.zig:236</code>); the Swift app should adopt the same pattern.</li>
+    <li><b>No "scanning" state.</b> If <code>index.zst</code> doesn't exist, the Swift app silently returns no rows. A startup-time <code>stat</code> + empty-state message ("no index — run <code>just index</code>") would help.</li>
+    <li><b>Unbundled app.</b> <code>main.swift</code> calls <code>NSApplication.shared</code> + <code>setActivationPolicy(.regular)</code>. It works but has no real <code>Info.plist</code> or app bundle, so Finder metadata and file-association handling are minimal.</li>
+  </ul>
+</div>
+
+<p style="margin-top: 32px; color: var(--text-dim); font-size: 12px;">
+  See <a href="../CLAUDE.md">CLAUDE.md</a> for build, test, and code conventions.
+  This diagram mirrors <a href="ARCHITECTURE.md">docs/ARCHITECTURE.md</a>.
+</p>
+
+</div>
+</body>
+</html>

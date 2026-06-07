@@ -1,76 +1,62 @@
+# Zest — unified commands.
+# Every recipe runs against both Zig and Swift at once; no language split.
+
 _default:
     @just --list
 
-# Build both binaries
+# Build everything: Zig binaries (zest, zest-indexer) + static lib (libzest-core.a) + Swift app.
 build:
     zig build
+    swift build
 
-# Run all tests
+# Run all tests: Zig unit tests + Swift unit tests.
 test:
     zig build test
+    swift test
 
-# Build the search index (scans home directory)
+# Format all sources: `zig fmt` over src/ + `swift-format` over Sources/.
+format:
+    zig fmt src
+    swift-format format --in-place --recursive Sources
+
+# Lint all sources (zig compile-check + swift compile-check + swift-format + swiftlint).
+# Steps: zig build, swift build, swift-format lint --recursive Sources, swiftlint lint.
+lint:
+    @echo "→ zig build (compile check)"
+    zig build
+    @echo "→ swift build (compile check)"
+    swift build
+    @echo "→ swift-format lint"
+    swift-format lint --recursive Sources
+    @echo "→ swiftlint"
+    swiftlint lint
+
+# Build + run the Swift app in Debug.
+run: build
+    swift run Zest
+
+# Build + run the Swift app in Release (faster folder switching).
+run-fast: build
+    swift run -c release Zest
+
+# Build the search index, then run a full scan of $HOME.
 index:
     zig build indexer -Doptimize=ReleaseFast
     ./zig-out/bin/zest-indexer --full-scan ~
 
-# Launch the app, Debug (fast to compile; folder switching ~80ms)
-run *args='.':
-    zig build
-    ./zig-out/bin/zest {{args}}
-
-# Launch the app, ReleaseFast (slower to compile; folder switching ~6ms)
-run-fast *args='.':
-    zig build -Doptimize=ReleaseFast
-    ./zig-out/bin/zest {{args}}
-
-# Build everything (ReleaseFast) + index + launch app
-dev:
-    zig build -Doptimize=ReleaseFast
-    ./zig-out/bin/zest-indexer --full-scan ~
-    ./zig-out/bin/zest .
-
-# Install the background indexer daemon (launchd)
+# Install the indexer as a launchd background daemon.
 install-daemon:
     zig build indexer -Doptimize=ReleaseFast
     ./zig-out/bin/zest-indexer install
 
-# Uninstall the background indexer daemon
+# Uninstall the launchd daemon.
 uninstall-daemon:
     ./zig-out/bin/zest-indexer uninstall
 
-# Open the index data folder in Finder
+# Open the index data folder in Finder.
 open-index:
     open ~/Library/Application\ Support/zest/
 
-# Run search benchmark (ReleaseFast)
-bench query:
-    zig build -Doptimize=ReleaseFast
-    ./zig-out/bin/zest --benchmark "{{query}}"
-
-# Remove build output and local cache
+# Remove build output and caches (Zig + Swift PM).
 clean:
-    rm -rf zig-out .zig-cache
-
-# --- Swift UI (Phase 0+) ---
-
-# Build the Zig C-ABI core the Swift app links against.
-core:
-    zig build core
-
-# Build the Swift app (depends on the core lib being built first).
-app: core
-    swift build
-
-# Build everything: Zig binaries + core lib + Swift app.
-build-all: core
-    zig build
-    swift build
-
-# Run the Swift app.
-run-app: core
-    swift run Zest
-
-# Run Swift tests (FFI + theme).
-test-swift: core
-    swift test
+    rm -rf zig-out .zig-cache .build

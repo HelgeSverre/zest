@@ -174,6 +174,8 @@ Default pins: Home, Desktop, Documents, Downloads. Custom pins are persisted to 
 
 ## Architecture
 
+> The current architecture is documented at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a self-contained SVG diagram at [docs/architecture.html](docs/architecture.html). The mermaid block below describes the legacy Zig UI; the Swift app links `libzest-core.a` (a static lib with the same reader + search code shown here) and mmaps the same `index.zst`.
+
 ```mermaid
 graph TB
     subgraph "zest binary"
