@@ -4,3 +4,6 @@ main
 .idea/
 .build/
 .swiftpm/
+Sample of Zest.txt
+*.sample.txt
+sample.*.txt

@@ -33,6 +33,27 @@ size_t  zest_query_count(const Query *q);
 ZestRow zest_query_row(const Query *q, size_t i); // strings valid until zest_query_free
 void    zest_query_free(Query *q);
 
+// 9 per-category counts (matches the FileCategory enum order: 0=uncategorized,
+// 1=images, 2=text, 3=documents, 4=spreadsheets, 5=audio, 6=video, 7=code,
+// 8=archives). O(1) at max_depth=1; O(D) for deeper scopes.
+typedef struct { uint32_t counts[9]; } ZestHistogram;
+ZestHistogram zest_histogram(Core *core, const char *scope_root, uint32_t max_depth);
+
+// One (ext name, count) row. `name` is NUL-padded but NOT NUL-terminated;
+// use the `len` returned by the call to read the prefix. Fixed size so the
+// caller can stack-allocate the breakdown struct without a heap round-trip.
+typedef struct { char name[16]; uint32_t count; } ZestExtCount;
+
+// Per-(dir, cat) ext breakdown. `entries[0..len)` are the top-N ext rows for
+// the requested scope/category, sorted by count descending. Capped at 32.
+typedef struct { ZestExtCount entries[32]; uint32_t len; } ZestExtBreakdown;
+
+// Read up to `max` exts for the (scope, category) pair. Returns the number
+// of rows written. 0 on missing folder or empty category. `out` must have
+// room for at least `max` ZestExtCount rows.
+size_t zest_ext_breakdown(Core *core, const char *scope_root, uint32_t max_depth,
+                          uint8_t cat, uint32_t max, ZestExtCount *out);
+
 #ifdef __cplusplus
 }
 #endif

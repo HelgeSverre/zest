@@ -3,8 +3,19 @@ const types = @import("../core/types.zig");
 const runtime = @import("../core/runtime.zig");
 
 pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
-pub const VERSION: u32 = 1;
-pub const HEADER_SIZE: usize = 64;
+/// v2: per-folder × per-category histogram column.
+/// v3: per-(folder × category) extension breakdown column.
+/// Reader's version check forces a full re-index on first launch with a new build.
+pub const VERSION: u32 = 3;
+/// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
+/// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
+pub const HEADER_SIZE: usize = 80;
+
+/// Maximum number of unique extensions stored per (folder, category) bucket.
+/// 32 is generous for typical folders (most have 3-10 unique exts per category)
+/// and keeps the column compact. Folders with more (e.g. `node_modules`) are
+/// truncated to the top-32 by count.
+pub const MAX_EXTS_PER_BUCKET: u16 = 32;
 
 pub const Header = struct {
     magic: u64,
@@ -15,6 +26,16 @@ pub const Header = struct {
     paths_offset: u64,
     meta_offset: u64,
     bitmap_offset: u64,
+    /// Per-folder × per-category counts column. Layout: `u32[FileCategory.count]`
+    /// for each of the `dir_count` directories in the paths table. O(1) sidebar
+    /// histogram reads.
+    histogram_offset: u64,
+    /// Per-(folder × category) extension breakdown. Layout: for each of the
+    /// `dir_count` directories, for each of the `FileCategory.count` categories,
+    /// a `u16 num_exts` (≤ MAX_EXTS_PER_BUCKET) followed by `num_exts` entries
+    /// of `(u8 len, u8[len] bytes, u32 count)`. O(1) per-folder read; O(D) merge
+    /// for subtree scopes.
+    ext_breakdown_offset: u64,
 
     pub fn serialize(self: Header, writer: anytype) !void {
         try writer.writeInt(u64, self.magic, .little);
@@ -26,6 +47,8 @@ pub const Header = struct {
         try writer.writeInt(u64, self.paths_offset, .little);
         try writer.writeInt(u64, self.meta_offset, .little);
         try writer.writeInt(u64, self.bitmap_offset, .little);
+        try writer.writeInt(u64, self.histogram_offset, .little);
+        try writer.writeInt(u64, self.ext_breakdown_offset, .little);
     }
 
     pub fn deserialize(reader: anytype) !Header {
@@ -43,6 +66,8 @@ pub const Header = struct {
             .paths_offset = try reader.takeInt(u64, .little),
             .meta_offset = try reader.takeInt(u64, .little),
             .bitmap_offset = try reader.takeInt(u64, .little),
+            .histogram_offset = try reader.takeInt(u64, .little),
+            .ext_breakdown_offset = try reader.takeInt(u64, .little),
         };
     }
 };
@@ -133,13 +158,26 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     var parent_ids = try allocator.alloc(u32, num);
     defer allocator.free(parent_ids);
 
+    // Per-folder × per-category histogram buffer. Indexed `[dir_id][cat]`.
+    // Pre-allocated to a generous capacity (we'll know the exact size after
+    // the entries loop resolves all unique dirs). Filled inline in the loop
+    // below — no second pass over entries.
+    var hist = try allocator.alloc(
+        u32,
+        @as(usize, num) * types.FileCategory.count,
+    );
+    defer allocator.free(hist);
+    @memset(hist, 0);
+
     for (entries, 0..) |entry, i| {
         const gop = try dir_table.getOrPut(entry.dir_path);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(dir_list.items.len);
             try dir_list.append(allocator, entry.dir_path);
         }
-        parent_ids[i] = gop.value_ptr.*;
+        const pid: u32 = gop.value_ptr.*;
+        parent_ids[i] = pid;
+        hist[@as(usize, pid) * types.FileCategory.count + @intFromEnum(entry.category)] += 1;
     }
 
     for (parent_ids) |pid| try writer.writeInt(u32, pid, .little);
@@ -195,6 +233,102 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         for (list.items) |idx| try writer.writeInt(u32, idx, .little);
     }
 
+    // === Histogram (per-folder × per-category counts) ===
+    // Layout: `u32[FileCategory.count]` for each of the `dir_count` directories,
+    // in the same order as the dir table. Used by `zest_histogram` for the
+    // sidebar's O(1) per-folder read.
+    const histogram_offset: u64 = buf.items.len;
+    const hist_count: usize = dir_list.items.len * types.FileCategory.count;
+    for (hist[0..hist_count]) |c| try writer.writeInt(u32, c, .little);
+
+    // === Extension Breakdown (per-folder × per-category × top-N exts) ===
+    // Build it in a second pass over entries: we now know `dir_count`, so we
+    // can allocate the per-bucket accumulator array in one shot. Each bucket
+    // is sorted by count (descending) and truncated to MAX_EXTS_PER_BUCKET.
+    const StableExt = struct {
+        name_off: u32,
+        name_len: u8,
+        count: u32,
+    };
+
+    var keys_buf = std.ArrayList(u8).empty;
+    defer keys_buf.deinit(allocator);
+    try keys_buf.ensureTotalCapacity(allocator, num * 8);
+
+    var ext_buckets = try allocator.alloc(
+        std.ArrayList(StableExt),
+        dir_list.items.len * types.FileCategory.count,
+    );
+    defer {
+        for (ext_buckets) |*list| list.deinit(allocator);
+        allocator.free(ext_buckets);
+    }
+    for (ext_buckets) |*list| list.* = .empty;
+
+    var lower_buf: [31]u8 = undefined;
+    for (entries) |entry| {
+        // Lowercased extension: bytes after the last dot, or skip if no ext.
+        const dot_idx = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
+        if (dot_idx + 1 >= entry.name.len) continue;
+        const raw = entry.name[dot_idx + 1 ..];
+        if (raw.len == 0 or raw.len > 31) continue;
+        for (raw, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
+        const ext_lower: []const u8 = lower_buf[0..raw.len];
+
+        const dir_id = dir_table.get(entry.dir_path) orelse continue;
+        const cat: u8 = @intFromEnum(entry.category);
+        const bucket = &ext_buckets[@as(usize, dir_id) * types.FileCategory.count + cat];
+
+        // Linear scan of the bucket. Most buckets have <10 exts; the
+        // MAX_EXTS_PER_BUCKET cap is only reached in dev folders.
+        var found: ?usize = null;
+        for (bucket.items, 0..) |e, i| {
+            const existing = keys_buf.items[e.name_off..@intCast(e.name_off + e.name_len)];
+            if (std.mem.eql(u8, existing, ext_lower)) {
+                found = i;
+                break;
+            }
+        }
+        if (found) |i| {
+            bucket.items[i].count += 1;
+        } else {
+            const off: u32 = @intCast(keys_buf.items.len);
+            try keys_buf.appendSlice(allocator, ext_lower);
+            try bucket.append(allocator, .{
+                .name_off = off,
+                .name_len = @intCast(ext_lower.len),
+                .count = 1,
+            });
+        }
+    }
+
+    // Sort each bucket by count desc; truncate to MAX_EXTS_PER_BUCKET.
+    const lessExt = struct {
+        fn f(_: void, a: StableExt, b: StableExt) bool {
+            return a.count > b.count;
+        }
+    }.f;
+    for (ext_buckets) |*bucket| {
+        std.mem.sort(StableExt, bucket.items, {}, lessExt);
+        if (bucket.items.len > MAX_EXTS_PER_BUCKET) {
+            bucket.shrinkRetainingCapacity(MAX_EXTS_PER_BUCKET);
+        }
+    }
+
+    // Emit the column. Layout: for each (dir_id, cat) in [0, dir_count) ×
+    // [0, FileCategory.count), `u16 num_exts` followed by `num_exts` entries
+    // of `(u8 len, u8[len] bytes, u32 count)`. Self-describing: reader walks
+    // the structure in order.
+    const ext_breakdown_offset: u64 = buf.items.len;
+    for (ext_buckets) |bucket| {
+        try writer.writeInt(u16, @intCast(bucket.items.len), .little);
+        for (bucket.items) |e| {
+            try writer.writeByte(e.name_len);
+            try writer.writeAll(keys_buf.items[e.name_off..@intCast(e.name_off + e.name_len)]);
+            try writer.writeInt(u32, e.count, .little);
+        }
+    }
+
     // === Write header ===
     const now: u64 = @intCast(runtime.unixTimestamp());
     const header = Header{
@@ -206,6 +340,8 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         .paths_offset = paths_offset,
         .meta_offset = meta_offset,
         .bitmap_offset = bitmap_offset,
+        .histogram_offset = histogram_offset,
+        .ext_breakdown_offset = ext_breakdown_offset,
     };
 
     var header_buf: [HEADER_SIZE]u8 = undefined;
