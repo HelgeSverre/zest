@@ -17,6 +17,12 @@ pub const HEADER_SIZE: usize = 80;
 /// truncated to the top-32 by count.
 pub const MAX_EXTS_PER_BUCKET: u16 = 32;
 
+/// Maximum length of an extension name stored in the on-disk column. Capped
+/// to 15 bytes so it fits the reader's fixed-size `ExtCount.name: [16]u8`
+/// buffer (room for the longest realistic ext like `.swiftinterface` = 14
+/// chars). Longer exts (rare) are dropped from the breakdown.
+pub const MAX_EXT_NAME_LEN: u8 = 15;
+
 pub const Header = struct {
     magic: u64,
     version: u32,
@@ -268,10 +274,14 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     var lower_buf: [31]u8 = undefined;
     for (entries) |entry| {
         // Lowercased extension: bytes after the last dot, or skip if no ext.
+        // Capped at 15 bytes so it fits the reader's fixed-size
+        // `ExtCount.name: [16]u8` buffer (one slot for the length byte
+        // and a trailing NUL isn't needed; the reader's `name_len`
+        // reports the actual prefix).
         const dot_idx = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
         if (dot_idx + 1 >= entry.name.len) continue;
         const raw = entry.name[dot_idx + 1 ..];
-        if (raw.len == 0 or raw.len > 31) continue;
+        if (raw.len == 0 or raw.len > 15) continue;
         for (raw, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
         const ext_lower: []const u8 = lower_buf[0..raw.len];
 

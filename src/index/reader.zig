@@ -311,6 +311,11 @@ pub const IndexReader = struct {
         count: u32,
     };
 
+    /// Largest name length the reader can store. Matches the writer's
+    /// `MAX_EXT_NAME_LEN` cap; on-disk exts longer than this are skipped
+    /// defensively (a malformed index shouldn't crash the sidebar).
+    pub const MAX_EXT_NAME_LEN: u8 = 15;
+
     /// Read up to `out.len` extension-count rows for the (dir_id, cat) bucket
     /// directly out of the on-disk column. The reader walks past earlier
     /// buckets to find the target — O(dir_count × categories) reads, all small
@@ -409,6 +414,11 @@ pub const IndexReader = struct {
                     while (p < ext_end) {
                         const len = self.data[p];
                         p += 1;
+                        // Defensive: skip overflow ext names (see readBucketInto).
+                        if (len > MAX_EXT_NAME_LEN) {
+                            p += len + 4;
+                            continue;
+                        }
                         const name = self.data[p..@intCast(p + len)];
                         p += len;
                         const count = std.mem.readInt(u32, self.data[p..][0..4], .little);
@@ -531,13 +541,22 @@ pub const IndexReader = struct {
         while (p < ext_end and i < out.len) : (i += 1) {
             const len = self.data[p];
             p += 1;
+            // Skip overflow ext names defensively (a stale or malformed
+            // index written before the 15-byte cap shouldn't crash the
+            // sidebar). We still advance past the entry, so the bucket
+            // walker stays in sync.
+            if (len > MAX_EXT_NAME_LEN) {
+                p += len + 4;
+                i -= 1;
+                continue;
+            }
             const name_src = self.data[p..@intCast(p + len)];
             p += len;
             const count = std.mem.readInt(u32, self.data[p..][0..4], .little);
             p += 4;
             var row: ExtCount = .{
                 .name = undefined,
-                .name_len = @intCast(len),
+                .name_len = len,
                 .count = count,
             };
             @memcpy(row.name[0..len], name_src);
