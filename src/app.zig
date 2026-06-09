@@ -93,12 +93,14 @@ pub const App = struct {
     // Pins
     pub fn addPin(self: *App, name: []const u8, path: []const u8) !void {
         try self.user_state.addPin(name, path);
-        self.user_state.savePins() catch {};
+        self.user_state.savePins() catch |err|
+            std.debug.print("warning: failed to persist pins: {s}\n", .{@errorName(err)});
     }
 
     pub fn removePin(self: *App, path: []const u8) void {
         _ = self.user_state.removePin(path);
-        self.user_state.savePins() catch {};
+        self.user_state.savePins() catch |err|
+            std.debug.print("warning: failed to persist pins: {s}\n", .{@errorName(err)});
     }
 
     pub fn getPins(self: App) []const types.Pin {
@@ -112,12 +114,14 @@ pub const App = struct {
 
     pub fn setFolderColor(self: *App, path: []const u8, color: user_state_mod.FolderColor) !void {
         try self.user_state.setFolderColor(path, color);
-        self.user_state.saveFolderColors() catch {};
+        self.user_state.saveFolderColors() catch |err|
+            std.debug.print("warning: failed to persist folder colors: {s}\n", .{@errorName(err)});
     }
 
     pub fn clearFolderColor(self: *App, path: []const u8) void {
         if (self.user_state.clearFolderColor(path)) {
-            self.user_state.saveFolderColors() catch {};
+            self.user_state.saveFolderColors() catch |err|
+                std.debug.print("warning: failed to persist folder colors: {s}\n", .{@errorName(err)});
         }
     }
 
@@ -145,6 +149,10 @@ pub const App = struct {
                 else => {},
             }
         }
+        // Reached only if every candidate (including Terminal.app) failed to
+        // launch — otherwise the user clicks "Open in Terminal" and nothing
+        // happens with no signal at all.
+        std.debug.print("warning: no terminal could be launched for {s}\n", .{path});
     }
 
     // Index delegation

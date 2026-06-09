@@ -70,6 +70,10 @@ const Shared = struct {
     done: bool = false,
     alloc: std.mem.Allocator,
     total_entries: std.atomic.Value(u64) = .init(0),
+    /// Set when a worker drops an entry or subdirectory (write/flush/OOM), so
+    /// the caller can report that the published index may be incomplete instead
+    /// of silently shipping a short index with an overstated count.
+    write_failed: std.atomic.Value(bool) = .init(false),
 };
 
 const Worker = struct {
@@ -127,9 +131,12 @@ pub fn parallelScan(
 
     // Flush and close each worker's temp file.
     for (0..n) |i| {
-        fwriters[i].interface.flush() catch {};
+        fwriters[i].interface.flush() catch sh.write_failed.store(true, .monotonic);
         files[i].close(io);
     }
+
+    if (sh.write_failed.load(.monotonic))
+        std.debug.print("warning: index scan dropped entries (write/queue failure); the index may be incomplete\n", .{});
 
     entries_out.* = sh.total_entries.load(.monotonic);
     return paths;
@@ -156,7 +163,10 @@ fn workerMain(w: *Worker) void {
         sh.alloc.free(dir_path);
 
         sh.mutex.lockUncancelable(io);
-        for (subdirs.items) |sd| sh.queue.append(sh.alloc, sd) catch sh.alloc.free(sd);
+        for (subdirs.items) |sd| sh.queue.append(sh.alloc, sd) catch {
+            sh.write_failed.store(true, .monotonic);
+            sh.alloc.free(sd);
+        };
         sh.pending += subdirs.items.len;
         sh.pending -= 1;
         if (sh.pending == 0) {
@@ -260,7 +270,12 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             const cat: types.FileCategory = if (kind == .directory) .uncategorized else file_types.categorize(name);
             w.writer.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\n", .{
                 name, path, size, mtime, @intFromEnum(kind), @intFromEnum(cat),
-            }) catch {};
+            }) catch {
+                // Don't count an entry we failed to write — the old code bumped
+                // local_entries unconditionally, overstating the index size.
+                w.shared.write_failed.store(true, .monotonic);
+                continue;
+            };
             w.local_entries += 1;
         }
     }

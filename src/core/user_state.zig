@@ -112,17 +112,27 @@ pub const UserState = struct {
     // Pins
     // -------------------------------------------------------------------------
 
-    pub fn loadPins(self: *UserState) !void {
+    fn clearPins(self: *UserState) void {
         for (self.pins.items) |pin| {
             self.allocator.free(pin.name);
             self.allocator.free(pin.path);
         }
         self.pins.clearRetainingCapacity();
+    }
+
+    pub fn loadPins(self: *UserState) !void {
+        self.clearPins();
 
         if (self.pins_path) |fp| {
             if (self.loadPinsFromFile(fp)) {
                 return;
-            } else |_| {}
+            } else |_| {
+                // A partial parse (e.g. OOM mid-loop) can leave the list
+                // half-populated; clear again so loadDefaultPins doesn't append
+                // the defaults on top of leftovers (which would then be saved
+                // back as duplicates).
+                self.clearPins();
+            }
         }
         try self.loadDefaultPins();
     }
@@ -134,11 +144,7 @@ pub const UserState = struct {
     }
 
     pub fn loadPinsFromString(self: *UserState, data: []const u8) !void {
-        for (self.pins.items) |pin| {
-            self.allocator.free(pin.name);
-            self.allocator.free(pin.path);
-        }
-        self.pins.clearRetainingCapacity();
+        self.clearPins();
         try self.parsePinsJson(data);
     }
 
