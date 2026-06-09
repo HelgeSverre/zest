@@ -292,7 +292,7 @@ fn buildToolbarView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
             }
         }
         setAutoresizingMask(popup, NSViewMinXMargin);
-        s.category_popup = popup;
+        s.saved_filters_popup = popup;
         objc.msgSendVoidWith1(objc.id, toolbar, "addSubview:", popup);
     }
 
@@ -441,8 +441,6 @@ fn buildFilterBar(frame: objc.CGRect) objc.id {
 
 pub fn setFilterBarVisible(bar: objc.id, split: objc.id, visible: bool) void {
     if (bar == null) return;
-    const win_frame = getFrame(bar);
-    _ = win_frame;
 
     // Get the parent content view
     const superview = objc.msgSend(bar, "superview");
@@ -524,13 +522,13 @@ fn styleToolbarField(field: objc.id) void {
 fn configureKeyLoop(s: *delegate.AppState) void {
     const path_field = s.path_field orelse return;
     const search_field = s.search_field orelse return;
-    const category_popup = s.category_popup orelse return;
+    const saved_filters_popup = s.saved_filters_popup orelse return;
     const sidebar_view = s.sidebar_view orelse return;
     const table_view = s.table_view orelse return;
 
     objc.msgSendVoidWith1(objc.id, path_field, "setNextKeyView:", search_field);
-    objc.msgSendVoidWith1(objc.id, search_field, "setNextKeyView:", category_popup);
-    objc.msgSendVoidWith1(objc.id, category_popup, "setNextKeyView:", sidebar_view);
+    objc.msgSendVoidWith1(objc.id, search_field, "setNextKeyView:", saved_filters_popup);
+    objc.msgSendVoidWith1(objc.id, saved_filters_popup, "setNextKeyView:", sidebar_view);
     objc.msgSendVoidWith1(objc.id, sidebar_view, "setNextKeyView:", table_view);
     objc.msgSendVoidWith1(objc.id, table_view, "setNextKeyView:", path_field);
 }

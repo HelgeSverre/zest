@@ -18,7 +18,7 @@ zig build test         # Run all tests
 
 - **FileSystemProvider** — vtable interface (`core/fs_provider.zig`). Two impls: `RealFs` (OS) and `FakeFs` (in-memory, for tests).
 - **Index** — Custom mmap'd binary format at `~/Library/Application Support/zest/index.zst`. Columnar layout: names, paths (prefix-deduped), metadata, Roaring bitmaps for category/extension filtering.
-- **Search** — SIMD substring search over the name column using Zig's `@Vector`. Combined with bitmap intersection for category filtering.
+- **Search** — substring search over the name column: a scalar two-anchor scan (gate on the first/last query byte, confirm with `std.mem.eql`). Combined with bitmap intersection for category filtering.
 - **Indexer** — Background daemon using FSEvents to watch `$HOME`. Writes to `.tmp` then atomic `rename()`. Readers detect new index via stat polling every ~5s.
 - **UI** — Native AppKit via zig-objc. Darcula dark theme. NSSplitView sidebar + NSTableView file list.
 
@@ -43,7 +43,7 @@ zig build test         # Run all tests
 src/main.zig           — CLI entry, arg parsing
 src/app.zig            — App controller (owns Navigator, PinManager, IndexReader)
 src/core/              — Types, FS abstraction, navigation, pins, file categorization, runtime (Io handle)
-src/index/             — Binary format, builder, mmap reader, SIMD search, bitmaps, FSEvents, daemon
+src/index/             — Binary format, builder, mmap reader, substring search, bitmaps, FSEvents, daemon
 src/ui/                — AppKit UI, Darcula theme
 src/config/            — Paths, defaults, exclude patterns
 ```

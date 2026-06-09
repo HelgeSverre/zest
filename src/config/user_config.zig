@@ -1,9 +1,8 @@
-//! Minimal reader for `~/.config/zest/config.json`. Currently only the
-//! `terminal` key is used (the app the "Open in Terminal" action prefers).
-//! Mirrors the JSON-load pattern in `core/folder_colors.zig`.
+//! Terminal-preference helpers for the "Open in Terminal" action. The actual
+//! `~/.config/zest/config.json` parsing lives in `core/user_state.zig`
+//! (`parseConfigJson`); this module just owns the candidate-list policy.
 
 const std = @import("std");
-const runtime = @import("../core/runtime.zig");
 
 /// Terminal apps tried (in order) when no configured terminal launches.
 /// `open -a <name>` exits non-zero *without* launching when the app is absent,
@@ -39,48 +38,6 @@ pub fn terminalCandidates(out: [][]const u8, configured: ?[]const u8) [][]const 
     }
     return out[0..count];
 }
-
-pub const UserConfig = struct {
-    allocator: std.mem.Allocator,
-    file_path: ?[]const u8,
-    terminal: ?[]const u8 = null,
-
-    pub fn init(allocator: std.mem.Allocator, file_path: ?[]const u8) UserConfig {
-        return .{ .allocator = allocator, .file_path = file_path };
-    }
-
-    pub fn deinit(self: *UserConfig) void {
-        if (self.terminal) |t| self.allocator.free(t);
-        self.terminal = null;
-    }
-
-    /// Load from `file_path`. Missing file or parse errors leave fields unset.
-    pub fn load(self: *UserConfig) void {
-        const fp = self.file_path orelse return;
-        const data = runtime.readFileAlloc(self.allocator, fp, .limited(1024 * 1024)) catch return;
-        defer self.allocator.free(data);
-        self.parseJson(data) catch {};
-    }
-
-    pub fn loadFromString(self: *UserConfig, data: []const u8) !void {
-        try self.parseJson(data);
-    }
-
-    fn parseJson(self: *UserConfig, data: []const u8) !void {
-        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch return error.InvalidJson;
-        defer parsed.deinit();
-
-        const root = parsed.value;
-        if (root != .object) return error.InvalidJson;
-
-        if (root.object.get("terminal")) |value| {
-            if (value == .string and value.string.len > 0) {
-                if (self.terminal) |t| self.allocator.free(t);
-                self.terminal = try self.allocator.dupe(u8, value.string);
-            }
-        }
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -129,30 +86,4 @@ test "terminalCandidates keeps Terminal.app last as fallback" {
     try std.testing.expectEqualStrings("Terminal", got[0]);
     // Still de-duplicated to 6 (Terminal not repeated).
     try std.testing.expectEqualStrings("Alacritty", got[5]);
-}
-
-test "parse terminal key from config json" {
-    var cfg = UserConfig.init(std.testing.allocator, null);
-    defer cfg.deinit();
-    try cfg.loadFromString(
-        \\{ "terminal": "iTerm" }
-    );
-    try std.testing.expect(cfg.terminal != null);
-    try std.testing.expectEqualStrings("iTerm", cfg.terminal.?);
-}
-
-test "missing terminal key leaves config null" {
-    var cfg = UserConfig.init(std.testing.allocator, null);
-    defer cfg.deinit();
-    try cfg.loadFromString("{}");
-    try std.testing.expect(cfg.terminal == null);
-}
-
-test "non-string terminal value is ignored" {
-    var cfg = UserConfig.init(std.testing.allocator, null);
-    defer cfg.deinit();
-    try cfg.loadFromString(
-        \\{ "terminal": 5 }
-    );
-    try std.testing.expect(cfg.terminal == null);
 }

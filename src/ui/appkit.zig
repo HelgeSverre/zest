@@ -40,7 +40,12 @@ pub fn run(allocator: std.mem.Allocator, app: *App) !void {
     // where the window is created — activation happens there
     objc.msgSendVoid(NSApp, "run");
 
-    // Cleanup
+    // Cleanup — only reached if the run loop is stopped via `[NSApp stop:]`.
+    // Today the app quits exclusively through the "Quit Zest" menu item wired to
+    // `terminate:`, which exits the process, so `run` never returns and this
+    // block doesn't execute. It's kept (rather than deleted) so the teardown is
+    // correct if a `stop:`-based quit is ever added. User state isn't lost
+    // either way: pins/colors/filters are persisted eagerly on each change.
     app_state.deinit();
     allocator.destroy(app_state);
     delegate.state = null;

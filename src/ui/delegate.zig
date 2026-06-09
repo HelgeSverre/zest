@@ -53,7 +53,7 @@ pub const AppState = struct {
     sidebar_view: objc.id = null,
     search_field: objc.id = null,
     path_field: objc.id = null,
-    category_popup: objc.id = null,
+    saved_filters_popup: objc.id = null,
     file_context_menu: objc.id = null,
     sidebar_context_menu: objc.id = null,
     debounce_timer: objc.id = null,
@@ -90,7 +90,7 @@ pub const AppState = struct {
             .sidebar_view = null,
             .search_field = null,
             .path_field = null,
-            .category_popup = null,
+            .saved_filters_popup = null,
             .file_context_menu = null,
             .sidebar_context_menu = null,
             .debounce_timer = null,
@@ -615,7 +615,7 @@ fn goToContainingFolderAction(_self: objc.id, _cmd: objc.SEL, sender: objc.id) c
     const dir_path = representedPathFromSender(s, sender) orelse {
         // Fallback: get from selected row
         const tv = s.table_view orelse return;
-        const idx = preferredTableIndex(tv) orelse return;
+        const idx = preferredRow(tv) orelse return;
         const rows = s.rows orelse return;
         if (idx >= rows.len) return;
         const path = s.allocator.dupe(u8, rows[idx].dir_path) catch return;
@@ -812,7 +812,7 @@ fn tableViewForColumn(_self: objc.id, _cmd: objc.SEL, table: objc.id, column: ob
         const rows = s.rows orelse return null;
         if (idx >= rows.len) return null;
         const result = rows[idx];
-        const full_path = std.fmt.allocPrint(s.allocator, "{s}/{s}", .{ result.dir_path, result.name }) catch return null;
+        const full_path = joinDirName(s.allocator, result.dir_path, result.name) orelse return null;
         defer s.allocator.free(full_path);
         const title = search_mod.displayName(s.allocator, result, s.app.navigator.current, s.show_full_path) catch return null;
         defer s.allocator.free(title);
@@ -1118,51 +1118,47 @@ pub fn updatePathField() void {
     }
 }
 
-fn clickedTableIndex(table_view: objc.id) ?usize {
+/// Row under the mouse for a context-menu action (-1 → null when the click
+/// wasn't on a row). Works for both the table and the sidebar.
+fn clickedRow(table_view: objc.id) ?usize {
     const clicked = objc.msgSendI64(table_view, "clickedRow");
     if (clicked >= 0) return @intCast(clicked);
     return null;
 }
 
-fn preferredTableIndex(table_view: objc.id) ?usize {
-    if (clickedTableIndex(table_view)) |idx| return idx;
-    const selected = objc.msgSendI64(table_view, "selectedRow");
-    if (selected >= 0) return @intCast(selected);
-
-    return null;
-}
-
-fn clickedSidebarIndex(table_view: objc.id) ?usize {
-    const clicked = objc.msgSendI64(table_view, "clickedRow");
-    if (clicked >= 0) return @intCast(clicked);
-    return null;
-}
-
-fn preferredSidebarIndex(table_view: objc.id) ?usize {
-    if (clickedSidebarIndex(table_view)) |idx| return idx;
+/// The row an action should target: the clicked row if any, else the selection.
+fn preferredRow(table_view: objc.id) ?usize {
+    if (clickedRow(table_view)) |idx| return idx;
     const selected = objc.msgSendI64(table_view, "selectedRow");
     if (selected >= 0) return @intCast(selected);
     return null;
+}
+
+/// Join a directory and child name into an absolute path, avoiding the doubled
+/// slash that "{s}/{s}" produces when `dir` is the filesystem root ("/").
+fn joinDirName(allocator: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]u8 {
+    const sep: []const u8 = if (std.mem.eql(u8, dir, "/")) "" else "/";
+    return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ dir, sep, name }) catch null;
 }
 
 fn getPathForRow(s: *AppState, idx: usize) ?[]const u8 {
     const rows = s.rows orelse return null;
     if (idx >= rows.len) return null;
     const r = rows[idx];
-    return std.fmt.allocPrint(s.allocator, "{s}/{s}", .{ r.dir_path, r.name }) catch null;
+    return joinDirName(s.allocator, r.dir_path, r.name);
 }
 
 fn contextPathFromSenderOrSelection(s: *AppState, sender: objc.id) ?[]const u8 {
     if (representedPathFromSender(s, sender)) |path| return path;
 
     if (s.table_view) |tv| {
-        if (preferredTableIndex(tv)) |idx| {
+        if (preferredRow(tv)) |idx| {
             return getPathForRow(s, idx);
         }
     }
 
     if (s.sidebar_view) |sv| {
-        if (preferredSidebarIndex(sv)) |idx| {
+        if (preferredRow(sv)) |idx| {
             return pathForSidebarIndex(s, idx);
         }
     }
@@ -1250,7 +1246,7 @@ const MenuTarget = struct {
 
 fn contextTargetForFileMenu(s: *AppState) ?MenuTarget {
     const tv = s.table_view orelse return null;
-    const idx = preferredTableIndex(tv) orelse return null;
+    const idx = preferredRow(tv) orelse return null;
     const path = getPathForRow(s, idx) orelse return null;
     errdefer s.allocator.free(path);
     const is_dir = s.app.fs.isDir(path);
@@ -1264,7 +1260,7 @@ fn contextTargetForFileMenu(s: *AppState) ?MenuTarget {
 
 fn contextTargetForSidebarMenu(s: *AppState) ?MenuTarget {
     const sv = s.sidebar_view orelse return null;
-    const idx = preferredSidebarIndex(sv) orelse return null;
+    const idx = preferredRow(sv) orelse return null;
     const path = pathForSidebarIndex(s, idx) orelse return null;
     errdefer s.allocator.free(path);
     return .{
@@ -1291,7 +1287,7 @@ fn rebuildFileContextMenu(s: *AppState, menu: objc.id) void {
     // Offer "Go to Containing Folder" for a row living below the current scope
     // (a recursive-filter result), so the user can jump to its real directory.
     if (s.table_view) |tv| {
-        if (preferredTableIndex(tv)) |idx| {
+        if (preferredRow(tv)) |idx| {
             if (s.rows) |rows| {
                 if (idx < rows.len and !std.mem.eql(u8, rows[idx].dir_path, s.app.navigator.current)) {
                     addContextItem(menu, "Go to Containing Folder", "goToContainingFolder:", app_delegate, rows[idx].dir_path, null, false);

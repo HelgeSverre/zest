@@ -194,8 +194,8 @@ pub const FilterCriterion = union(enum) {
                 const m = std.ascii.eqlIgnoreCase(file_ext, ext_str);
                 return if (f.negated) !m else m;
             },
-            .size => |f| matchNumeric(f.op, result.size, f.value, f.value_upper),
-            .date => |f| matchNumericSigned(f.op, result.mtime, f.value, f.value_upper),
+            .size => |f| matchNumeric(u64, f.op, result.size, f.value, f.value_upper),
+            .date => |f| matchNumeric(i64, f.op, result.mtime, f.value, f.value_upper),
             .category => |f| {
                 const m = result.category == f.value;
                 return if (f.negated) !m else m;
@@ -226,18 +226,7 @@ pub fn matchesAll(criteria: []const FilterCriterion, target: MatchTarget) bool {
     return true;
 }
 
-fn matchNumeric(op: CompareOp, actual: u64, expected: u64, upper: u64) bool {
-    return switch (op) {
-        .eq => actual == expected,
-        .gt => actual > expected,
-        .lt => actual < expected,
-        .gte => actual >= expected,
-        .lte => actual <= expected,
-        .range => actual >= expected and actual <= upper,
-    };
-}
-
-fn matchNumericSigned(op: CompareOp, actual: i64, expected: i64, upper: i64) bool {
+fn matchNumeric(comptime T: type, op: CompareOp, actual: T, expected: T, upper: T) bool {
     return switch (op) {
         .eq => actual == expected,
         .gt => actual > expected,
