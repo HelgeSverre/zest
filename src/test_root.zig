@@ -7,7 +7,6 @@ comptime {
     _ = @import("core/navigator.zig");
     _ = @import("core/user_state.zig");
     _ = @import("core/filters.zig");
-    _ = @import("core/query_parser.zig");
     _ = @import("core/humanize.zig");
     _ = @import("config/config.zig");
     _ = @import("config/user_config.zig");

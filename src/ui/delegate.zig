@@ -6,7 +6,6 @@ const App = app_mod.App;
 const session_mod = @import("../index/session.zig");
 const user_state_mod = @import("../core/user_state.zig");
 const filters_mod = @import("../core/filters.zig");
-const query_parser = @import("../core/query_parser.zig");
 const search_mod = @import("../index/search.zig");
 const async_search_mod = @import("../core/async_search.zig");
 const window = @import("window.zig");
@@ -439,7 +438,7 @@ fn runQuery(s: *AppState) void {
     }
     defer if (raw_owned) |b| s.allocator.free(b);
 
-    const parsed = query_parser.parse(s.allocator, raw_query) catch return;
+    const parsed = filters_mod.parse(s.allocator, raw_query) catch return;
 
     // The pill bar reflects the active qualifiers (ownership moves here).
     if (s.active_filters) |f| s.allocator.free(f);
@@ -645,7 +644,7 @@ fn removeFilterAction(_self: objc.id, _cmd: objc.SEL, sender: objc.id) callconv(
     defer s.allocator.free(current_text);
 
     // Re-parse, remove filter at index, rebuild text
-    var parsed = query_parser.parse(s.allocator, current_text) catch return;
+    var parsed = filters_mod.parse(s.allocator, current_text) catch return;
     defer parsed.deinit();
 
     if (idx >= parsed.filters_list.len) return;

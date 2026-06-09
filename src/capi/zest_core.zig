@@ -6,7 +6,7 @@ const types = @import("../core/types.zig");
 const reader_mod = @import("../index/reader.zig");
 const subtree_mod = @import("../index/subtree.zig");
 const search_mod = @import("../index/search.zig");
-const query_parser = @import("../core/query_parser.zig");
+const filters_mod = @import("../core/filters.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -82,7 +82,7 @@ export fn zest_query(
     // Parse qualifiers out of the raw string. On parse failure (e.g. the
     // qualifier value is malformed), fall back to a plain text search so a
     // typo never blackholes the result set.
-    var parsed = query_parser.parse(alloc, raw_query) catch {
+    var parsed = filters_mod.parse(alloc, raw_query) catch {
         const results = search_mod.search(alloc, &core.reader, .{
             .query = raw_query,
             .scope = scope,
