@@ -4,6 +4,7 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const reader_mod = @import("../index/reader.zig");
+const subtree_mod = @import("../index/subtree.zig");
 const search_mod = @import("../index/search.zig");
 const query_parser = @import("../core/query_parser.zig");
 
@@ -162,7 +163,7 @@ export fn zest_histogram(
         }
     } else {
         // Subtree of `scope` (or everything, for `scope == "/"`).
-        core.reader.getSubtreeHistogram(scope, &result.counts);
+        subtree_mod.computeHistogram(core.reader, scope, &result.counts);
     }
     return result;
 }
@@ -213,7 +214,7 @@ export fn zest_ext_breakdown(
         const dir_id = core.reader.findDirId(scope) orelse break :blk 0;
         break :blk core.reader.getFolderExtBreakdown(dir_id, cat, scratch[0..cap]);
     } else blk: {
-        break :blk core.reader.getSubtreeExtBreakdown(scope, cat, scratch[0..cap]);
+        break :blk subtree_mod.computeExtBreakdown(core.reader, scope, cat, scratch[0..cap], alloc);
     };
 
     var i: usize = 0;

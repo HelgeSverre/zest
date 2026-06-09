@@ -270,7 +270,7 @@ fn buildToolbarView(s: *delegate.AppState, frame: objc.CGRect) objc.id {
         const popup = objc.msgSendWith2(objc.CGRect, bool, objc.alloc(NSPopUpButton), "initWithFrame:pullsDown:", popup_frame, true);
         objc.msgSendVoidWith1(objc.id, popup, "addItemWithTitle:", objc.NSString.fromSlice("Saved Filters"));
         // Populate from filter store
-        const saved = s.app.filter_store.getSaved();
+        const saved = s.app.user_state.getSavedFilters();
         for (saved) |sf| {
             objc.msgSendVoidWith1(objc.id, popup, "addItemWithTitle:", objc.NSString.fromSlice(sf.name));
         }

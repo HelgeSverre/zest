@@ -1,7 +1,7 @@
 const objc = @import("objc.zig");
 const theme = @import("theme.zig");
 const types = @import("../core/types.zig");
-const folder_colors = @import("../core/folder_colors.zig");
+const user_state_mod = @import("../core/user_state.zig");
 
 fn makeNSColor(color: theme.Color) objc.id {
     const NSColor = objc.getClass("NSColor") orelse return null;
@@ -14,7 +14,7 @@ fn msgSendSize(target: objc.id, sel_name: [:0]const u8, size: objc.CGSize) void 
     func(target, objc.sel(sel_name), size);
 }
 
-pub fn fromFolderColor(color: folder_colors.FolderColor) theme.Color {
+pub fn fromFolderColor(color: user_state_mod.FolderColor) theme.Color {
     return .{
         .r = @as(f64, @floatFromInt(color.red)) / 255.0,
         .g = @as(f64, @floatFromInt(color.green)) / 255.0,
@@ -63,7 +63,7 @@ pub fn fileSymbolName(kind: types.FileKind, category: types.FileCategory) []cons
     };
 }
 
-pub fn iconTint(kind: types.FileKind, category: types.FileCategory, color_override: ?folder_colors.FolderColor) theme.Color {
+pub fn iconTint(kind: types.FileKind, category: types.FileCategory, color_override: ?user_state_mod.FolderColor) theme.Color {
     if (kind == .directory) {
         if (color_override) |color| return fromFolderColor(color);
         return theme.icon_directory;

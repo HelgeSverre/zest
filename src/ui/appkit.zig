@@ -27,11 +27,7 @@ pub fn run(allocator: std.mem.Allocator, app: *App) !void {
 
     // Create AppState
     const app_state = try allocator.create(delegate.AppState);
-    app_state.* = .{
-        .app = app,
-        .allocator = allocator,
-        .async_search = async_search_mod.AsyncSearch.init(allocator),
-    };
+    delegate.AppState.init(app_state, allocator, app);
     delegate.state = app_state;
 
     // Create and set app delegate

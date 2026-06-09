@@ -76,13 +76,12 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(idx_path);
         if (std.Io.Dir.cwd().statFile(runtime.io, idx_path, .{})) |stat| {
             if (runtime.readFileAlloc(allocator, idx_path, .unlimited)) |data| {
-                app.loadIndex(data) catch {
+                app.session_index.load(data) catch {
                     allocator.free(data);
                     std.debug.print("warning: could not load index, search unavailable\n", .{});
                 };
-                // Store initial inode for change detection
-                app.index_inode = stat.inode;
-                app.last_index_check = runtime.nowNanos();
+                app.session_index.inode = stat.inode;
+                app.session_index.last_check = runtime.nowNanos();
             } else |_| {}
         } else |_| {}
     } else |_| {}

@@ -3,7 +3,8 @@ const objc = @import("objc.zig");
 const types = @import("../core/types.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
-const folder_colors = @import("../core/folder_colors.zig");
+const session_mod = @import("../index/session.zig");
+const user_state_mod = @import("../core/user_state.zig");
 const filters_mod = @import("../core/filters.zig");
 const query_parser = @import("../core/query_parser.zig");
 const search_mod = @import("../index/search.zig");
@@ -20,7 +21,7 @@ const c = @cImport({
 const FolderColorPreset = struct {
     title: []const u8,
     tag: i64,
-    color: folder_colors.FolderColor,
+    color: user_state_mod.FolderColor,
 };
 
 const folder_color_presets = [_]FolderColorPreset{
@@ -70,12 +71,43 @@ pub const AppState = struct {
     // The snapshot whose mmap'd bytes `rows` borrows into (name/dir_path slices
     // point straight at IndexReader.data). Held with the exact lifetime of `rows`
     // so a background index reload can't free the buffer out from under the table.
-    rows_snapshot: ?*app_mod.IndexSnapshot = null,
+    rows_snapshot: ?*session_mod.IndexSnapshot = null,
     sort: ?SortState = .{ .column = .name, .ascending = true },
     show_full_path: bool = false,
     /// Keep folders above files in the list regardless of sort column. On by
     /// default; toggle via View ▸ Keep Folders on Top. Session-only.
     folders_on_top: bool = true,
+
+    pub fn init(self: *AppState, allocator: std.mem.Allocator, app: *App) void {
+        self.* = .{
+            .app = app,
+            .allocator = allocator,
+            .async_search = async_search_mod.AsyncSearch.init(allocator, .{
+                .deliver = deliverSearchResults,
+                .ctx = self,
+            }),
+            .window_id = null,
+            .table_view = null,
+            .sidebar_view = null,
+            .search_field = null,
+            .path_field = null,
+            .category_popup = null,
+            .file_context_menu = null,
+            .sidebar_context_menu = null,
+            .debounce_timer = null,
+            .show_full_path_item = null,
+            .folders_on_top_item = null,
+            .empty_label = null,
+            .filter_bar = null,
+            .split_view = null,
+            .active_filters = null,
+            .rows = null,
+            .rows_snapshot = null,
+            .sort = .{ .column = .name, .ascending = true },
+            .show_full_path = false,
+            .folders_on_top = true,
+        };
+    }
 
     pub fn deinit(self: *AppState) void {
         // Cancel any in-flight background search
@@ -89,6 +121,20 @@ pub const AppState = struct {
         if (self.active_filters) |f| self.allocator.free(f);
     }
 };
+
+/// Delivery callback — called on the main thread by AsyncSearch with results.
+fn deliverSearchResults(ctx: *anyopaque, results: ?[]search_mod.SearchResult, snapshot: ?*session_mod.IndexSnapshot) void {
+    const s: *AppState = @ptrCast(@alignCast(ctx));
+    if (s.rows) |old| s.allocator.free(old);
+    if (s.rows_snapshot) |old| old.release();
+    s.rows = results;
+    s.rows_snapshot = snapshot;
+    if (results) |rows| {
+        if (s.sort) |srt| search_mod.sortResults(rows, srt.column, srt.ascending, s.folders_on_top);
+    }
+    updateEmptyState(s);
+    if (s.table_view) |tv| objc.msgSendVoid(tv, "reloadData");
+}
 
 pub var state: ?*AppState = null;
 
@@ -658,8 +704,8 @@ fn saveFilterAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callconv(.
             const name = objc.NSString.toSlice(s.allocator, name_ns) catch return;
             defer s.allocator.free(name);
             if (name.len > 0) {
-                s.app.filter_store.addSaved(name, query_text) catch return;
-                s.app.filter_store.save() catch {};
+                s.app.user_state.addSavedFilter(name, query_text) catch return;
+                s.app.user_state.saveFilters() catch {};
             }
         }
     }
@@ -1197,7 +1243,7 @@ const MenuTarget = struct {
     path: []const u8,
     is_dir: bool,
     is_pinned: bool,
-    color: ?folder_colors.FolderColor,
+    color: ?user_state_mod.FolderColor,
 };
 
 fn contextTargetForFileMenu(s: *AppState) ?MenuTarget {
@@ -1312,7 +1358,7 @@ fn addSeparator(menu: objc.id) void {
     objc.msgSendVoidWith1(objc.id, menu, "addItem:", separator);
 }
 
-fn addFolderColorSubmenu(menu: objc.id, path: []const u8, current_color: ?folder_colors.FolderColor, app_delegate: objc.id) void {
+fn addFolderColorSubmenu(menu: objc.id, path: []const u8, current_color: ?user_state_mod.FolderColor, app_delegate: objc.id) void {
     const NSMenu = objc.getClass("NSMenu") orelse return;
     const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
     const parent = objc.msgSendWith3(
@@ -1342,14 +1388,14 @@ fn appDelegate() objc.id {
     return objc.msgSend(NSApp, "delegate");
 }
 
-fn folderColorForTag(tag: i64) ?folder_colors.FolderColor {
+fn folderColorForTag(tag: i64) ?user_state_mod.FolderColor {
     for (folder_color_presets) |preset| {
         if (preset.tag == tag) return preset.color;
     }
     return null;
 }
 
-fn folderColorEqual(a: folder_colors.FolderColor, b: folder_colors.FolderColor) bool {
+fn folderColorEqual(a: user_state_mod.FolderColor, b: user_state_mod.FolderColor) bool {
     return a.red == b.red and a.green == b.green and a.blue == b.blue and a.alpha == b.alpha;
 }
 
@@ -1488,7 +1534,7 @@ fn rebuildFilterBarContent(s: *AppState, bar: objc.id, active: ?[]const filters_
         );
         if (popup != null) {
             objc.msgSendVoidWith1(objc.id, popup, "addItemWithTitle:", objc.NSString.fromSlice("Saved"));
-            const saved = s.app.filter_store.getSaved();
+            const saved = s.app.user_state.getSavedFilters();
             if (saved.len == 0) {
                 objc.msgSendVoidWith1(objc.id, popup, "addItemWithTitle:", objc.NSString.fromSlice("(none)"));
                 if (objc.msgSend(popup, "menu")) |menu| {
