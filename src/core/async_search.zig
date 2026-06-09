@@ -4,7 +4,7 @@ const filters_mod = @import("filters.zig");
 const search_mod = @import("../index/search.zig");
 const session_mod = @import("../index/session.zig");
 const IndexSnapshot = session_mod.IndexSnapshot;
-const objc = @import("../ui/objc.zig");
+const dispatch = @import("dispatch.zig");
 
 /// Callback the UI layer provides so AsyncSearch can deliver results
 /// without importing the UI module.
@@ -184,8 +184,8 @@ fn searchWorker(job: *SearchJob) void {
         .snapshot = job.snapshot.retain(),
     };
 
-    objc.dispatch_async_f(
-        objc.dispatch_get_main_queue(),
+    dispatch.dispatch_async_f(
+        dispatch.dispatch_get_main_queue(),
         @ptrCast(delivery),
         deliverResults,
     );
