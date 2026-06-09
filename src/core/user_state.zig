@@ -79,16 +79,33 @@ pub const UserState = struct {
     // -------------------------------------------------------------------------
 
     pub fn loadAll(self: *UserState) void {
-        self.loadPins() catch {};
-        self.loadFolderColors() catch {};
-        self.loadFilters() catch {};
-        self.loadConfig();
+        self.loadPins() catch |err| {
+            std.debug.print("warning: failed to load pins: {s}\n", .{@errorName(err)});
+        };
+        self.loadFolderColors() catch |err| {
+            if (err != error.FileNotFound)
+                std.debug.print("warning: failed to load folder colors: {s}\n", .{@errorName(err)});
+        };
+        self.loadFilters() catch |err| {
+            if (err != error.FileNotFound and err != error.NoPath)
+                std.debug.print("warning: failed to load filters: {s}\n", .{@errorName(err)});
+        };
+        self.loadConfig() catch |err| {
+            if (err != error.FileNotFound and err != error.NoPath)
+                std.debug.print("warning: failed to load config: {s}\n", .{@errorName(err)});
+        };
     }
 
     pub fn saveAll(self: *UserState) void {
-        self.savePins() catch {};
-        self.saveFolderColors() catch {};
-        self.saveFilters() catch {};
+        self.savePins() catch |err| {
+            std.debug.print("warning: failed to save pins: {s}\n", .{@errorName(err)});
+        };
+        self.saveFolderColors() catch |err| {
+            std.debug.print("warning: failed to save folder colors: {s}\n", .{@errorName(err)});
+        };
+        self.saveFilters() catch |err| {
+            std.debug.print("warning: failed to save filters: {s}\n", .{@errorName(err)});
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -403,11 +420,11 @@ pub const UserState = struct {
     // Config (terminal preference)
     // -------------------------------------------------------------------------
 
-    pub fn loadConfig(self: *UserState) void {
-        const fp = self.config_path orelse return;
-        const data = runtime.readFileAlloc(self.allocator, fp, .limited(1024 * 1024)) catch return;
+    pub fn loadConfig(self: *UserState) !void {
+        const fp = self.config_path orelse return error.NoPath;
+        const data = runtime.readFileAlloc(self.allocator, fp, .limited(1024 * 1024)) catch return error.FileNotFound;
         defer self.allocator.free(data);
-        self.parseConfigJson(data) catch {};
+        try self.parseConfigJson(data);
     }
 
     pub fn loadConfigFromString(self: *UserState, data: []const u8) !void {
