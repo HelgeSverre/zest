@@ -107,10 +107,13 @@ pub const SessionIndex = struct {
         const stat = std.Io.Dir.cwd().statFile(runtime.io, idx_path, .{}) catch return false;
         const current_inode = stat.inode;
 
+        // If we already hold this exact index, there is nothing to do. When
+        // `inode` is null we are seeing the file for the first time — which
+        // includes the cold-start case where the index was built *after*
+        // launch — so we fall through and load it. Returning false here would
+        // wedge the reader on stale/empty results until the next restart.
         if (self.inode) |prev_inode| {
             if (current_inode == prev_inode) return false;
-        } else {
-            return false;
         }
 
         const data = runtime.readFileAlloc(self.allocator, idx_path, .unlimited) catch return false;

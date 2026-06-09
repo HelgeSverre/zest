@@ -196,26 +196,31 @@ pub const UserState = struct {
         if (std.fs.path.dirname(fp)) |parent| try runtime.ensureDir(parent);
         const json = try self.pinsToJson();
         defer self.allocator.free(json);
-        try runtime.writeFileAbsolute(fp, json);
+        try runtime.writeFileAtomic(fp, json);
     }
 
     fn pinsToJson(self: UserState) ![]u8 {
-        var out: std.Io.Writer.Allocating = .init(self.allocator);
-        errdefer out.deinit();
-        const writer = &out.writer;
+        const a = self.allocator;
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(a);
 
-        try writer.writeAll("[\n");
+        try buf.appendSlice(a, "[\n");
         for (self.pins.items, 0..) |pin, i| {
-            try writer.print("  {{\"name\": \"{s}\", \"path\": \"{s}\", \"is_default\": {}}}", .{
-                pin.name,
-                pin.path,
-                pin.is_default,
-            });
-            if (i < self.pins.items.len - 1) try writer.writeAll(",");
-            try writer.writeAll("\n");
+            // Names and paths are user-supplied and macOS paths may contain
+            // `"` or `\`, so they must be JSON-escaped or parsePinsJson would
+            // reject the file on next load and silently drop every pin.
+            try buf.appendSlice(a, "  {\"name\": \"");
+            try appendJsonEscaped(&buf, a, pin.name);
+            try buf.appendSlice(a, "\", \"path\": \"");
+            try appendJsonEscaped(&buf, a, pin.path);
+            try buf.appendSlice(a, "\", \"is_default\": ");
+            try buf.appendSlice(a, if (pin.is_default) "true" else "false");
+            try buf.append(a, '}');
+            if (i < self.pins.items.len - 1) try buf.append(a, ',');
+            try buf.append(a, '\n');
         }
-        try writer.writeAll("]\n");
-        return out.toOwnedSlice();
+        try buf.appendSlice(a, "]\n");
+        return buf.toOwnedSlice(a);
     }
 
     pub fn addPin(self: *UserState, name: []const u8, path: []const u8) !void {
@@ -321,7 +326,7 @@ pub const UserState = struct {
         try jw.endObject();
         try out.writer.writeByte('\n');
 
-        try runtime.writeFileAbsolute(fp_fp, out.written());
+        try runtime.writeFileAtomic(fp_fp, out.written());
     }
 
     pub fn getFolderColor(self: *const UserState, path: []const u8) ?FolderColor {
@@ -390,7 +395,7 @@ pub const UserState = struct {
             buf.appendSlice(self.allocator, "\"}") catch return error.WriteError;
         }
         buf.appendSlice(self.allocator, "]}") catch return error.WriteError;
-        runtime.writeFileAbsolute(file_path, buf.items) catch return error.WriteError;
+        runtime.writeFileAtomic(file_path, buf.items) catch return error.WriteError;
     }
 
     pub fn getSavedFilters(self: *const UserState) []const SavedFilter {
@@ -610,6 +615,29 @@ test "UserState: pin add and remove" {
     try std.testing.expect(state.removePin("/Users/helge/code"));
     try std.testing.expectEqual(@as(usize, 1), state.getPins().len);
     try std.testing.expect(!state.removePin("/nonexistent"));
+}
+
+test "UserState: pinsToJson escapes quotes and backslashes and round-trips" {
+    var state = UserState.init(std.testing.allocator, null, null, null, null);
+    defer state.deinit();
+
+    try state.addPin("Weird \"Name\"", "/Users/helge/a\"b\\c");
+    try state.addPin("Plain", "/tmp/plain");
+
+    const json = try state.pinsToJson();
+    defer std.testing.allocator.free(json);
+
+    // The serialized form must parse back to identical pins; before escaping
+    // was added this produced invalid JSON and every custom pin was lost.
+    var loaded = UserState.init(std.testing.allocator, null, null, null, null);
+    defer loaded.deinit();
+    try loaded.loadPinsFromString(json);
+
+    const pins = loaded.getPins();
+    try std.testing.expectEqual(@as(usize, 2), pins.len);
+    try std.testing.expectEqualStrings("Weird \"Name\"", pins[0].name);
+    try std.testing.expectEqualStrings("/Users/helge/a\"b\\c", pins[0].path);
+    try std.testing.expectEqualStrings("/tmp/plain", pins[1].path);
 }
 
 test "UserState: load default pins" {

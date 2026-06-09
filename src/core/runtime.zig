@@ -54,6 +54,24 @@ pub fn writeFileAbsolute(path: []const u8, data: []const u8) !void {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data });
 }
 
+/// Durably and atomically replace the file at an absolute path with `data`.
+///
+/// Writes into a uniquely-named temp file in the destination directory,
+/// `fsync`s it, then `rename`s it over the target — so a crash, full disk, or
+/// concurrent writer can never leave a reader observing a torn/partial file.
+/// Prefer this over `writeFileAbsolute` for user state that must survive a
+/// mid-write failure (pins, filters, folder colors).
+pub fn writeFileAtomic(path: []const u8, data: []const u8) !void {
+    var af = try std.Io.Dir.cwd().createFileAtomic(io, path, .{
+        .replace = true,
+        .make_path = true,
+    });
+    defer af.deinit(io);
+    try af.file.writeStreamingAll(io, data);
+    try af.file.sync(io);
+    try af.replace(io);
+}
+
 /// Create a directory at an absolute path, treating "already exists" as success.
 pub fn ensureDir(path: []const u8) !void {
     std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch |err| switch (err) {

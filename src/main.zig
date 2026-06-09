@@ -76,12 +76,16 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(idx_path);
         if (std.Io.Dir.cwd().statFile(runtime.io, idx_path, .{})) |stat| {
             if (runtime.readFileAlloc(allocator, idx_path, .unlimited)) |data| {
-                app.session_index.load(data) catch {
+                if (app.session_index.load(data)) {
+                    // Only record the inode on a successful load. Seeding it
+                    // after a failed load would make checkForUpdate skip the
+                    // file (same inode) and never retry loading it.
+                    app.session_index.inode = stat.inode;
+                    app.session_index.last_check = runtime.nowNanos();
+                } else |_| {
                     allocator.free(data);
                     std.debug.print("warning: could not load index, search unavailable\n", .{});
-                };
-                app.session_index.inode = stat.inode;
-                app.session_index.last_check = runtime.nowNanos();
+                }
             } else |_| {}
         } else |_| {}
     } else |_| {}
