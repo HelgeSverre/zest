@@ -15,6 +15,9 @@ pub const IndexSnapshot = struct {
 
     pub fn create(allocator: std.mem.Allocator, data: []const u8) !*IndexSnapshot {
         const snap = try allocator.create(IndexSnapshot);
+        // IndexReader.init can fail on a malformed index; without this the
+        // snapshot struct leaks, once per failed load (every 5s poll).
+        errdefer allocator.destroy(snap);
         snap.* = .{
             .data = data,
             .reader = try reader_mod.IndexReader.init(allocator, data),

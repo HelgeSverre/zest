@@ -683,6 +683,9 @@ fn saveFilterAction(_self: objc.id, _cmd: objc.SEL, _sender: objc.id) callconv(.
     // Show save dialog using NSAlert with accessory text field
     const NSAlert = objc.getClass("NSAlert") orelse return;
     const alert = objc.init(objc.alloc(NSAlert));
+    // runModal is synchronous, so releasing on the way out balances the alloc;
+    // without this every Save Filter dialog leaks an NSAlert + its view tree.
+    defer objc.release(alert);
     objc.msgSendVoidWith1(objc.id, alert, "setMessageText:", objc.NSString.fromSlice("Save Filter"));
     objc.msgSendVoidWith1(objc.id, alert, "setInformativeText:", objc.NSString.fromSlice("Enter a name for this filter:"));
     _ = objc.msgSendWith1(objc.id, alert, "addButtonWithTitle:", objc.NSString.fromSlice("Save"));
