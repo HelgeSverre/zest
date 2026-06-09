@@ -271,12 +271,18 @@ pub fn parseSize(input: []const u8) !u64 {
     if (has_dot) {
         const value = std.fmt.parseFloat(f64, num_str) catch return error.InvalidSize;
         const multiplier: f64 = sizeMultiplier(suffix) orelse return error.InvalidSize;
-        return @intFromFloat(value * multiplier);
+        const product = value * multiplier;
+        // Reject inf/NaN and out-of-range products before @intFromFloat, which
+        // is illegal behavior (panic in safe builds) on such inputs.
+        if (!std.math.isFinite(product) or product < 0 or product >= @as(f64, @floatFromInt(std.math.maxInt(u64))))
+            return error.InvalidSize;
+        return @intFromFloat(product);
     }
 
     const value = std.fmt.parseInt(u64, num_str, 10) catch return error.InvalidSize;
     const multiplier = sizeMultiplierInt(suffix) orelse return error.InvalidSize;
-    return value * multiplier;
+    // A large value with a TiB multiplier overflows u64; never panic on input.
+    return std.math.mul(u64, value, multiplier) catch error.InvalidSize;
 }
 
 fn sizeMultiplier(suffix: []const u8) ?f64 {
@@ -353,7 +359,14 @@ fn parseDateString(input: []const u8) !i64 {
     const month = std.fmt.parseInt(i32, input[5..7], 10) catch return error.InvalidDate;
     const day = std.fmt.parseInt(i32, input[8..10], 10) catch return error.InvalidDate;
 
-    if (month < 1 or month > 12 or day < 1 or day > 31) return error.InvalidDate;
+    if (month < 1 or month > 12) return error.InvalidDate;
+    if (year < 1 or year > 9999) return error.InvalidDate;
+
+    // Reject impossible days (e.g. 2024-02-31) rather than silently producing a
+    // timestamp for a nonexistent date.
+    const is_leap = (@rem(year, 4) == 0 and @rem(year, 100) != 0) or @rem(year, 400) == 0;
+    const days_in_month = [_]i32{ 31, if (is_leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (day < 1 or day > days_in_month[@intCast(month - 1)]) return error.InvalidDate;
 
     // Days from epoch using the algorithm from http://howardhinnant.github.io/date_algorithms.html
     const m = month;
@@ -614,6 +627,25 @@ test "parseSize invalid" {
     try std.testing.expectError(error.InvalidSize, parseSize(""));
     try std.testing.expectError(error.InvalidSize, parseSize("abc"));
     try std.testing.expectError(error.InvalidSize, parseSize("1xx"));
+}
+
+test "parseSize overflow returns error instead of panicking" {
+    // Integer multiply overflow (u64).
+    try std.testing.expectError(error.InvalidSize, parseSize("99999999999999999tb"));
+    // Float path: inf and out-of-u64-range products.
+    try std.testing.expectError(error.InvalidSize, parseSize("1e400mb"));
+    try std.testing.expectError(error.InvalidSize, parseSize("99999999999999999.0tb"));
+}
+
+test "parseDate rejects impossible dates" {
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-02-31"));
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-04-31"));
+    try std.testing.expectError(error.InvalidDate, parseDate("2023-02-29")); // not a leap year
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-13-01"));
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-00-10"));
+    // Valid dates still parse, including a real leap day.
+    _ = try parseDate("2024-02-29");
+    _ = try parseDate("2024-12-31");
 }
 
 test "filter kind matches" {
