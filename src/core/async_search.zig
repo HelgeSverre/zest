@@ -43,8 +43,10 @@ pub const AsyncSearch = struct {
         max_depth: u32,
         max_results: u32,
     ) void {
-        _ = self.generation.fetchAdd(1, .release);
-        const my_gen = self.generation.load(.acquire);
+        // Single atomic: claim this submission's generation from the increment
+        // itself. The old fetchAdd-then-load let two concurrent submitters read
+        // the same post-increment value and collide on a generation.
+        const my_gen = self.generation.fetchAdd(1, .acq_rel) + 1;
 
         const job = self.allocator.create(SearchJob) catch {
             self.runSynchronousFallback(snapshot, query, category, filter_criteria, scope, max_depth, max_results);
@@ -191,6 +193,13 @@ fn searchWorker(job: *SearchJob) void {
     );
 }
 
+// Lifetime contract: this runs on the main queue and dereferences
+// `delivery.async_search`, which is a field embedded in the UI's AppState. A
+// block may still be queued when teardown happens, so AppState (and therefore
+// this AsyncSearch) MUST outlive any in-flight delivery. Today that holds
+// because the app is single-window and torn down only at process exit. If
+// per-window teardown is ever added, drain outstanding deliveries (e.g. an
+// atomic in-flight counter waited on in deinit) before freeing AppState.
 fn deliverResults(ctx: ?*anyopaque) callconv(.c) void {
     const delivery: *ResultDelivery = @ptrCast(@alignCast(ctx));
     defer delivery.allocator.destroy(delivery);

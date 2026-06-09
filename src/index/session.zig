@@ -33,8 +33,12 @@ pub const IndexSnapshot = struct {
     }
 
     pub fn release(self: *IndexSnapshot) void {
-        if (self.ref_count.fetchSub(1, .release) == 1) {
-            _ = self.ref_count.load(.acquire);
+        // acq_rel on the decrement: the release half publishes this thread's
+        // last use of the snapshot; the acquire half ensures the thread that
+        // drops the final reference observes every other thread's writes before
+        // running the destructor. The previous value-discarding `load(.acquire)`
+        // ordered nothing — a real use-after-free risk on ARM64 / Apple Silicon.
+        if (self.ref_count.fetchSub(1, .acq_rel) == 1) {
             var r = self.reader;
             r.deinit();
             self.allocator.free(self.data);

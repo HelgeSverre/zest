@@ -15,7 +15,13 @@ pub const FSEventsWatcher = struct {
     callback: FSEventCallback,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, watch_path: []const u8, callback: FSEventCallback) !FSEventsWatcher {
+    /// Initialize the watcher in place. The watcher must keep a stable address
+    /// for its whole lifetime: its pointer is handed to FSEvents as the stream
+    /// context `info` and the C callback recovers it from there. (Previously the
+    /// callback + allocator lived in module-level globals, so a second watcher
+    /// clobbered the first and a callback firing after deinit read dangling
+    /// state.)
+    pub fn init(self: *FSEventsWatcher, allocator: std.mem.Allocator, watch_path: []const u8, callback: FSEventCallback) !void {
         // Create CFString from path
         const cf_path = c.CFStringCreateWithBytes(
             null,
@@ -34,19 +40,23 @@ pub const FSEventsWatcher = struct {
         defer c.CFRelease(@ptrCast(cf_array));
         c.CFRelease(@ptrCast(cf_path));
 
-        // Store callback in a static so C callback can access it
-        callback_storage = callback;
-        allocator_storage = allocator;
+        self.* = .{
+            .stream = undefined,
+            .callback = callback,
+            .allocator = allocator,
+        };
 
+        // Pass the watcher through the per-stream context so the callback can
+        // recover its own state instead of reaching for a global.
         var context = c.FSEventStreamContext{
             .version = 0,
-            .info = null,
+            .info = self,
             .retain = null,
             .release = null,
             .copyDescription = null,
         };
 
-        const stream = c.FSEventStreamCreate(
+        self.stream = c.FSEventStreamCreate(
             null,
             streamCallback,
             &context,
@@ -55,12 +65,6 @@ pub const FSEventsWatcher = struct {
             2.0, // 2 second coalesce latency
             c.kFSEventStreamCreateFlagFileEvents | c.kFSEventStreamCreateFlagNoDefer,
         ) orelse return error.FSEventStreamCreateFailed;
-
-        return .{
-            .stream = stream,
-            .callback = callback,
-            .allocator = allocator,
-        };
     }
 
     pub fn start(self: *FSEventsWatcher) void {
@@ -82,20 +86,17 @@ pub const FSEventsWatcher = struct {
     }
 };
 
-// Static storage for C callback interop
-var callback_storage: ?FSEventCallback = null;
-var allocator_storage: ?std.mem.Allocator = null;
-
 fn streamCallback(
     _: c.ConstFSEventStreamRef,
-    _: ?*anyopaque,
+    info: ?*anyopaque,
     numEvents: usize,
     eventPaths: ?*anyopaque,
     _: [*c]const c.FSEventStreamEventFlags,
     _: [*c]const c.FSEventStreamEventId,
 ) callconv(.c) void {
-    const cb = callback_storage orelse return;
-    const alloc = allocator_storage orelse return;
+    const self: *FSEventsWatcher = @ptrCast(@alignCast(info orelse return));
+    const cb = self.callback;
+    const alloc = self.allocator;
 
     const paths_ptr: [*]const [*:0]const u8 = @ptrCast(@alignCast(eventPaths));
 

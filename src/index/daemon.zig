@@ -12,14 +12,16 @@ const c = @cImport({
     @cInclude("CoreFoundation/CoreFoundation.h");
 });
 
-/// Accumulated FSEvents dirty paths, accessed from the run-loop callback.
-var dirty_count: usize = 0;
+/// Accumulated FSEvents dirty paths. Bumped from the run-loop callback and
+/// read/reset from the watch loop; atomic so the access is well-defined even if
+/// FSEvents ever delivers the callback off the run-loop thread.
+var dirty_count = std.atomic.Value(usize).init(0);
 
 /// FSEvents callback — just bump the dirty counter.
 /// We do a full rebuild anyway, so we don't need to track individual paths.
 fn onFSEvent(paths: []const []const u8) void {
-    dirty_count += paths.len;
-    if (dirty_count >= event_threshold) {
+    const total = dirty_count.fetchAdd(paths.len, .monotonic) + paths.len;
+    if (total >= event_threshold) {
         // Poke the run loop so CFRunLoopRunInMode returns early
         c.CFRunLoopStop(c.CFRunLoopGetCurrent());
     }
@@ -183,7 +185,8 @@ fn uninstall(allocator: std.mem.Allocator) !void {
 fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
     std.debug.print("Starting FSEvents watcher on {s}...\n", .{root});
 
-    var watcher = try fsevents.FSEventsWatcher.init(allocator, root, onFSEvent);
+    var watcher: fsevents.FSEventsWatcher = undefined;
+    try watcher.init(allocator, root, onFSEvent);
     defer watcher.deinit();
 
     watcher.start();
@@ -205,10 +208,11 @@ fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
         const elapsed = now - last_rebuild;
         const since_full_rescan = now - last_full_rescan;
 
+        const dc = dirty_count.load(.monotonic);
         const daily_rescan_due = since_full_rescan >= daily_rescan_ns;
         const should_rebuild = daily_rescan_due or
-            (dirty_count >= event_threshold) or
-            (dirty_count > 0 and elapsed >= rebuild_interval_ns);
+            (dc >= event_threshold) or
+            (dc > 0 and elapsed >= rebuild_interval_ns);
 
         if (should_rebuild) {
             if (daily_rescan_due) {
@@ -217,12 +221,12 @@ fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
                 });
             } else {
                 std.debug.print("Rebuilding index ({d} events, {d}s since last rebuild)...\n", .{
-                    dirty_count,
+                    dc,
                     @divTrunc(elapsed, std.time.ns_per_s),
                 });
             }
 
-            dirty_count = 0;
+            dirty_count.store(0, .monotonic);
 
             runFullScan(allocator, root) catch |err| {
                 std.debug.print("error: rebuild failed: {}\n", .{err});
