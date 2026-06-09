@@ -203,8 +203,15 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
         var off: usize = 0;
         var i: usize = 0;
         while (i < count) : (i += 1) {
+            // This parses the getattrlistbulk ABI by hand with fixed offsets, so
+            // bound every read against the returned buffer and the entry's own
+            // declared length — a kernel/FS layout change must stop the walk,
+            // not read stack garbage into a filename.
+            if (off + 4 > buf.len) break;
             const entry = buf[off..];
             const entry_len = std.mem.readInt(u32, entry[0..4], .little);
+            // 44 covers the fixed reads through MODTIME (entry[36..44]).
+            if (entry_len < 44 or off + entry_len > buf.len) break;
 
             // Fixed common-group layout (RETURNED_ATTRS always returns
             // NAME/OBJTYPE/MODTIME). DATALENGTH (file group) is present only when
@@ -214,16 +221,21 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             const name_len = std.mem.readInt(u32, entry[28..][0..4], .little);
             const objtype = std.mem.readInt(u32, entry[32..][0..4], .little);
             const mtime = std.mem.readInt(i64, entry[36..][0..8], .little); // timespec.tv_sec
-            const size: u64 = if (ret_fileattr & ATTR_FILE_DATALENGTH != 0)
+            const size: u64 = if (ret_fileattr & ATTR_FILE_DATALENGTH != 0 and entry_len >= 60)
                 std.mem.readInt(u64, entry[52..][0..8], .little)
             else
                 0;
 
-            const name_start: usize = @intCast(@as(i64, 24) + name_dataoff);
+            off += entry_len;
+
+            // name_dataoff is relative to the attr-ref field at offset 24;
+            // validate the resulting slice lies inside this entry before reading.
+            const name_field_base: i64 = 24 + @as(i64, name_dataoff);
+            if (name_field_base < 0) continue;
+            const name_start: usize = @intCast(name_field_base);
+            if (name_start + name_len > entry_len) continue;
             var name = entry[name_start..][0..name_len];
             if (name.len > 0 and name[name.len - 1] == 0) name = name[0 .. name.len - 1];
-
-            off += entry_len;
 
             if (config.shouldExclude(name)) continue;
             if (name.len > 0 and name[0] == '.') continue;

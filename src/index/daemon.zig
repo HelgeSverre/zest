@@ -244,24 +244,20 @@ fn runFullScan(allocator: std.mem.Allocator, root: []const u8) !void {
     const index_data = try builder.buildIndex(allocator, root);
     defer allocator.free(index_data);
 
-    // Write to tmp file, then atomic rename
     const idx_path = try config.indexPath(allocator);
     defer allocator.free(idx_path);
-
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{idx_path});
-    defer allocator.free(tmp_path);
 
     // Ensure parent directory exists
     const parent = std.fs.path.dirname(idx_path) orelse return error.NoParentDir;
     try runtime.ensureDir(parent);
 
-    // Write tmp, then atomic rename
+    // Durable, atomic publish: write into a uniquely-named temp in the same
+    // directory, fsync it, then rename over the index. The unique temp name
+    // avoids the fixed-".tmp" collision two indexer processes would hit, and the
+    // fsync closes the torn-index-on-power-loss window the plain write left open.
     const t_write = runtime.nowNanos();
-    try runtime.writeFileAbsolute(tmp_path, index_data);
-
-    // Atomic rename
-    std.Io.Dir.renameAbsolute(tmp_path, idx_path, runtime.io) catch |err| {
-        std.debug.print("error: failed to rename index: {}\n", .{err});
+    runtime.writeFileAtomic(idx_path, index_data) catch |err| {
+        std.debug.print("error: failed to write index: {}\n", .{err});
         return err;
     };
 

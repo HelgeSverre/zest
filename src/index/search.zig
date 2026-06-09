@@ -218,11 +218,17 @@ fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, num_entri
     const offsets_start = names_start;
     const data = reader.data;
 
+    // The binary search below indexes the offsets (u32×N) and lengths (u16×N)
+    // arrays with disk-derived positions. Bound both to the buffer once so a
+    // truncated/corrupt index fails to null instead of reading out of bounds.
+    const lengths_start = offsets_start + @as(usize, num_entries) * 4;
+    if (lengths_start + @as(usize, num_entries) * 2 > data.len) return null;
+
     var lo: u32 = 0;
     var hi: u32 = num_entries;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        const off = std.mem.readInt(u32, data[offsets_start + mid * 4 ..][0..4], .little);
+        const off = std.mem.readInt(u32, data[offsets_start + @as(usize, mid) * 4 ..][0..4], .little);
         if (off <= blob_pos) {
             lo = mid + 1;
         } else {
@@ -233,9 +239,8 @@ fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, num_entri
     if (lo == 0) return null;
     const entry_idx = lo - 1;
 
-    const entry_offset = std.mem.readInt(u32, data[offsets_start + entry_idx * 4 ..][0..4], .little);
-    const lengths_start = offsets_start + num_entries * 4;
-    const entry_len = std.mem.readInt(u16, data[lengths_start + entry_idx * 2 ..][0..2], .little);
+    const entry_offset = std.mem.readInt(u32, data[offsets_start + @as(usize, entry_idx) * 4 ..][0..4], .little);
+    const entry_len = std.mem.readInt(u16, data[lengths_start + @as(usize, entry_idx) * 2 ..][0..2], .little);
 
     if (blob_pos >= entry_offset and blob_pos + 1 <= entry_offset + entry_len) {
         return entry_idx;
@@ -369,6 +374,39 @@ fn buildTestIndex(allocator: std.mem.Allocator) !struct { data: []u8, reader: re
     const data = try format.writeIndex(allocator, &test_entries);
     const reader = try reader_mod.IndexReader.init(allocator, data);
     return .{ .data = data, .reader = reader };
+}
+
+test "truncated index degrades gracefully instead of panicking" {
+    const allocator = std.testing.allocator;
+    const full = try format.writeIndex(allocator, &test_entries);
+    defer allocator.free(full);
+
+    // Truncate the index to every possible length and exercise every accessor
+    // that reads disk-controlled offsets/lengths. A short or corrupt index must
+    // return null/empty, never trigger an out-of-bounds panic.
+    var len: usize = 0;
+    while (len <= full.len) : (len += 1) {
+        var reader = reader_mod.IndexReader.init(allocator, full[0..len]) catch continue;
+        defer reader.deinit();
+
+        var idx: u32 = 0;
+        while (idx < @as(u32, @intCast(test_entries.len)) + 2) : (idx += 1) {
+            _ = reader.getName(idx);
+            _ = reader.getDirPath(idx);
+            _ = reader.getMeta(idx);
+            _ = reader.getParentId(idx);
+        }
+        _ = reader.findDirId("/home/user/docs");
+
+        var hist: [types.FileCategory.count]u32 = undefined;
+        reader.getFolderHistogram(0, &hist);
+
+        var ext_buf: [8]reader_mod.IndexReader.ExtCount = undefined;
+        _ = reader.getFolderExtBreakdown(0, 0, &ext_buf);
+
+        if (search(allocator, &reader, .{ .query = "report" })) |r| allocator.free(r) else |_| {}
+        if (search(allocator, &reader, .{ .query = "", .scope = "/home/user", .max_depth = 1 })) |r| allocator.free(r) else |_| {}
+    }
 }
 
 test "search text only" {

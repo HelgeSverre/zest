@@ -201,6 +201,7 @@ fn markSubtreeDirs(header: format.Header, data: []const u8, scope_path: []const 
     const num = in_subtree.len;
     const parent_ids_start: usize = @intCast(header.paths_offset);
     const dir_count_offset = parent_ids_start + @as(usize, @intCast(header.num_entries)) * 4;
+    if (dir_count_offset + 4 > data.len) return false;
     const dir_count = std.mem.readInt(u32, data[dir_count_offset..][0..4], .little);
     const dir_offsets_start = dir_count_offset + 4;
     const dir_blob_len_pos = dir_offsets_start + dir_count * 4;

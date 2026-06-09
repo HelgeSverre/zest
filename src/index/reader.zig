@@ -61,6 +61,11 @@ pub const IndexReader = struct {
         const blob_len = std.mem.readInt(u32, self.data[blob_len_start..][0..4], .little);
         const blob_start = blob_len_start + 4;
 
+        // blob_len comes from disk; bound it to the buffer before trusting it
+        // (mirrors getLowerNameBlob). Otherwise a corrupt blob_len lets a large
+        // name_offset slip past the end-check below and read out of bounds.
+        if (blob_start + blob_len > self.data.len) return null;
+
         const name_offset = std.mem.readInt(u32, self.data[offsets_start + idx * 4 ..][0..4], .little);
         const name_length = std.mem.readInt(u16, self.data[lengths_start + idx * 2 ..][0..2], .little);
 
@@ -300,16 +305,16 @@ pub const IndexReader = struct {
 
         var i: usize = 0;
         var p: usize = ext_start;
-        while (p < ext_end and i < out.len) : (i += 1) {
+        while (p < ext_end and i < out.len) {
             const len = self.data[p];
             p += 1;
             // Skip overflow ext names defensively (a stale or malformed
             // index written before the 15-byte cap shouldn't crash the
-            // sidebar). We still advance past the entry, so the bucket
-            // walker stays in sync.
+            // sidebar). We advance past the entry but leave `i` untouched so
+            // the output index stays valid — the previous `i -= 1` underflowed
+            // usize (and panicked in safe builds) when the first ext overflowed.
             if (len > MAX_EXT_NAME_LEN) {
                 p += len + 4;
-                i -= 1;
                 continue;
             }
             const name_src = self.data[p..@intCast(p + len)];
@@ -323,6 +328,7 @@ pub const IndexReader = struct {
             };
             @memcpy(row.name[0..len], name_src);
             out[i] = row;
+            i += 1;
         }
         return i;
     }
