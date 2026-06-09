@@ -113,7 +113,7 @@ private final class ScopeControl: NSView {
     for (scope, title, symbol) in defs {
       let seg = Segment(title: title, symbol: symbol) {
         [weak self] in
-        self?.coordinator.scope = scope  // fires onResultsChange → filterBar.refresh()
+        self?.coordinator.scope = scope  // fires onChange → filterBar.refresh()
       }
       seg.scope = scope
       segments.append(seg)

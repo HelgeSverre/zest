@@ -90,25 +90,13 @@ final class RootViewController: NSViewController {
     ]
     NSLayoutConstraint.activate(c)
 
-    // The coordinator is the single source of truth. Navigation (toolbar,
-    // sidebar, breadcrumb, double-click) resets the query+scope, then refreshes
-    // every observer — toolbar clears the search field, filter bar resets to
-    // "This folder" + recomputes the count.
+    // The coordinator is the single source of truth. Any state change —
+    // navigation, query text, scope, or sort — refreshes every observer.
     coordinator.onChange = { [weak self] in
       guard let self else { return }
       self.browser.reload()
       self.toolbar.refresh()
       self.filterBar.refresh()
-      self.sidebar.refresh()
-      self.statusBar.refresh()
-    }
-    // Query/scope/sort changes (search field, scope control, header click)
-    // refresh the list + count + filter bar without a full navigation.
-    coordinator.onResultsChange = { [weak self] in
-      guard let self else { return }
-      self.browser.reload()
-      self.filterBar.refresh()
-      self.toolbar.refresh()
       self.sidebar.refresh()
       self.statusBar.refresh()
     }

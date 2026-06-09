@@ -83,7 +83,7 @@ final class ZestCore {
   }
 
   /// 9-element per-category counts for the given scope. Indexed 0-8 by
-  /// `core.FileCategory` (matches `Category.byIndex` on the Swift side).
+  /// `core.FileCategory` (matches `Category.all` on the Swift side).
   /// O(1) at `maxDepth == 1` (per-folder block read); O(D) for deeper scopes
   /// (subtree sum). Returns zeros if the scope is not in the index.
   func histogram(scope: String, maxDepth: UInt32) -> [Int] {
@@ -97,7 +97,7 @@ final class ZestCore {
   /// Top-N extensions for the (scope, category) pair. Returns `(name, count)`
   /// rows sorted by count descending, truncated to `max`. Empty if the scope
   /// is not in the index or the category has no entries. `cat` is a
-  /// `FileCategory` enum value (0-8, matches `Category.byIndex`).
+  /// `FileCategory` enum value (0-8, matches `Category.all`).
   /// O(1) at `maxDepth == 1`; O(D) for deeper scopes (subtree merge).
   func extBreakdown(scope: String, maxDepth: UInt32, cat: UInt8, max: Int) -> [(
     name: String, count: Int

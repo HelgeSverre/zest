@@ -116,7 +116,7 @@ final class SearchField: NSView {
     field.stringValue = ""
     settingProgrammatically = false
     clearButton.isHidden = true
-    coordinator.queryText = ""  // fires onResultsChange via didSet
+    coordinator.queryText = ""  // fires onChange via didSet
   }
 
   /// Debounced push of the field's text to the coordinator + auto-scope switch.
@@ -134,9 +134,9 @@ final class SearchField: NSView {
     // Typing into a folder-scoped search should search the subtree; leave an
     // explicit Everywhere scope alone.
     if !text.isEmpty, coordinator.scope == .folder {
-      coordinator.scope = .subfolders  // fires onResultsChange
+      coordinator.scope = .subfolders  // fires onChange
     }
-    coordinator.queryText = text  // fires onResultsChange
+    coordinator.queryText = text  // fires onChange
   }
 
   // MARK: Focus ring

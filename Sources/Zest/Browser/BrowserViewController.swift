@@ -476,7 +476,7 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
 
   /// Header clicks drive the client-side sort: clicking the active column flips
   /// direction, clicking another column switches to it (ascending). The
-  /// coordinator's `onResultsChange` triggers a reload through RootViewController.
+  /// coordinator's `onChange` triggers a reload through RootViewController.
   func tableView(_: NSTableView, didClick tableColumn: NSTableColumn) {
     guard let col = Self.sortColumn(forID: tableColumn.identifier) else {
       return

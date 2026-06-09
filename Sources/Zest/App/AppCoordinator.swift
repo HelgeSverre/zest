@@ -9,7 +9,7 @@ import AppKit
 /// lossless. Mirrors the Zig `query_parser` tokenize-on-space semantics.
 struct Filter: Equatable {
   /// Canonical lowercased query key (e.g. "code", "images"). Matches the
-  /// `Category.byIndex` `queryKey` field and the Zig `parseCategory` values.
+  /// `Category.all` `queryKey` field and the Zig `parseCategory` values.
   var category: String?
   /// One or more `ext:<e>` filters. Currently the UI only sets one at a time.
   var extensions: Set<String> = []
@@ -56,7 +56,7 @@ struct Filter: Equatable {
 
 /// Owns the index handle + current scope path + back/forward history, and the
 /// one query that drives the file list. Toolbar, sidebar, and browser all talk
-/// to this; `onChange` fires after any navigation so observers refresh.
+/// to this; `onChange` fires after any state change so observers refresh.
 final class AppCoordinator {
   /// Where the query runs from + how deep it reaches.
   enum Scope { case folder, subfolders, everywhere }
@@ -69,18 +69,10 @@ final class AppCoordinator {
   private var backStack: [String] = []
   private var forwardStack: [String] = []
 
-  /// Fired after currentPath changes (navigate/back/forward/up).
+  /// Fired after any state change — navigation, query, scope, or sort — so
+  /// observers refresh. The sidebar internally caches the histogram and only
+  /// recomputes it when the folder context (path + scope) actually changes.
   var onChange: (() -> Void)?
-
-  /// Fired when the query model (text / scope / sort) changes without a
-  /// navigation, so the list + count + filter bar refresh in place.
-  var onResultsChange: (() -> Void)?
-
-  /// Fired when the *folder context* changes — navigation, or the scope
-  /// selector (the latter implies a different depth/root). Observers that
-  /// only care about "which folder is active" subscribe here instead of
-  /// `onResultsChange`, so per-keystroke text updates don't re-trigger them.
-  var onFolderChange: (() -> Void)?
 
   /// The live query string. Empty == browse mode (subject to scope).
   /// Computed over `filter` — setting it parses the string into a `Filter`
@@ -103,19 +95,16 @@ final class AppCoordinator {
   var filter: Filter = .init() {
     didSet {
       guard filter != oldValue else { return }
-      fireResultsChange()
+      notifyChange()
     }
   }
 
-  /// Search root + depth selector. Changing scope is a *folder-context* change
-  /// — it implies a different (root, depth) pair for both the query and the
-  /// sidebar histogram — so it fires `onFolderChange` in addition to
-  /// `onResultsChange`.
+  /// Search root + depth selector. Changing scope implies a different (root,
+  /// depth) pair for both the query and the sidebar histogram.
   var scope: Scope = .folder {
     didSet {
       guard scope != oldValue else { return }
-      onFolderChange?()
-      fireResultsChange()
+      notifyChange()
     }
   }
 
@@ -123,22 +112,15 @@ final class AppCoordinator {
   var sortColumn: SortColumn = .name {
     didSet {
       guard sortColumn != oldValue else { return }
-      fireResultsChange()
+      notifyChange()
     }
   }
   var sortAscending: Bool = true {
     didSet {
       guard sortAscending != oldValue else { return }
-      fireResultsChange()
+      notifyChange()
     }
   }
-
-  /// The query key for the active category, if any. Sidebar reads this to
-  /// decide which row to highlight; equivalent to `filter.category`.
-  var activeCategoryQueryKey: String? { filter.category }
-
-  /// The active extension filter, if any. Equivalent to `filter.extensions.first`.
-  var activeExtensionFilter: String? { filter.extensions.first }
 
   /// Where the query/sidebar histogram run from. Single source of truth so the
   /// file list and the sidebar can't disagree on scope semantics.
@@ -158,6 +140,13 @@ final class AppCoordinator {
     }
   }
 
+  /// True when the list should render search affordances (two-line rows, the
+  /// "results" count label): a non-empty query OR a non-folder scope.
+  var isSearchMode: Bool { !queryText.isEmpty || scope != .folder }
+
+  var canGoBack: Bool { !backStack.isEmpty }
+  var canGoForward: Bool { !forwardStack.isEmpty }
+
   init() {
     let fm = FileManager.default
     let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -167,21 +156,16 @@ final class AppCoordinator {
     self.currentPath = fm.homeDirectoryForCurrentUser.path
   }
 
-  /// True when the list should render search affordances (two-line rows, the
-  /// "results" count label): a non-empty query OR a non-folder scope.
-  var isSearchMode: Bool { !queryText.isEmpty || scope != .folder }
+  // MARK: - Navigation
 
-  var canGoBack: Bool { !backStack.isEmpty }
-  var canGoForward: Bool { !forwardStack.isEmpty }
   func navigate(to path: String) {
-    let resolved = AppCoordinator.resolve(path, relativeTo: currentPath)
+    let resolved = Self.resolve(path, relativeTo: currentPath)
     guard isDirectory(resolved), resolved != currentPath else { return }
     backStack.append(currentPath)
     forwardStack.removeAll()
     currentPath = resolved
     resetQueryForNavigation()
     onChange?()
-    onFolderChange?()
   }
 
   func goBack() {
@@ -190,7 +174,6 @@ final class AppCoordinator {
     currentPath = p
     resetQueryForNavigation()
     onChange?()
-    onFolderChange?()
   }
 
   func goForward() {
@@ -199,115 +182,101 @@ final class AppCoordinator {
     currentPath = p
     resetQueryForNavigation()
     onChange?()
-    onFolderChange?()
   }
+
   func goUp() {
     let parent = (currentPath as NSString).deletingLastPathComponent
     navigate(to: parent.isEmpty ? "/" : parent)
   }
 
   /// A folder change clears any active search: empty query + This-folder scope.
-  /// Sort is preserved. Set silently (no `onResultsChange`) because the caller
-  /// fires `onChange`, which already refreshes all observers from this state.
+  /// Sort is preserved. Set silently (no `onChange`) because the caller fires
+  /// `onChange` once after the reset.
   private func resetQueryForNavigation() {
-    suppressResultsChange = true
-    queryText = ""
-    scope = .folder
-    suppressResultsChange = false
+    withoutNotifying {
+      queryText = ""
+      scope = .folder
+    }
   }
 
-  /// Set during a navigation reset so the property `didSet`s don't double-fire
-  /// `onResultsChange` (navigation refreshes via `onChange`).
-  private var suppressResultsChange = false
+  /// Suppresses `notifyChange()` during the block so multi-property updates
+  /// (e.g. navigation resets) fire only one callback.
+  private var suppressChange = false
 
-  private func fireResultsChange() {
-    guard !suppressResultsChange else { return }
-    onResultsChange?()
+  private func notifyChange() {
+    guard !suppressChange else { return }
+    onChange?()
   }
 
-  /// One index query for the current folder (depth-1 listing), folders first.
-  /// Kept for callers that want the plain browse listing; the file list itself
-  /// uses `results()` so search/scope/sort flow through one path.
-  func currentListing() -> [ZestCore.Row] {
-    results()
+  private func withoutNotifying(_ block: () -> Void) {
+    suppressChange = true
+    block()
+    suppressChange = false
   }
+
+  // MARK: - Query
 
   /// The query that drives the file list: honours `queryText`, `scope`, and the
   /// active sort. Scope maps to (root, depth); sorting is client-side.
   func results() -> [ZestCore.Row] {
     guard let core else { return [] }
-
     var rows = core.query(queryText, scope: scopeRoot, maxDepth: scopeDepth, maxResults: 100_000)
-    sort(&rows)
+    applySort(to: &rows)
     return rows
   }
 
+  // MARK: - Sorting
+
   /// Apply the active sort column/direction. `.name` ascending keeps folders
   /// first (the browse default); other columns sort purely by their key.
-  private func sort(_ rows: inout [ZestCore.Row]) {
+  private func applySort(to rows: inout [ZestCore.Row]) {
     let asc = sortAscending
-    func dir(_ ordered: Bool) -> Bool { asc ? ordered : !ordered }
+
+    func nameTieBreak(_ a: ZestCore.Row, _ b: ZestCore.Row) -> Bool {
+      a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+    }
+    func ascending(_ less: Bool) -> Bool { asc ? less : !less }
 
     switch sortColumn {
     case .name:
       rows.sort { a, b in
-        if asc {  // folders-first only in the natural ascending browse order
+        if asc {
           let ad = a.kind == 1
           let bd = b.kind == 1
           if ad != bd { return ad }
         }
         let cmp = a.name.localizedCaseInsensitiveCompare(b.name)
         if cmp == .orderedSame { return false }
-        return dir(cmp == .orderedAscending)
+        return ascending(cmp == .orderedAscending)
       }
     case .size:
       rows.sort { a, b in
-        if a.size == b.size {
-          return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-        return dir(a.size < b.size)
+        if a.size == b.size { return nameTieBreak(a, b) }
+        return ascending(a.size < b.size)
       }
     case .modified:
       rows.sort { a, b in
-        if a.mtime == b.mtime {
-          return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-        return dir(a.mtime < b.mtime)
+        if a.mtime == b.mtime { return nameTieBreak(a, b) }
+        return ascending(a.mtime < b.mtime)
       }
     case .kind:
       rows.sort { a, b in
         let ka = Category.meta(kind: a.kind, category: a.category).label
         let kb = Category.meta(kind: b.kind, category: b.category).label
         let cmp = ka.localizedCaseInsensitiveCompare(kb)
-        if cmp == .orderedSame {
-          return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-        return dir(cmp == .orderedAscending)
+        if cmp == .orderedSame { return nameTieBreak(a, b) }
+        return ascending(cmp == .orderedAscending)
       }
     case .ext:
       rows.sort { a, b in
-        let ea = AppCoordinator.ext(of: a)
-        let eb = AppCoordinator.ext(of: b)
-        let cmp = ea.localizedCaseInsensitiveCompare(eb)
-        if cmp == .orderedSame {
-          return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-        return dir(cmp == .orderedAscending)
+        let cmp = a.fileExtension.localizedCaseInsensitiveCompare(b.fileExtension)
+        if cmp == .orderedSame { return nameTieBreak(a, b) }
+        return ascending(cmp == .orderedAscending)
       }
     }
   }
 
-  /// Lowercased extension of a row's name, or "" for directories / extensionless.
-  private static func ext(of r: ZestCore.Row) -> String {
-    guard r.kind != 1 else { return "" }
-    guard let dot = r.name.lastIndex(of: "."), dot != r.name.startIndex else { return "" }
-    return r.name[r.name.index(after: dot)...].lowercased()
-  }
-
-  private func isDirectory(_ path: String) -> Bool {
-    var isDir: ObjCBool = false
-    return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
-  }
+  // MARK: - Path helpers
 
   /// Resolve ~, ~/…, absolute, or relative-to-base (mirrors the engine's resolveEnteredPath).
   static func resolve(_ raw: String, relativeTo base: String) -> String {
@@ -317,5 +286,21 @@ final class AppCoordinator {
     if p.hasPrefix("~/") { p = home + String(p.dropFirst(1)) }
     if !p.hasPrefix("/") { p = (base as NSString).appendingPathComponent(p) }
     return (p as NSString).standardizingPath
+  }
+
+  private func isDirectory(_ path: String) -> Bool {
+    var isDir: ObjCBool = false
+    return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+  }
+}
+
+// MARK: - Row helpers
+
+extension ZestCore.Row {
+  /// Lowercased extension of the name, or "" for directories / extensionless.
+  var fileExtension: String {
+    guard kind != 1 else { return "" }
+    guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "" }
+    return name[name.index(after: dot)...].lowercased()
   }
 }
