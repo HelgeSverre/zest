@@ -174,24 +174,24 @@ Default pins: Home, Desktop, Documents, Downloads. Custom pins are persisted to 
 
 ## Architecture
 
-> The current architecture is documented at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a self-contained SVG diagram at [docs/architecture.html](docs/architecture.html). The mermaid block below describes the legacy Zig UI; the Swift app links `libzest-core.a` (a static lib with the same reader + search code shown here) and mmaps the same `index.zst`.
+> The current architecture is documented at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a self-contained SVG diagram at [docs/architecture.html](docs/architecture.html). The mermaid block below describes the Zig UI; the Swift app links `libzest-core.a` (a static lib with the same reader + search code shown here) and mmaps the same `index.zst`.
 
 ```mermaid
 graph TB
     subgraph "zest binary"
         Main[main.zig<br/>CLI entry] --> UI[ui/<br/>AppKit window]
-        UI --> App[app.zig<br/>Controller]
+        UI --> App[app.zig<br/>Slim controller]
         App --> Nav[navigator.zig<br/>Back/Forward/Up]
-        App --> Pins[pins.zig]
-        App --> Colors[folder_colors.zig]
-        App --> FStore[filter_store.zig<br/>Saved filters]
+        App --> US[user_state.zig<br/>Pins, colors, filters, config]
+        App --> SI[session.zig<br/>Index lifecycle + snapshots]
         App --> AS[async_search.zig<br/>Background queries]
-        App --> IR[reader.zig<br/>Index reader]
         App --> FS[fs_provider.zig<br/>Vtable interface]
         FS --> RealFs[real_fs.zig]
         FS --> FakeFs[fake_fs.zig<br/>Tests only]
         AS --> Search[search.zig]
-        Search --> IR
+        AS --> Dispatch[dispatch.zig<br/>GCD helpers]
+        Search --> IR[reader.zig<br/>O(1) index access]
+        Search --> ST[subtree.zig<br/>O(D) subtree walks]
         IR --> Bitmap[bitmap.zig]
     end
 
@@ -207,12 +207,15 @@ graph TB
         Config[config.zig<br/>Paths & excludes]
         Types[types.zig]
         FT[file_types.zig<br/>Extension map]
+        Filters[filters.zig<br/>Query parsing + matching]
     end
 
     IR -.->|mmap read| Index
     Builder -.->|atomic write| Index
     App --> Config
     Daemon --> Config
+    AS --> Filters
+    Search --> Filters
 ```
 
 ### Design decisions
@@ -223,6 +226,8 @@ graph TB
 - **ObjC runtime bridge:** Direct `@cImport("objc/runtime.h")` with typed `objc_msgSend` wrappers — no external dependencies for AppKit interop.
 - **Unmanaged ArrayLists:** Zig 0.16 `std.ArrayList` is unmanaged (allocator passed per-call), which we use throughout.
 - **Centralized `Io` handle:** Zig 0.16 routes filesystem, clock, and process access through an `Io` instance handed to `main`. We stash it once in `core/runtime.zig` (alongside small `readFileAlloc`/`writeFileAbsolute`/`ensureDir` helpers) rather than threading it through every signature — the same global-state pattern the UI uses for `delegate.state`.
+- **Deep modules over shallow ones:** Consolidated `PinManager`, `FolderColorManager`, and `FilterStore` into `UserState` (one module, batch load/save). Extracted `SessionIndex` for index lifecycle. Moved subtree computations out of `IndexReader` into `subtree.zig`. Filter parsing lives with `FilterCriterion` in `filters.zig`. Each module earns its keep by concentrating complexity, not just moving it.
+- **Callback-based async delivery:** `AsyncSearch` receives a `SearchDelivery` callback at construction time so the core layer never imports UI code. GCD dispatch helpers live in `core/dispatch.zig`.
 
 ## Project Structure
 
@@ -230,7 +235,7 @@ graph TB
 src/
 ├── main.zig              # CLI entry: arg parsing, --benchmark / --benchmark-list, launches the GUI
 ├── indexer_main.zig      # Daemon entry point (sets up runtime, delegates to daemon.zig)
-├── app.zig               # App controller (navigator, pins, folder colors, saved filters, index reader)
+├── app.zig               # Slim controller (navigator, user_state, session_index, fs provider)
 ├── test_root.zig         # Test root importing all modules with embedded tests
 ├── core/
 │   ├── types.zig          # FileKind, FileCategory, FileEntry, Pin, SearchResult, DirListing
@@ -239,21 +244,21 @@ src/
 │   ├── fake_fs.zig        # In-memory fake for tests
 │   ├── file_types.zig     # Extension → category mapping (80+ extensions)
 │   ├── navigator.zig      # Path navigation with back/forward/up history
-│   ├── pins.zig           # Pinned folders, JSON persistence
-│   ├── folder_colors.zig  # Per-folder color tags, JSON persistence
-│   ├── filters.zig        # Filter criteria (ext/kind/size/category) + matching
-│   ├── query_parser.zig   # Parse a query string into free text + qualifier filters
-│   ├── filter_store.zig   # Saved/named filters, JSON persistence
-│   ├── async_search.zig   # Background search coordinator (threads + GCD delivery)
+│   ├── user_state.zig     # Pins, folder colors, saved filters, terminal config (JSON persistence)
+│   ├── filters.zig        # Filter criteria (ext/kind/size/date/category/path) + parsing + matching
+│   ├── async_search.zig   # Background search coordinator (threads + GCD delivery via callback)
+│   ├── dispatch.zig       # GCD dispatch helpers (dispatch_get_main_queue, dispatch_async_f)
 │   ├── humanize.zig       # Human-friendly size / duration / count formatters
 │   └── runtime.zig        # Process-wide Io/env handle + file helpers (Zig 0.16)
 ├── index/
 │   ├── format.zig         # Columnar binary index format (header, columns, write)
 │   ├── builder.zig        # Drives the scan, parses results, builds the index
 │   ├── bulk_scan.zig      # Parallel macOS getattrlistbulk directory scanner
-│   ├── reader.zig         # Read-only index access (names, paths, metadata, bitmaps)
+│   ├── reader.zig         # Read-only O(1) index access (names, paths, metadata, bitmaps)
+│   ├── subtree.zig        # O(D) subtree walks (histogram, ext breakdown across directories)
 │   ├── search.zig         # Scoped query: substring search, filters, sort, folder listings
 │   ├── bitmap.zig         # Sorted-array bitmaps (AND, OR, contains, iterate)
+│   ├── session.zig        # Index lifecycle: snapshots, inode-based update detection, search
 │   ├── fsevents.zig       # FSEvents C interop wrapper
 │   └── daemon.zig         # Background indexer: scan, watch, rebuild, launchd
 ├── ui/                    # Native AppKit UI (GitHub Dark theme)
@@ -264,7 +269,9 @@ src/
 │   ├── sidebar.zig        # Pinned-folders sidebar
 │   ├── icons.zig          # File icons (NSWorkspace)
 │   ├── theme.zig          # GitHub Dark theme color constants
-│   └── objc.zig           # ObjC runtime bridge (msgSend wrappers, NSString)
+│   └── objc.zig           # ObjC runtime bridge (msgSend wrappers, NSString, GCD re-exports)
+├── capi/
+│   └── zest_core.zig      # C ABI over the Zig index engine for the Swift UI
 └── config/
     ├── config.zig         # App paths, exclude patterns, directory setup
     └── user_config.zig    # ~/.config/zest/config.json (e.g. preferred terminal)
@@ -280,12 +287,15 @@ zig build test     # Run all tests via src/test_root.zig
 
 Test coverage:
 - File type categorization (extensions, dotfiles, compound extensions)
-- Query parsing and filter matching (`ext`/`kind`/`size`/`category`, negation)
-- Saved filters and folder colors (JSON roundtrip)
+- Query parsing and filter matching (`ext`/`kind`/`size`/`date`/`category`/`path`, negation)
+- UserState (pins JSON roundtrip, folder colors save/load, saved filters, terminal config)
 - Bitmap operations (contains, AND intersection, OR union, iteration)
 - Index format roundtrip (write → read, all columns) and scan-file parsing
 - Search (substring, case-insensitive, qualifier/category filters, scope + depth folder listings, column sort incl. folders-on-top)
-- Pin manager and navigator (history, root boundary, forward-stack clearing)
+- C API (zest_query routing, histogram depth=1 vs subtree, ext_breakdown per-folder and merged)
+- SessionIndex (snapshot lifecycle, inode-based update detection)
+- Subtree operations (histogram aggregation, ext breakdown merging)
+- Navigator (history, root boundary, forward-stack clearing)
 - Config excludes, terminal-candidate resolution, and humanize formatters
 
 The UI layer (`ui/*`) is exercised by hand, not in the test suite, per project convention.
