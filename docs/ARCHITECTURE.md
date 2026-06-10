@@ -16,8 +16,8 @@ index on disk.
 | `libzest-core.a`    | Static lib    | `src/zest_core_lib.zig`         | Pure-CPU search engine exposed as a C ABI (reader + query + bitmap filter). |
 | `Zest.app`          | Swift GUI     | `Sources/Zest/...`              | Native AppKit window; links `libzest-core.a`; mmaps the index.              |
 
-There is a fourth, in-progress binary (`zest`, the old Zig AppKit GUI) that's
-been superseded by the Swift app — the `justfile` no longer references it.
+The legacy pure-Zig GUI (`src/main.zig`, `src/app.zig`, `src/ui/`, and related
+Zig files) has been deleted. The Swift app is the only GUI.
 
 ## Roles of the two languages
 
@@ -85,23 +85,29 @@ Why columnar:
 
 ## The C ABI surface
 
-`libzest-core.a` exports four functions (`src/capi/zest_core.zig`):
+`libzest-core.a` exports nine functions (`src/capi/zest_core.zig`):
 
 ```c
-Core*     zest_open    (const uint8_t* bytes, size_t len);   // borrow bytes
-void      zest_close   (Core*);
-size_t    zest_count   (Core*);                              // num_entries
-Query*    zest_query   (Core*, const char* q, const char* scope,
-                        uint32_t max_depth, uint32_t max_results);
-size_t    zest_query_count (const Query*);
-ZestRow   zest_query_row  (const Query*, size_t i);          // borrows into mmap
-void      zest_query_free (Query*);
+Core*     zest_open          (const uint8_t* bytes, size_t len);   // borrow bytes
+void      zest_close         (Core*);
+size_t    zest_count         (Core*);                              // num_entries
+Query*    zest_query         (Core*, const char* q, const char* scope,
+                              uint32_t max_depth, uint32_t max_results);
+size_t    zest_query_count   (const Query*);
+ZestRow   zest_query_row     (const Query*, size_t i);             // borrows into mmap
+void      zest_query_free    (Query*);
+ZestHistogram zest_histogram (Core*, const char* scope, uint32_t max_depth);
+uint32_t  zest_ext_breakdown (Core*, const char* scope, uint32_t max_depth,
+                              uint8_t cat, uint32_t max, ZestExtCount* out);
 ```
 
 `ZestRow` is a fixed-layout `extern struct` (name, dir_path, size, mtime, kind,
 category) that Swift consumes through a Clang-imported `zest_core.h` — the
 layout cannot drift. Strings borrow into the index mmap; Swift copies them to
-`String` immediately on receipt.
+`String` immediately on receipt. `zest_histogram` returns a 9-element
+per-category count array for the sidebar histogram. `zest_ext_breakdown`
+returns the top-N extensions for a (scope, category) pair, sorted by count
+descending, for the sidebar's drill-down rows.
 
 ## End-to-end data flow
 
@@ -157,7 +163,11 @@ The daemon keeps the index fresh on its own (`src/index/daemon.zig`):
 1. **Initial scan**: parallel `getattrlistbulk` walk of `$HOME`, written to
    `index.zst` via `.tmp` + `rename(2)`.
 2. **FSEvents watcher**: a `FSEventStream` on `$HOME` posts coalesced events
-   to a 2 s-latency callback that bumps a `dirty_count`.
+   to a 2 s-latency callback that bumps a `dirty_count`. The stream is
+   created with `kFSEventStreamCreateFlagIgnoreSelf` and an explicit exclusion
+   path for the app-support dir, preventing the daemon's own index writes from
+   scheduling another rebuild (rebuild-treadmill prevention). The daemon also
+   filters events through `config.isPathUnder` as a second layer.
 3. **Coalesced rebuild**: every 2 s the CFRunLoop wakes the daemon; when
    `dirty_count ≥ 1000` or 30 s have passed since the last rebuild, it
    re-scans and re-writes the index.
@@ -168,10 +178,13 @@ The daemon keeps the index fresh on its own (`src/index/daemon.zig`):
    The daemon runs as `ProcessType=Background` with `LowPriorityIO` and is
    kept alive by launchd.
 
-The Swift app doesn't poll the file: it mmaps once at startup. The next
-launch picks up the latest index. (The old Zig UI had a 5-second stat-poll
-loop in `app.zig:236`; the Swift app deliberately does not — see "Open
-questions" below.)
+The Swift app hot-reloads the index: a 5-second `Timer` in `AppCoordinator`
+calls `ZestCore.currentIdentity` to stat the index file and compares inode,
+size, and mtime against the open `ZestCore`'s `fileIdentity`. When any field
+differs (including the `core == nil` case, i.e. the index didn't exist at
+launch), it opens a new `ZestCore` and swaps `core`. Because rows are copied
+at the FFI boundary before the swap, existing results remain valid until ARC
+releases the old mmap.
 
 ## Threading model
 
@@ -180,56 +193,51 @@ questions" below.)
   sweet spot on a 12-core machine).
 - **Search engine**: synchronous. `searchCancellable` accepts an optional
   `std.atomic.Value(u64)` generation counter; the search checks it every
-  512 positions and returns `error.SearchCancelled` if it has changed. The
-  old Zig UI used this to abort stale searches on a new keystroke; the
-  Swift UI currently runs searches synchronously and discards late results.
-- **Swift UI**: the main thread drives AppKit; the sidebar histogram kicks
-  one `userInitiated` `DispatchQueue.global` task to recompute category
-  counts in the background and hops back to main to rebuild rows.
+  512 positions and returns `error.SearchCancelled` if it has changed.
+- **Swift UI**: the main thread drives AppKit. Engine queries run on a serial
+  `queryQueue` (`DispatchQueue` with `.userInitiated` QoS) in `AppCoordinator`.
+  A `queryGeneration` counter is incremented on every state change; the queue
+  closure captures the generation and discards the delivery on main if
+  `self.queryGeneration != gen` (stale result). `notifyChange` fires `onChange`
+  twice per change: once immediately so observers can show a loading state
+  (stale rows still visible), and once when the fresh rows land. The sidebar
+  histogram also runs off-main on a `DispatchQueue.global(qos: .userInitiated)`
+  task with its own `histogramGeneration` guard in `CategorySection`.
 
 ## What lives where
 
 ```
 src/
-├── main.zig                ← CLI/GUI app entry (now unused; superseded by Swift)
 ├── indexer_main.zig        ← daemon entry; delegates to index/daemon.zig
 ├── zest_core_lib.zig       ← library entry; pulls in capi/zest_core.zig
-├── app.zig                 ← old GUI app controller (will go away)
 ├── capi/
-│   └── zest_core.zig       ← C ABI surface (4 functions + ZestRow)
-├── core/                   ← types, FS abstraction, navigation, pins, query parser
-│   ├── query_parser.zig    ← "cat:code ext:pdf" → ParsedQuery { text, filters[] }
+│   └── zest_core.zig       ← C ABI surface (9 functions + ZestRow/ZestHistogram/ZestExtBreakdown)
+├── core/
 │   ├── filters.zig         ← FilterCriterion union (kind/ext/size/date/cat/path)
 │   ├── types.zig           ← FileKind, FileCategory enum, FileEntry
-│   ├── fs_provider.zig     ← vtable interface; RealFs (OS) + FakeFs (tests)
-│   ├── real_fs.zig         ← OS-backed implementation
-│   ├── fake_fs.zig         ← in-memory implementation (for tests)
 │   ├── runtime.zig         ← global Io handle + nowNanos / readFileAlloc helpers
-│   ├── navigator.zig       ← back/forward history
-│   ├── pins.zig            ← user-pinned folders
-│   ├── folder_colors.zig   ← per-folder tint overrides
-│   ├── filter_store.zig    ← saved filter presets
 │   ├── humanize.zig        ← "1.2 MB" / "5mo ago" formatting
 │   └── file_types.zig      ← extension → FileCategory via StaticStringMap
 ├── index/
 │   ├── format.zig          ← binary on-disk layout (writer)
 │   ├── reader.zig          ← reader over the mmap'd bytes
 │   ├── search.zig          ← SIMD substring + bitmap intersection
+│   ├── subtree.zig         ← subtree histogram + ext-breakdown merge
 │   ├── builder.zig         ← scan files → columnar index
 │   ├── bulk_scan.zig       ← parallel getattrlistbulk walker
 │   ├── bitmap.zig          ← sorted-array bitmap (used for category filtering)
 │   ├── fsevents.zig        ← thin wrapper over FSEventStream
 │   └── daemon.zig          ← scan + watch loop + launchd plist generator
-├── config/
-│   ├── config.zig          ← path constants, name_excludes, path_excludes
-│   └── user_config.zig     ← ~/.config/zest/config.json
-└── ui/                     ← old Zig AppKit UI (window.zig, file_list.zig, …)
+└── config/
+    ├── config.zig          ← path constants, name_excludes, path_excludes
+    └── user_config.zig     ← ~/.config/zest/config.json
 
 Sources/Zest/
 ├── App/
 │   ├── main.swift          ← NSApplication entry + --snapshot mode
 │   ├── AppDelegate.swift   ← main menu (⌘↑ Go Up, ⌘↓ Open Selected)
-│   ├── AppCoordinator.swift← single source of truth (path, query, scope, sort)
+│   ├── AppCoordinator.swift← single source of truth (path, query, scope, sort,
+│   │                         queryQueue + hot-reload timer)
 │   └── Snapshot.swift      ← off-screen render to PNG
 ├── Shell/
 │   ├── RootViewController.swift  ← sidebar | split | chrome bands
@@ -242,9 +250,12 @@ Sources/Zest/
 ├── Sidebar/
 │   └── SidebarViewController.swift  ← PINNED + CATEGORIES tree
 ├── Browser/
-│   └── BrowserViewController.swift ← NSTableView (5 cols, 34/48pt rows)
+│   └── BrowserViewController.swift ← NSTableView (5 cols, 34/48pt rows,
+│                                     no-index / no-results / empty-folder states)
 ├── Core/
-│   └── ZestCore.swift      ← mmap + zest_open + zest_query wrapper
+│   ├── ZestCore.swift      ← mmap + zest_open + query/histogram/ext_breakdown wrappers
+│   │                         + FileIdentity inode/size/mtime identity
+│   └── UserState.swift     ← pins + folder colors (pins.json / folder_colors.json)
 └── Design/
     ├── Theme.swift         ← Darcula dark palette
     ├── Hairline.swift
@@ -268,17 +279,23 @@ Sources/Zest/
 
 ## Open questions / known gaps
 
-- **No Swift-side reload on rebuild.** The Swift `ZestCore.init` mmaps the
-  file once. A rebuild by the daemon is invisible until the app restarts.
-  The old Zig UI polled the inode every 5 s (`App.checkForIndexUpdate`,
-  `app.zig:236`); the Swift app should adopt the same pattern. Pending.
-- **No "scanning" state.** If the index file doesn't exist yet, the Swift
-  app silently returns no rows. A startup-time `stat` for `index.zst` +
-  empty-state message ("no index — run `just index`") would help.
 - **`Zest.app` is unbundled.** `main.swift` calls `NSApplication.shared` +
   `setActivationPolicy(.regular)`. It works but doesn't have a real
   `Info.plist` / app bundle, so Finder metadata, file-association handling,
   and the Dock icon are minimal. A proper bundle would fix that.
+- **C ABI error reporting (C8).** `zest_open` returns `null` on any malformed
+  index; callers have no way to distinguish "corrupt header" from "truncated
+  file" from "wrong magic". A `zest_last_error()` string or an out-param error
+  code would let the UI show a useful message.
+- **No engine-level query cancellation through the ABI.** The Zig
+  `searchCancellable` generation counter exists in `search.zig` but is not
+  exposed through the C ABI. The Swift side drops stale deliveries via
+  `queryGeneration`, but the engine still runs to completion on the old query
+  before the result is discarded. Wiring a cancel token through
+  `zest_query_cancel` would save CPU on rapid keystrokes.
+- **ASCII-only case folding.** The lowercased-name blob and the query are
+  folded with `std.ascii.toLower`. Non-ASCII filenames (e.g. `Ångström.txt`)
+  are findable only by exact case or by partial ASCII match.
 
 ## See also
 

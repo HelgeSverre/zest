@@ -8,7 +8,7 @@
 - **`libzest-core.a`** — Zig search engine behind a C ABI (`src/capi/zest_core.zig`); the Swift app mmaps the index and hands the bytes to `zest_open`.
 - **`zest-indexer`** — Zig background daemon (`src/indexer_main.zig`): walks `$HOME` with parallel `getattrlistbulk`, writes the index, watches FSEvents.
 
-There is also a **legacy pure-Zig GUI** (`src/main.zig`, `src/app.zig`, `src/ui/`, plus `src/core/{async_search,dispatch,navigator,user_state,fs_provider,real_fs,fake_fs}.zig` and `src/index/session.zig`) that the Swift app superseded. It still builds but is scheduled for archival — don't extend it (see docs/ROADMAP.md Phase D).
+The legacy pure-Zig GUI (`src/main.zig`, `src/app.zig`, `src/ui/`, and associated Zig files) has been deleted. The Swift app is the only GUI.
 
 ## Build & Test
 
@@ -28,8 +28,10 @@ See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagn
 
 - **Index** — custom mmap'd columnar binary at `~/Library/Application Support/zest/index.zst` (~538 MB for 5.5M entries): names (original + lowercase blobs), prefix-deduped dir table + parent ids, metadata arrays, per-category bitmaps, per-folder histogram + ext-breakdown columns.
 - **Search** (`src/index/search.zig`) — substring scan over the lowercase name blob (two-anchor check + memcmp); entry indices recovered by binary search are *monotonic in blob position* (the O(1) dedup relies on this). Filter-only queries scan the parent-id column; depth-1 listings resolve the scope dir id once.
-- **Swift UI flow** — `AppCoordinator` owns path/scope/filter/sort state and a per-change-tick result cache; `onChange` (single closure, assigned once in `RootViewController`) refreshes toolbar/filter bar/browser/sidebar/status bar. Queries are currently synchronous on the main thread (moving off-main is roadmap A5).
-- **Daemon** — writes `.tmp` then atomic `rename()`. The Swift app does NOT yet hot-reload the index (roadmap A7); the old 5s stat-poll lives only in the legacy `session.zig`.
+- **Swift UI flow** — `AppCoordinator` owns path/scope/filter/sort state and a per-change-tick result cache; `onChange` (single closure, assigned once in `RootViewController`) refreshes toolbar/filter bar/browser/sidebar/status bar. Queries run off-main on a serial `queryQueue`; a `queryGeneration` counter drops stale deliveries. `notifyChange` fires `onChange` twice per change: once immediately (observers render the last-delivered stale rows while `isLoading` is true) and once when the fresh result set lands.
+- **Index hot-reload** — A 5-second `Timer` in `AppCoordinator` polls the index file's inode/size/mtime (`ZestCore.FileIdentity`/`currentIdentity`). When any field differs (or `core` is nil on first tick), it opens a new `ZestCore` and swaps. Rows are copied at the FFI boundary, so dropping the old core is safe; ARC unmaps it.
+- **Daemon** — writes `.tmp` then atomic `rename()`. FSEvents stream uses `kFSEventStreamCreateFlagIgnoreSelf` plus an explicit exclusion path for the app-support dir (covers external writers) to prevent rebuild-treadmill loops.
+- **UI states** — `BrowserViewController` shows "No results" (search mode, zero rows), "Empty folder" (browse mode, zero rows), or a blank in-flight state while a query is running.
 
 ## Code Conventions
 
@@ -44,14 +46,14 @@ See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagn
 ```
 Sources/Zest/          — Swift app: App/ (coordinator, delegate), Shell/ (toolbar,
                          search, breadcrumb, filter bar, status bar), Browser/
-                         (file list), Sidebar/, Core/ (ZestCore FFI wrapper), Design/
+                         (file list), Sidebar/, Core/ (ZestCore FFI wrapper,
+                         UserState pins/folder-colors), Design/
 Sources/CZestCore/     — C header module for the Zig lib
-src/capi/              — C ABI (zest_open/query/histogram/ext_breakdown)
+src/capi/              — C ABI (zest_open/close/count/query/query_count/query_row/
+                         query_free/histogram/ext_breakdown)
 src/index/             — format, builder, bulk_scan, reader, search, subtree,
-                         bitmap, fsevents, daemon (+ legacy session.zig)
-src/core/              — types, file_types, filters, humanize, config, runtime
-                         (+ legacy fs abstraction files)
-src/ui/, src/app.zig, src/main.zig — legacy Zig GUI (do not extend)
+                         bitmap, fsevents, daemon
+src/core/              — types, file_types, filters, humanize, runtime
 benchmarks/            — bench_capi.zig (engine regression harness)
 docs/                  — ARCHITECTURE.md, ROADMAP.md, archive/ (superseded docs)
 ```

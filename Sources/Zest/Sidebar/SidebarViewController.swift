@@ -10,9 +10,6 @@ final class SidebarViewController: NSViewController {
   private var pinRows: [PinRow] = []
   private var categorySection: CategorySection?
 
-  /// Histogram generation counter — skip stale background results.
-  private var histogramGeneration = 0
-
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
     super.init(nibName: nil, bundle: nil)
