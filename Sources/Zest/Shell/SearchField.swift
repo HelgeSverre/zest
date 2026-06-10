@@ -131,12 +131,9 @@ final class SearchField: NSView {
   }
 
   private func commit(_ text: String) {
-    // Typing into a folder-scoped search should search the subtree; leave an
-    // explicit Everywhere scope alone.
-    if !text.isEmpty, coordinator.scope == .folder {
-      coordinator.scope = .subfolders  // fires onChange
-    }
-    coordinator.queryText = text  // fires onChange
+    // Typing into a folder-scoped search searches the subtree; an explicit
+    // Everywhere scope is left alone. One onChange for the whole transition.
+    coordinator.commitSearch(text)
   }
 
   // MARK: Focus ring

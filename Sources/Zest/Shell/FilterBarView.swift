@@ -66,10 +66,12 @@ final class FilterBarView: NSView {
     let n = coordinator.results().count
     let noun =
       coordinator.isSearchMode ? (n == 1 ? "result" : "results") : (n == 1 ? "item" : "items")
+    // A capped result set renders as "2,000+" — the engine stopped early.
+    let countText = coordinator.resultsCapped ? "\(n)+" : "\(n)"
     let s = NSMutableAttributedString()
     s.append(
       NSAttributedString(
-        string: "\(n)",
+        string: countText,
         attributes: [
           .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
           .foregroundColor: Theme.textSecondary,
