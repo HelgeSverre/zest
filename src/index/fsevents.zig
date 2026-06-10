@@ -21,7 +21,18 @@ pub const FSEventsWatcher = struct {
     /// callback + allocator lived in module-level globals, so a second watcher
     /// clobbered the first and a callback firing after deinit read dangling
     /// state.)
-    pub fn init(self: *FSEventsWatcher, allocator: std.mem.Allocator, watch_path: []const u8, callback: FSEventCallback) !void {
+    ///
+    /// `exclude_paths` is a slice of absolute directory paths whose events should
+    /// be suppressed at the FSEvents level via `FSEventStreamSetExclusionPaths`.
+    /// Pass `&.{}` if no exclusions are needed. FSEvents caps exclusion paths at 8;
+    /// extra paths are rejected by the API.
+    pub fn init(
+        self: *FSEventsWatcher,
+        allocator: std.mem.Allocator,
+        watch_path: []const u8,
+        exclude_paths: []const []const u8,
+        callback: FSEventCallback,
+    ) !void {
         // Create CFString from path
         const cf_path = c.CFStringCreateWithBytes(
             null,
@@ -63,8 +74,38 @@ pub const FSEventsWatcher = struct {
             cf_array,
             c.kFSEventStreamEventIdSinceNow,
             2.0, // 2 second coalesce latency
-            c.kFSEventStreamCreateFlagFileEvents | c.kFSEventStreamCreateFlagNoDefer,
+            c.kFSEventStreamCreateFlagFileEvents | c.kFSEventStreamCreateFlagNoDefer | c.kFSEventStreamCreateFlagIgnoreSelf,
         ) orelse return error.FSEventStreamCreateFailed;
+
+        // IgnoreSelf covers this process's own writes; exclusion paths cover other writers.
+        // FSEvents caps exclusion paths at 8; extra paths are rejected by the API.
+        if (exclude_paths.len > 0) {
+            var cf_excludes: std.ArrayList(?*const anyopaque) = .empty;
+            defer cf_excludes.deinit(allocator);
+            for (exclude_paths) |p| {
+                const cf = c.CFStringCreateWithBytes(null, p.ptr, @intCast(p.len), c.kCFStringEncodingUTF8, 0) orelse {
+                    std.debug.print("warning: CFStringCreate failed for exclusion path: {s}\n", .{p});
+                    continue;
+                };
+                cf_excludes.append(allocator, @ptrCast(cf)) catch {
+                    std.debug.print("warning: failed to append exclusion path (OOM): {s}\n", .{p});
+                    c.CFRelease(@ptrCast(cf));
+                    continue;
+                };
+            }
+            if (cf_excludes.items.len > 0) {
+                const arr = c.CFArrayCreate(null, @ptrCast(cf_excludes.items.ptr), @intCast(cf_excludes.items.len), &c.kCFTypeArrayCallBacks);
+                if (arr) |a| {
+                    if (c.FSEventStreamSetExclusionPaths(self.stream, a) == 0) {
+                        std.debug.print("warning: FSEventStreamSetExclusionPaths returned false; exclusions not applied\n", .{});
+                    }
+                    c.CFRelease(@ptrCast(a));
+                } else {
+                    std.debug.print("warning: CFArrayCreate failed for exclusion paths array\n", .{});
+                }
+                for (cf_excludes.items) |cf| c.CFRelease(@ptrCast(cf));
+            }
+        }
     }
 
     pub fn start(self: *FSEventsWatcher) void {

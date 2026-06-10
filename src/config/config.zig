@@ -116,6 +116,20 @@ test "shouldExclude" {
     try std.testing.expect(!shouldExclude("main.zig"));
 }
 
+/// True when `path` is `dir` itself or lives underneath it. A bare prefix
+/// match is not enough: `/a/zest-foo` must not count as under `/a/zest`.
+pub fn isPathUnder(path: []const u8, dir: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, dir)) return false;
+    return path.len == dir.len or path[dir.len] == '/';
+}
+
+test "isPathUnder matches dir itself and children, not prefix siblings" {
+    try std.testing.expect(isPathUnder("/a/zest", "/a/zest"));
+    try std.testing.expect(isPathUnder("/a/zest/index.zst", "/a/zest"));
+    try std.testing.expect(!isPathUnder("/a/zest-foo", "/a/zest"));
+    try std.testing.expect(!isPathUnder("/a/ze", "/a/zest"));
+}
+
 test "shouldExcludePath" {
     try std.testing.expect(shouldExcludePath("/Users/helge/Library/Caches"));
     try std.testing.expect(shouldExcludePath("/Users/helge/Library/Developer"));

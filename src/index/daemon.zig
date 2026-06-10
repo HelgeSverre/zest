@@ -17,10 +17,23 @@ const c = @cImport({
 /// FSEvents ever delivers the callback off the run-loop thread.
 var dirty_count = std.atomic.Value(usize).init(0);
 
-/// FSEvents callback — just bump the dirty counter.
-/// We do a full rebuild anyway, so we don't need to track individual paths.
+/// Path prefix whose events are ignored (the daemon's own output dir).
+/// Set once in runWatchLoop before FSEventStreamStart, never mutated —
+/// safe even if FSEvents ever delivered off-thread.
+var exclude_prefix: ?[]const u8 = null;
+
+/// FSEvents callback — filter out events from the daemon's own output dir,
+/// then bump the dirty counter for the remaining relevant paths.
 fn onFSEvent(paths: []const []const u8) void {
-    const total = dirty_count.fetchAdd(paths.len, .monotonic) + paths.len;
+    var relevant: usize = 0;
+    for (paths) |p| {
+        if (exclude_prefix) |ex| {
+            if (config.isPathUnder(p, ex)) continue;
+        }
+        relevant += 1;
+    }
+    if (relevant == 0) return;
+    const total = dirty_count.fetchAdd(relevant, .monotonic) + relevant;
     if (total >= event_threshold) {
         // Poke the run loop so CFRunLoopRunInMode returns early
         c.CFRunLoopStop(c.CFRunLoopGetCurrent());
@@ -185,8 +198,16 @@ fn uninstall(allocator: std.mem.Allocator) !void {
 fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
     std.debug.print("Starting FSEvents watcher on {s}...\n", .{root});
 
+    // Leaked deliberately: exclude_prefix must outlive the watcher (daemon lifetime).
+    // The daemon writes scan temps + the index into the app-support dir; without an
+    // exclusion, every rebuild emits events that schedule the next rebuild — an endless
+    // full-rescan loop. IgnoreSelf covers this process's own writes; exclusion paths
+    // also cover other writers (e.g. a manually run `just index`).
+    const app_support = try config.appSupportDir(allocator);
+    exclude_prefix = app_support;
+
     var watcher: fsevents.FSEventsWatcher = undefined;
-    try watcher.init(allocator, root, onFSEvent);
+    try watcher.init(allocator, root, &.{app_support}, onFSEvent);
     defer watcher.deinit();
 
     watcher.start();
