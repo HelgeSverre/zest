@@ -68,7 +68,7 @@ final class AppCoordinator {
     /// Which column drives the client-side sort.
     enum SortColumn { case name, size, modified, kind, ext }
 
-    let core: ZestCore?
+    private(set) var core: ZestCore?
     let userState: UserState
     private(set) var currentPath: String
     private var backStack: [String] = []
@@ -78,6 +78,38 @@ final class AppCoordinator {
     /// observers refresh. The sidebar internally caches the histogram and only
     /// recomputes it when the folder context (path + scope) actually changes.
     var onChange: (() -> Void)?
+
+    private var indexPathForReload: String?
+    private var reloadTimer: Timer?
+
+    deinit {
+        reloadTimer?.invalidate()
+    }
+
+    /// Poll the index file every `indexPollInterval` seconds: if the daemon
+    /// published a new index (different inode/size/mtime), or we launched
+    /// before the first index existed (core == nil), open the new file and
+    /// swap. Rows are copied at the FFI boundary, so dropping the old core is
+    /// safe; ARC unmaps it. Idempotent: calling again cancels any existing timer.
+    func startIndexReloadTimer() {
+        reloadTimer?.invalidate()
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: Self.indexPollInterval, repeats: true
+        ) { [weak self] _ in
+            self?.reloadIndexIfChanged()
+        }
+        timer.tolerance = 1
+        reloadTimer = timer
+    }
+
+    func reloadIndexIfChanged() {
+        guard let path = indexPathForReload else { return }
+        guard let onDisk = ZestCore.currentIdentity(of: path) else { return }  // no index yet
+        if let core, core.fileIdentity == onDisk { return }  // unchanged
+        guard let fresh = ZestCore(indexPath: path) else { return }  // mid-rename; retry next tick
+        core = fresh
+        notifyChange()  // invalidates the results cache + refreshes every observer
+    }
 
     /// The live query string. Empty == browse mode (subject to scope).
     /// Computed over `filter` — setting it parses the string into a `Filter`
@@ -164,7 +196,9 @@ final class AppCoordinator {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         let zestDir = support?.appendingPathComponent("zest")
-        core = zestDir.flatMap { ZestCore(indexPath: $0.appendingPathComponent("index.zst").path) }
+        let indexPath = zestDir?.appendingPathComponent("index.zst").path
+        core = indexPath.flatMap { ZestCore(indexPath: $0) }
+        indexPathForReload = indexPath
         userState = UserState(directory: zestDir)
         currentPath = fm.homeDirectoryForCurrentUser.path
     }
@@ -248,6 +282,9 @@ final class AppCoordinator {
     /// 100k cap cost, and bounds the Swift-side materialize/sort work. The
     /// filter bar renders "2,000+" when the cap is hit (see `resultsCapped`).
     static let maxResults = 2_000
+
+    /// How often the app checks whether the daemon published a new index.
+    static let indexPollInterval: TimeInterval = 5
 
     /// True when the last `results()` hit the cap (display "N+" counts).
     var resultsCapped: Bool {

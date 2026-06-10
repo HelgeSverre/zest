@@ -100,6 +100,7 @@ final class RootViewController: NSViewController {
       self.sidebar.refresh()
       self.statusBar.refresh()
     }
+    coordinator.startIndexReloadTimer()
     // The browser's selection drives the status bar's center summary.
     browser.onSelectionChange = { [weak self] summary in
       self?.statusBar.setSelection(summary)

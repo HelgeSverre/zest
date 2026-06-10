@@ -23,10 +23,62 @@ final class ZestCoreTests: XCTestCase {
       throw XCTSkip("Index doesn't cover \(home); re-run `zest-indexer --full-scan ~`.")
     }
     XCTAssertFalse(rows[0].name.isEmpty)
+    // The core's stored identity must match what's currently on disk.
+    XCTAssertEqual(
+      core.fileIdentity, ZestCore.currentIdentity(of: indexPath),
+      "core.fileIdentity should equal the on-disk identity immediately after open"
+    )
   }
 
   func testOpenMissingFileReturnsNil() {
     XCTAssertNil(ZestCore(indexPath: "/nonexistent/zest/index.zst"))
+  }
+
+  func testIdentityChangesWhenFileReplaced() throws {
+    let tmp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("zest_identity_replace_\(UUID().uuidString).bin").path
+    let data1 = Data(repeating: 0xAA, count: 128)
+    try data1.write(to: URL(fileURLWithPath: tmp))
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+    let id1 = try XCTUnwrap(ZestCore.currentIdentity(of: tmp))
+
+    // Remove and rewrite the same path so it gets a new inode and/or mtime.
+    try FileManager.default.removeItem(atPath: tmp)
+    let data2 = Data(repeating: 0xBB, count: 64)
+    try data2.write(to: URL(fileURLWithPath: tmp))
+
+    let id2 = try XCTUnwrap(ZestCore.currentIdentity(of: tmp))
+    XCTAssertNotEqual(id1, id2, "Identity must change when the file is replaced at the same path")
+  }
+
+  func testCurrentIdentityNilForEmptyFile() throws {
+    let tmp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("zest_identity_empty_\(UUID().uuidString).bin").path
+    // Write a zero-byte file.
+    FileManager.default.createFile(atPath: tmp, contents: nil)
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+    XCTAssertNil(
+      ZestCore.currentIdentity(of: tmp),
+      "currentIdentity should return nil for a zero-byte file"
+    )
+  }
+
+  func testCurrentIdentityNonNilForExistingFile() throws {
+    let tmp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("zest_identity_test_\(UUID().uuidString).bin").path
+    let data = Data(repeating: 0xAB, count: 64)
+    try data.write(to: URL(fileURLWithPath: tmp))
+    defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+    let id = try XCTUnwrap(ZestCore.currentIdentity(of: tmp))
+    XCTAssertEqual(id.size, 64)
+    XCTAssertGreaterThan(id.inode, 0)
+  }
+
+  func testCurrentIdentityNilForMissingFile() {
+    XCTAssertNil(ZestCore.currentIdentity(of: "/nonexistent/zest/index.zst"))
   }
 
   // Ext breakdown sanity checks against the real on-disk index. These pin

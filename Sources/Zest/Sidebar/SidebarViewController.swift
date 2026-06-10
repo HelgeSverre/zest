@@ -142,10 +142,13 @@ private final class CategorySection: NSView {
   /// or a filter-only change without re-running the background index query.
   private var lastHistogram: Histogram?
 
-  /// (path, scope) of the histogram currently in `lastHistogram`. The next
-  /// `refresh()` only re-walks the index if this key changed, so per-keystroke
-  /// text updates just re-render the cached rows with the new active state.
-  private var lastRefreshKey: (path: String, scope: AppCoordinator.Scope)?
+  /// (path, scope, index) of the histogram currently in `lastHistogram`. The
+  /// next `refresh()` only re-walks the index if this key changed, so per-
+  /// keystroke text updates just re-render the cached rows with the new active
+  /// state. The `index` component detects daemon hot-swaps (new inode/mtime)
+  /// when path+scope are unchanged — including the launch-before-first-index
+  /// case where core was nil, so an all-zeros histogram never sticks.
+  private var lastRefreshKey: (path: String, scope: AppCoordinator.Scope, index: ZestCore.FileIdentity?)?
 
   /// Histogram generation counter (owned by sidebar, passed here implicitly via refresh).
   private var histogramGeneration = 0
@@ -185,14 +188,19 @@ private final class CategorySection: NSView {
   func refresh() {
     let path = coordinator.currentPath
     let scope = coordinator.scope
+    let index = coordinator.core?.fileIdentity
 
-    if let cached = lastHistogram, lastRefreshKey?.path == path, lastRefreshKey?.scope == scope {
-      // Folder context unchanged: just re-render so active highlights
-      // track the latest `coordinator.filter`.
+    if let cached = lastHistogram,
+      lastRefreshKey?.path == path,
+      lastRefreshKey?.scope == scope,
+      lastRefreshKey?.index == index
+    {
+      // Folder context and index identity unchanged: just re-render so active
+      // highlights track the latest `coordinator.filter`.
       rebuildRows(with: cached)
       return
     }
-    lastRefreshKey = (path: path, scope: scope)
+    lastRefreshKey = (path: path, scope: scope, index: index)
 
     histogramGeneration += 1
     let gen = histogramGeneration

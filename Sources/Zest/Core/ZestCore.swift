@@ -8,6 +8,23 @@ final class ZestCore {
   private let mapBase: UnsafeMutableRawPointer
   private let mapSize: Int
 
+  let fileIdentity: FileIdentity
+
+  struct FileIdentity: Equatable {
+    let inode: UInt64
+    let size: Int64
+    let mtime: Int64
+  }
+
+  /// Identity of the index file on disk right now, or nil if it's missing/empty.
+  /// Compared against `fileIdentity` to detect daemon rebuilds (rename = new inode).
+  static func currentIdentity(of path: String) -> FileIdentity? {
+    var st = stat()
+    guard stat(path, &st) == 0, st.st_size > 0 else { return nil }
+    return FileIdentity(
+      inode: UInt64(st.st_ino), size: Int64(st.st_size), mtime: Int64(st.st_mtimespec.tv_sec))
+  }
+
   struct Row {
     let name: String
     let dirPath: String
@@ -45,6 +62,9 @@ final class ZestCore {
     self.handle = h
     self.mapBase = base
     self.mapSize = size
+    self.fileIdentity = FileIdentity(
+      inode: UInt64(st.st_ino), size: Int64(st.st_size),
+      mtime: Int64(st.st_mtimespec.tv_sec))
   }
 
   deinit {

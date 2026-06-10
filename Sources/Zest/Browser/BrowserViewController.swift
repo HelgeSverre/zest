@@ -113,6 +113,13 @@ final class BrowserViewController: NSViewController {
     let isEmpty = items.isEmpty
     scrollView.isHidden = isEmpty
     emptyLabel?.isHidden = !isEmpty
+    if isEmpty {
+      // TODO: bundled-app copy should suggest zest-indexer --full-scan ~ instead of the repo-local just recipe.
+      emptyLabel?.stringValue =
+        coordinator.core == nil
+        ? "No search index yet — run \"just index\" to build it. Zest will pick it up automatically."
+        : (coordinator.isSearchMode ? "No results" : "Empty folder")
+    }
 
     tableView.reloadData()  // re-asks heightOfRow, so the 34/48 switch applies
     if isEmpty {
@@ -370,16 +377,21 @@ final class BrowserViewController: NSViewController {
     guard emptyLabel == nil else {
       return
     }
-    let label = NSTextField(labelWithString: "No indexed entries in this folder")
+    let label = NSTextField(labelWithString: "")
     label.font = .systemFont(ofSize: 13, weight: .regular)
     label.textColor = Theme.textSecondary
     label.alignment = .center
     label.isHidden = true
+    label.usesSingleLineMode = false
+    label.cell?.wraps = true
+    label.lineBreakMode = .byWordWrapping
+    label.maximumNumberOfLines = 2
     label.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(label)
     NSLayoutConstraint.activate([
       label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
       label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      label.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -40),
     ])
     emptyLabel = label
   }
