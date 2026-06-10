@@ -94,6 +94,13 @@ pub fn searchCancellable(
             const qlen = lower_query.len;
 
             var pos: usize = 0;
+            // Blob positions are scanned in ascending order and names are laid
+            // out in entry order, so `findEntryForBlobPos` yields non-decreasing
+            // entry indices. A repeated match (a name containing the query more
+            // than once) can therefore only collide with the *previous* entry —
+            // one compare replaces the old O(results) duplicate scan that made
+            // short queries quadratic (4.5s for "i" over a 5.5M-entry index).
+            var last_seen_entry: u32 = std.math.maxInt(u32);
             while (pos + qlen <= blob.len and results.items.len < opts.max_results) {
                 // Cancellation check every 512 positions (~0.2ms overhead for 100MB blob)
                 if (generation) |gen| {
@@ -105,13 +112,8 @@ pub fn searchCancellable(
                 if (blob[pos] == first_char and blob[pos + qlen - 1] == last_char) {
                     if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
                         if (findEntryForBlobPos(reader, @intCast(pos), num_entries)) |entry_idx| {
-                            var duplicate = false;
-                            for (results.items) |r| {
-                                if (r.index == entry_idx) {
-                                    duplicate = true;
-                                    break;
-                                }
-                            }
+                            const duplicate = entry_idx == last_seen_entry;
+                            last_seen_entry = entry_idx;
 
                             if (!duplicate) {
                                 if (cat_bitmap) |bm| {
