@@ -3,26 +3,6 @@ const types = @import("../core/types.zig");
 const reader_mod = @import("reader.zig");
 const format = @import("format.zig");
 
-/// Hash context for the temporary merge map in `computeExtBreakdown`. The
-/// key is `(off, len)` into the ext storage buffer — we hash both so distinct
-/// keys collide only when both fields match, and the equality check is a
-/// pointer+length compare (no per-call memcmp on long strings).
-const KeyOff = struct {
-    off: u32,
-    len: u8,
-};
-
-const KeyOffContext = struct {
-    pub fn hash(_: KeyOffContext, ko: KeyOff) u64 {
-        var h = std.hash.Wyhash.init(0);
-        h.update(std.mem.asBytes(&ko.off));
-        h.update(&[_]u8{ko.len});
-        return h.final();
-    }
-    pub fn eql(_: KeyOffContext, a: KeyOff, b: KeyOff) bool {
-        return a.off == b.off and a.len == b.len;
-    }
-};
 
 /// Sum per-category counts across the subtree rooted at `scope_path`.
 /// Walks the (deduplicated) dir table to find descendants; O(D) in the
@@ -114,10 +94,13 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
     // Single forward walk of the column. For each (dir_id, cat) bucket,
     // check if the bucket's cat matches AND dir_id is in the subtree. If
     // both, merge. Always advance past the bucket.
-    var ext_storage = std.ArrayList(u8).empty;
-    defer ext_storage.deinit(allocator);
-
-    var merge = std.HashMap(KeyOff, u32, KeyOffContext, std.hash_map.default_max_load_percentage).init(allocator);
+    //
+    // Key by the ext-name bytes (a slice into `data`, which outlives this
+    // call) so identical ext names in different dirs hit the same map entry.
+    // The old KeyOff approach keyed on the prospective append offset into a
+    // scratch buffer, which strictly increased every iteration, so
+    // `found_existing` was never true and duplicates never merged.
+    var merge = std.StringHashMap(u32).init(allocator);
     defer merge.deinit();
 
     var pos: usize = col_start;
@@ -147,15 +130,8 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
                     const count = std.mem.readInt(u32, data[p..][0..4], .little);
                     p += 4;
 
-                    const key = KeyOff{
-                        .off = @intCast(ext_storage.items.len),
-                        .len = @intCast(len),
-                    };
-                    const gop = merge.getOrPut(key) catch continue;
-                    if (!gop.found_existing) {
-                        ext_storage.appendSlice(allocator, name) catch continue;
-                        gop.value_ptr.* = 0;
-                    }
+                    const gop = merge.getOrPut(name) catch continue;
+                    if (!gop.found_existing) gop.value_ptr.* = 0;
                     gop.value_ptr.* += count;
                 }
             }
@@ -171,20 +147,24 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
     scratch.ensureTotalCapacity(allocator, merge.count()) catch return 0;
     var it = merge.iterator();
     while (it.next()) |entry| {
-        const ko = entry.key_ptr.*;
-        const n: usize = @intCast(ko.off + ko.len);
+        const name = entry.key_ptr.*;
+        const len: u8 = @intCast(name.len);
         var row = reader_mod.IndexReader.ExtCount{
             .name = undefined,
-            .name_len = @intCast(ko.len),
+            .name_len = len,
             .count = entry.value_ptr.*,
         };
-        @memcpy(row.name[0..ko.len], ext_storage.items[ko.off..n]);
+        @memcpy(row.name[0..len], name);
         scratch.append(allocator, row) catch continue;
     }
 
     const lessExt = struct {
         fn f(_: void, a: reader_mod.IndexReader.ExtCount, b: reader_mod.IndexReader.ExtCount) bool {
-            return a.count > b.count;
+            // Count desc, name asc on ties — the hash map iterates in
+            // unspecified order, so without the tie-break equal-count rows
+            // would shuffle between sidebar refreshes.
+            if (a.count != b.count) return a.count > b.count;
+            return std.mem.order(u8, a.name[0..a.name_len], b.name[0..b.name_len]) == .lt;
         }
     }.f;
     std.mem.sort(reader_mod.IndexReader.ExtCount, scratch.items, {}, lessExt);
@@ -244,6 +224,24 @@ fn markSubtreeDirsRaw(header: format.Header, data: []const u8, scope_path: []con
         if (is_descendant) in_subtree[d] = 1;
     }
     return true;
+}
+
+test "subtree ext breakdown merges the same ext across directories" {
+    const entries = [_]format.IndexEntry{
+        .{ .name = "a.pdf", .dir_path = "/home/u/x", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+        .{ .name = "b.pdf", .dir_path = "/home/u/y", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+    };
+    const data = try format.writeIndex(std.testing.allocator, &entries);
+    defer std.testing.allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(std.testing.allocator, data);
+    defer reader.deinit();
+
+    var out: [8]reader_mod.IndexReader.ExtCount = undefined;
+    // cat=3 is .documents
+    const n = computeExtBreakdown(reader, "/home/u", 3, out[0..], std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), n); // ONE merged "pdf" row
+    try std.testing.expectEqual(@as(u32, 2), out[0].count); // …with count 2
+    try std.testing.expectEqualStrings("pdf", out[0].name[0..out[0].name_len]);
 }
 
 /// Number of directories in the dir table. Cached inline.
