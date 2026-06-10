@@ -154,10 +154,26 @@ pub fn unescapeTsv(out: []u8, s: []const u8) []const u8 {
     while (si < s.len) {
         if (s[si] == '\\' and si + 1 < s.len) {
             switch (s[si + 1]) {
-                '\\' => { out[di] = '\\'; di += 1; si += 2; },
-                't'  => { out[di] = '\t'; di += 1; si += 2; },
-                'n'  => { out[di] = '\n'; di += 1; si += 2; },
-                else => { out[di] = s[si]; di += 1; si += 1; },
+                '\\' => {
+                    out[di] = '\\';
+                    di += 1;
+                    si += 2;
+                },
+                't' => {
+                    out[di] = '\t';
+                    di += 1;
+                    si += 2;
+                },
+                'n' => {
+                    out[di] = '\n';
+                    di += 1;
+                    si += 2;
+                },
+                else => {
+                    out[di] = s[si];
+                    di += 1;
+                    si += 1;
+                },
             }
         } else {
             out[di] = s[si];

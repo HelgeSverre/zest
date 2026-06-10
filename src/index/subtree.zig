@@ -3,7 +3,6 @@ const types = @import("../core/types.zig");
 const reader_mod = @import("reader.zig");
 const format = @import("format.zig");
 
-
 /// Sum per-category counts across the subtree rooted at `scope_path`.
 /// Walks the (deduplicated) dir table to find descendants; O(D) in the
 /// number of unique directories. For `.everywhere` (`scope = "/"`), this
