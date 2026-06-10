@@ -2,48 +2,56 @@
 
 ## Project Overview
 
-**Zest** is a minimal, fast Finder replacement for macOS built in Zig 0.16.0. CLI: `zest .` or `zest /path` opens a native GUI. macOS only.
+**Zest** is a minimal, fast Finder replacement for macOS. Hybrid architecture:
 
-Two binaries: `zest` (GUI app) and `zest-indexer` (background daemon).
+- **`Zest.app`** — Swift/AppKit GUI (`Sources/Zest/`), links `libzest-core.a`.
+- **`libzest-core.a`** — Zig search engine behind a C ABI (`src/capi/zest_core.zig`); the Swift app mmaps the index and hands the bytes to `zest_open`.
+- **`zest-indexer`** — Zig background daemon (`src/indexer_main.zig`): walks `$HOME` with parallel `getattrlistbulk`, writes the index, watches FSEvents.
+
+There is also a **legacy pure-Zig GUI** (`src/main.zig`, `src/app.zig`, `src/ui/`, plus `src/core/{async_search,dispatch,navigator,user_state,fs_provider,real_fs,fake_fs}.zig` and `src/index/session.zig`) that the Swift app superseded. It still builds but is scheduled for archival — don't extend it (see docs/ROADMAP.md Phase D).
 
 ## Build & Test
 
 ```sh
-zig build              # Build both binaries
-zig build run -- .     # Run zest with current directory
-zig build test         # Run all tests
+just build          # zig build + ReleaseFast core lib + swift build
+just test           # zig build test + swift test
+just run            # build + swift run Zest
+just index          # build indexer (ReleaseFast) + full scan of ~
+just bench-capi     # benchmark the engine against the real index
 ```
+
+**Always leave `zig-out/lib/libzest-core.a` in ReleaseFast** — Package.swift links whatever is there, and a Debug engine is ~19× slower (an 82-second one-char query). A bare `zig build` or `zig build test` installs a Debug lib; follow it with `zig build core -Doptimize=ReleaseFast` (the justfile recipes do this).
 
 ## Architecture
 
-- **FileSystemProvider** — vtable interface (`core/fs_provider.zig`). Two impls: `RealFs` (OS) and `FakeFs` (in-memory, for tests).
-- **Index** — Custom mmap'd binary format at `~/Library/Application Support/zest/index.zst`. Columnar layout: names, paths (prefix-deduped), metadata, Roaring bitmaps for category/extension filtering.
-- **Search** — substring search over the name column: a scalar two-anchor scan (gate on the first/last query byte, confirm with `std.mem.eql`). Combined with bitmap intersection for category filtering.
-- **Indexer** — Background daemon using FSEvents to watch `$HOME`. Writes to `.tmp` then atomic `rename()`. Readers detect new index via stat polling every ~5s.
-- **UI** — Native AppKit via zig-objc. Darcula dark theme. NSSplitView sidebar + NSTableView file list.
+See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagnosis, benchmarks, phased plan). Key points:
 
-## Key Design Decisions
-
-- All tests use `FakeFs` — no real filesystem, no UI in tests.
-- Global shared index: one index serves all zest instances via mmap.
-- No SQLite/Spotlight dependency. Custom format for sub-10ms query latency.
-- Config at `~/.config/zest/config.json`, data at `~/Library/Application Support/zest/`.
+- **Index** — custom mmap'd columnar binary at `~/Library/Application Support/zest/index.zst` (~538 MB for 5.5M entries): names (original + lowercase blobs), prefix-deduped dir table + parent ids, metadata arrays, per-category bitmaps, per-folder histogram + ext-breakdown columns.
+- **Search** (`src/index/search.zig`) — substring scan over the lowercase name blob (two-anchor check + memcmp); entry indices recovered by binary search are *monotonic in blob position* (the O(1) dedup relies on this). Filter-only queries scan the parent-id column; depth-1 listings resolve the scope dir id once.
+- **Swift UI flow** — `AppCoordinator` owns path/scope/filter/sort state and a per-change-tick result cache; `onChange` (single closure, assigned once in `RootViewController`) refreshes toolbar/filter bar/browser/sidebar/status bar. Queries are currently synchronous on the main thread (moving off-main is roadmap A5).
+- **Daemon** — writes `.tmp` then atomic `rename()`. The Swift app does NOT yet hot-reload the index (roadmap A7); the old 5s stat-poll lives only in the legacy `session.zig`.
 
 ## Code Conventions
 
-- Zig 0.16.0 idioms and standard library patterns.
-- Filesystem/clock/env/process access goes through the global `Io` handle in `core/runtime.zig` (set once in `main` from `std.process.Init`); use its `readFileAlloc`/`writeFileAbsolute`/`ensureDir`/`getEnvVarOwned`/`nowNanos`/`unixTimestamp` helpers rather than re-deriving the 0.16 `Io` call patterns.
-- Vtable interfaces follow the `std.mem.Allocator` pattern (ptr + vtable).
-- File type categorization via `StaticStringMap` in `file_types.zig`.
-- Tests are embedded in source files (Zig's `test` blocks), listed in `build.zig`.
+- Zig 0.16.0. Filesystem/clock/env access in the *binaries* goes through the global `Io` handle in `core/runtime.zig` (set once in `main` from `std.process.Init`). The C-ABI lib (`capi/`) deliberately has **no** `Io` and no global state — pure CPU over caller-owned bytes.
+- FFI contract: `ZestRow` strings borrow into the mmap; Swift copies them immediately in `ZestCore.query`. Never hold Zig-side pointers in Swift beyond the call.
+- Swift: 4-space indent (swift-format config in repo), AppKit (no SwiftUI), Auto Layout with explicit constraints, Theme.* constants for all colors.
+- Tests: Zig tests embedded in source files, rooted at `src/test_root.zig`; Swift tests in `Sources/ZestTests`. Engine changes must keep `zest_query` result counts stable (benchmark harness prints them — compare before/after).
+- Perf changes: run `just bench-capi` before and after; medians over 7 samples; the table lives in docs/ROADMAP.md.
 
 ## Project Structure
 
 ```
-src/main.zig           — CLI entry, arg parsing
-src/app.zig            — App controller (owns Navigator, PinManager, IndexReader)
-src/core/              — Types, FS abstraction, navigation, pins, file categorization, runtime (Io handle)
-src/index/             — Binary format, builder, mmap reader, substring search, bitmaps, FSEvents, daemon
-src/ui/                — AppKit UI, Darcula theme
-src/config/            — Paths, defaults, exclude patterns
+Sources/Zest/          — Swift app: App/ (coordinator, delegate), Shell/ (toolbar,
+                         search, breadcrumb, filter bar, status bar), Browser/
+                         (file list), Sidebar/, Core/ (ZestCore FFI wrapper), Design/
+Sources/CZestCore/     — C header module for the Zig lib
+src/capi/              — C ABI (zest_open/query/histogram/ext_breakdown)
+src/index/             — format, builder, bulk_scan, reader, search, subtree,
+                         bitmap, fsevents, daemon (+ legacy session.zig)
+src/core/              — types, file_types, filters, humanize, config, runtime
+                         (+ legacy fs abstraction files)
+src/ui/, src/app.zig, src/main.zig — legacy Zig GUI (do not extend)
+benchmarks/            — bench_capi.zig (engine regression harness)
+docs/                  — ARCHITECTURE.md, ROADMAP.md, archive/ (superseded docs)
 ```
