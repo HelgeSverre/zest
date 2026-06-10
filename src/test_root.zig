@@ -3,9 +3,6 @@ comptime {
     // Core
     _ = @import("core/types.zig");
     _ = @import("core/file_types.zig");
-    _ = @import("core/fake_fs.zig");
-    _ = @import("core/navigator.zig");
-    _ = @import("core/user_state.zig");
     _ = @import("core/filters.zig");
     _ = @import("core/humanize.zig");
     _ = @import("config/config.zig");
@@ -18,7 +15,6 @@ comptime {
     _ = @import("index/subtree.zig");
     _ = @import("index/search.zig");
     _ = @import("index/builder.zig");
-    _ = @import("index/session.zig");
 
     // C ABI
     _ = @import("capi/zest_core.zig");

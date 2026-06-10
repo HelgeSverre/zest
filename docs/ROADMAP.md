@@ -56,13 +56,13 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 - [x] **A1. O(1) search dedup** (`src/index/search.zig`) — done, 250× on
   short queries. Zig tests pass; result counts byte-identical.
-- [ ] **A2. Ship the engine in ReleaseFast** — `just build` / `run` must build
+- [x] **A2. Ship the engine in ReleaseFast** — `just build` / `run` must build
   `libzest-core.a` with `-Doptimize=ReleaseFast` (Debug Zig lib is ~19×
   slower; there is no reason the *engine* should ever be Debug, even in dev).
-- [ ] **A3. Sane result cap** — drop `maxResults` from 100,000 to ~2,000 in
+- [x] **A3. Sane result cap** — drop `maxResults` from 100,000 to ~2,000 in
   `AppCoordinator.results()`; filter bar shows "2,000+" when capped.
   (Benchmarked: worst keystroke ≤ ~135 ms = the full-blob-scan floor.)
-- [ ] **A4. One query per change** — cache the result set per change-tick in
+- [x] **A4. One query per change** — cache the result set per change-tick in
   `AppCoordinator` so `browser.reload()` and `filterBar.refresh()` share one
   query; wrap `SearchField.commit` (scope + text) in `withoutNotifying` so a
   keystroke fires `onChange` once, not twice. Net: 4 passes/keystroke → 1.
@@ -130,7 +130,7 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 ## Phase D — Cleanup, docs, repo hygiene
 
-- [ ] **D1. Archive the legacy Zig GUI** — the Swift app superseded it. Dead
+- [x] **D1. Archive the legacy Zig GUI** — the Swift app superseded it. Dead
   chain (confirmed by import graph): `src/ui/*` (8 files), `src/main.zig`,
   `src/app.zig`, `src/core/{async_search,dispatch,navigator,user_state,
   fake_fs,real_fs,fs_provider}.zig`, `src/index/session.zig`. Port
@@ -140,11 +140,11 @@ every change (destroys the clicked row mid-double-click), stale-index
 - [ ] **D2. Rewrite CLAUDE.md** — it still describes the pure-Zig AppKit app
   and the 5s stat-poll; the real architecture is Swift UI + libzest-core.a
   (see docs/ARCHITECTURE.md, which is accurate).
-- [ ] **D3. README drift** — references `just dev` / `just bench` recipes that
+- [x] **D3. README drift** — references `just dev` / `just bench` recipes that
   don't exist; add `bench-capi`; fold in the new perf numbers.
 - [ ] D4. Address the 8 naming/`TODO` comments in `SidebarViewController.swift`
   and the `settingProgrammatically` hack note in `SearchField.swift`.
-- [ ] D6. Delete `Sample of Zest.txt` from the repo root — a committed
+- [x] D6. Delete `Sample of Zest.txt` from the repo root — a committed
   213KB `sample(1)` profiler dump from the 2026-06-06 lag investigation,
   superseded by `benchmarks/bench_capi.zig` + docs/ROADMAP.md.
 - [ ] D5. Commit policy: `Sources/Zest/App/AppCoordinator.swift` working-tree

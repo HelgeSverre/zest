@@ -4,9 +4,9 @@
 ![macOS](https://img.shields.io/badge/platform-macOS-000000?style=flat-square&logo=apple)
 ![MIT License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
-A minimal, fast Finder replacement for macOS built in Zig. Two binaries: `zest` (native file browser) and `zest-indexer` (background daemon that keeps the search index up to date).
+A minimal, fast Finder replacement for macOS. The Swift app (`Sources/Zest/`) links a Zig engine (`libzest-core.a`) via C ABI. The `zest-indexer` binary (Zig) runs as a background daemon keeping the search index up to date.
 
-`zest <path>` opens a native AppKit window backed entirely by the memory-mapped index:
+The app opens a native AppKit window backed entirely by the memory-mapped index:
 
 - A **sidebar** of pinned folders (Home, Desktop, Documents, Downloads by default — add your own).
 - A **file list** with sortable Name / Size / Date / Type columns and native file icons.
@@ -24,22 +24,21 @@ Browsing and searching are the same mechanism: every list is a single query agai
 ## Build & Run
 
 ```sh
-zig build                        # Build both binaries → zig-out/bin/{zest,zest-indexer}
-zig build run -- .               # Run zest on the current directory (Debug)
-zig build test                   # Run all tests (no real FS or UI needed)
+zig build                        # Build zest-indexer + libzest-core.a
+zig build test                   # Run all Zig tests
+swift build                      # Build the Swift app (links libzest-core.a)
 ```
 
 A `justfile` wraps the common workflows:
 
 ```sh
-just run            # Build + run (Debug — fast to compile)
-just run-fast       # Build + run in ReleaseFast (folder switching ~6ms vs ~80ms Debug)
+just run            # Build everything + swift run Zest (Debug Swift, ReleaseFast engine)
+just run-fast       # Build everything + swift run -c release Zest (Release Swift + engine)
 just index          # Build the indexer (ReleaseFast) and scan ~
-just dev            # Build everything ReleaseFast, scan ~, then launch
-just test           # Run tests
+just test           # Run Zig + Swift tests
 ```
 
-Run in **ReleaseFast** (`just run-fast`) for real use — it's dramatically snappier than a Debug build.
+Run `just run` for day-to-day use — it rebuilds the engine in ReleaseFast (Debug engine is ~19× slower on large indices). Use `just run-fast` for a fully optimized build.
 
 ## Search Index
 
@@ -132,12 +131,10 @@ sequenceDiagram
 ### Benchmarking
 
 ```sh
-zig build run -- --benchmark "invoice"          # text-search latency, p50/p99 over 1000 runs (µs)
-zig build run -- --benchmark-list ~/Documents   # folder-listing latency, p50/p99 (ms)
-just bench "invoice"                             # same, built ReleaseFast
+just bench-capi "invoice"    # text-search latency against the real index via C ABI
 ```
 
-`--benchmark` runs a text query 1000 times against the loaded index; `--benchmark-list` times a depth-1 folder listing (what the UI runs on every folder switch).
+`bench-capi` benchmarks `zest_query` (the C ABI call the Swift app makes) against the real index: 1 warmup + 7 samples, median reported. See `benchmarks/bench_capi.zig` for the harness.
 
 ## Background Daemon
 
@@ -174,24 +171,17 @@ Default pins: Home, Desktop, Documents, Downloads. Custom pins are persisted to 
 
 ## Architecture
 
-> The current architecture is documented at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a self-contained SVG diagram at [docs/architecture.html](docs/architecture.html). The mermaid block below describes the Zig UI; the Swift app links `libzest-core.a` (a static lib with the same reader + search code shown here) and mmaps the same `index.zst`.
+> The current architecture is documented at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) with a self-contained SVG diagram at [docs/architecture.html](docs/architecture.html). The mermaid block below describes the current architecture: the Swift app links `libzest-core.a` and mmaps the same `index.zst` as the indexer daemon.
 
 ```mermaid
 graph TB
-    subgraph "zest binary"
-        Main[main.zig<br/>CLI entry] --> UI[ui/<br/>AppKit window]
-        UI --> App[app.zig<br/>Slim controller]
-        App --> Nav[navigator.zig<br/>Back/Forward/Up]
-        App --> US[user_state.zig<br/>Pins, colors, filters, config]
-        App --> SI[session.zig<br/>Index lifecycle + snapshots]
-        App --> AS[async_search.zig<br/>Background queries]
-        App --> FS[fs_provider.zig<br/>Vtable interface]
-        FS --> RealFs[real_fs.zig]
-        FS --> FakeFs[fake_fs.zig<br/>Tests only]
-        AS --> Search[search.zig]
-        AS --> Dispatch[dispatch.zig<br/>GCD helpers]
-        Search --> IR[reader.zig<br/>O(1) index access]
-        Search --> ST[subtree.zig<br/>O(D) subtree walks]
+    subgraph "Zest.app (Swift)"
+        SwiftUI[Sources/Zest UI<br/>AppKit windows + views] --> AC[AppCoordinator.swift<br/>query coordinator]
+        AC --> ZC[ZestCore.swift<br/>C ABI wrapper]
+        ZC --> CAPI[capi/zest_core.zig<br/>C ABI surface]
+        CAPI --> IR[reader.zig<br/>O(1) index access]
+        CAPI --> Search[search.zig<br/>Scoped queries]
+        CAPI --> ST[subtree.zig<br/>O(D) subtree walks]
         IR --> Bitmap[bitmap.zig]
     end
 
@@ -212,9 +202,8 @@ graph TB
 
     IR -.->|mmap read| Index
     Builder -.->|atomic write| Index
-    App --> Config
+    ZC --> Config
     Daemon --> Config
-    AS --> Filters
     Search --> Filters
 ```
 
@@ -222,32 +211,36 @@ graph TB
 
 - **No SQLite/Spotlight:** Custom mmap'd format delivers sub-5ms queries. SQLite FTS5 with trigrams is 100-500ms for 1M files.
 - **Parallel `getattrlistbulk` scan:** The indexer reads directory metadata in bulk across a worker pool instead of one `stat` per file — ~6.6× faster on a 5.7M-file tree. (Parallelizing the per-file `stat` walk barely helped; the `std.Io` path serializes, while the raw bulk syscall scales.)
-- **Vtable FS interface:** Same `ptr + vtable` pattern as `std.mem.Allocator`. `FakeFs` enables fast, deterministic tests with no disk I/O.
-- **ObjC runtime bridge:** Direct `@cImport("objc/runtime.h")` with typed `objc_msgSend` wrappers — no external dependencies for AppKit interop.
+- **C ABI engine boundary:** The Swift app links `libzest-core.a` (built by `zig build core -Doptimize=ReleaseFast`) and calls into the Zig engine via a thin C ABI (`capi/zest_core.zig`). All state for a query session lives in an opaque `ZestHandle` pointer; Swift owns the lifetime.
 - **Unmanaged ArrayLists:** Zig 0.16 `std.ArrayList` is unmanaged (allocator passed per-call), which we use throughout.
-- **Centralized `Io` handle:** Zig 0.16 routes filesystem, clock, and process access through an `Io` instance handed to `main`. We stash it once in `core/runtime.zig` (alongside small `readFileAlloc`/`writeFileAbsolute`/`ensureDir` helpers) rather than threading it through every signature — the same global-state pattern the UI uses for `delegate.state`.
-- **Deep modules over shallow ones:** Consolidated `PinManager`, `FolderColorManager`, and `FilterStore` into `UserState` (one module, batch load/save). Extracted `SessionIndex` for index lifecycle. Moved subtree computations out of `IndexReader` into `subtree.zig`. Filter parsing lives with `FilterCriterion` in `filters.zig`. Each module earns its keep by concentrating complexity, not just moving it.
-- **Callback-based async delivery:** `AsyncSearch` receives a `SearchDelivery` callback at construction time so the core layer never imports UI code. GCD dispatch helpers live in `core/dispatch.zig`.
+- **Centralized `Io` handle:** Zig 0.16 routes filesystem, clock, and process access through an `Io` instance handed to `main`. We stash it once in `core/runtime.zig` (alongside small `readFileAlloc`/`writeFileAbsolute`/`ensureDir` helpers) rather than threading it through every signature.
+- **Deep modules over shallow ones:** Moved subtree computations out of `IndexReader` into `subtree.zig`. Filter parsing lives with `FilterCriterion` in `filters.zig`. Each module earns its keep by concentrating complexity, not just moving it.
 
 ## Project Structure
 
 ```
+Sources/Zest/             # Swift app (AppKit UI + coordination)
+├── App/
+│   ├── AppCoordinator.swift  # Query coordinator (result caching, filtering, sorting)
+│   ├── AppDelegate.swift     # NSApplicationDelegate
+│   ├── main.swift            # Entry point
+│   └── Snapshot.swift        # Index snapshot value type
+├── Core/
+│   ├── UserState.swift       # Pins + folder colors persistence (JSON)
+│   └── ZestCore.swift        # Swift wrapper over the C ABI
+├── Browser/              # File list view controller
+├── Sidebar/              # Pinned-folders sidebar
+├── Shell/                # Chrome: toolbar, search field, breadcrumb, filter bar, status bar
+└── Design/               # Theme, colors, layout constants
+
 src/
-├── main.zig              # CLI entry: arg parsing, --benchmark / --benchmark-list, launches the GUI
 ├── indexer_main.zig      # Daemon entry point (sets up runtime, delegates to daemon.zig)
-├── app.zig               # Slim controller (navigator, user_state, session_index, fs provider)
+├── zest_core_lib.zig     # Library root for libzest-core.a
 ├── test_root.zig         # Test root importing all modules with embedded tests
 ├── core/
 │   ├── types.zig          # FileKind, FileCategory, FileEntry, Pin, SearchResult, DirListing
-│   ├── fs_provider.zig    # FileSystemProvider vtable interface
-│   ├── real_fs.zig        # Real filesystem implementation (isDir/openFile)
-│   ├── fake_fs.zig        # In-memory fake for tests
 │   ├── file_types.zig     # Extension → category mapping (80+ extensions)
-│   ├── navigator.zig      # Path navigation with back/forward/up history
-│   ├── user_state.zig     # Pins, folder colors, saved filters, terminal config (JSON persistence)
 │   ├── filters.zig        # Filter criteria (ext/kind/size/date/category/path) + parsing + matching
-│   ├── async_search.zig   # Background search coordinator (threads + GCD delivery via callback)
-│   ├── dispatch.zig       # GCD dispatch helpers (dispatch_get_main_queue, dispatch_async_f)
 │   ├── humanize.zig       # Human-friendly size / duration / count formatters
 │   └── runtime.zig        # Process-wide Io/env handle + file helpers (Zig 0.16)
 ├── index/
@@ -258,47 +251,44 @@ src/
 │   ├── subtree.zig        # O(D) subtree walks (histogram, ext breakdown across directories)
 │   ├── search.zig         # Scoped query: substring search, filters, sort, folder listings
 │   ├── bitmap.zig         # Sorted-array bitmaps (AND, OR, contains, iterate)
-│   ├── session.zig        # Index lifecycle: snapshots, inode-based update detection, search
 │   ├── fsevents.zig       # FSEvents C interop wrapper
 │   └── daemon.zig         # Background indexer: scan, watch, rebuild, launchd
-├── ui/                    # Native AppKit UI (GitHub Dark theme)
-│   ├── appkit.zig         # App bootstrap (NSApplication + run loop)
-│   ├── delegate.zig       # AppState + ObjC callbacks (table/sidebar/menus/actions)
-│   ├── window.zig         # Window, toolbar, split view, main menu
-│   ├── file_list.zig      # NSTableView file list
-│   ├── sidebar.zig        # Pinned-folders sidebar
-│   ├── icons.zig          # File icons (NSWorkspace)
-│   ├── theme.zig          # GitHub Dark theme color constants
-│   └── objc.zig           # ObjC runtime bridge (msgSend wrappers, NSString, GCD re-exports)
 ├── capi/
 │   └── zest_core.zig      # C ABI over the Zig index engine for the Swift UI
 └── config/
     ├── config.zig         # App paths, exclude patterns, directory setup
-    └── user_config.zig    # ~/.config/zest/config.json (e.g. preferred terminal)
+    └── user_config.zig    # Terminal-candidate resolution
+
+benchmarks/
+└── bench_capi.zig         # C ABI regression harness (run with `just bench-capi`)
 ```
 
 ## Testing
 
-All tests use `FakeFs` (in-memory filesystem) — no real disk I/O, no UI. Tests are embedded in source files as Zig `test` blocks.
+Zig tests are embedded in source files as `test` blocks. Swift tests live in `Tests/ZestTests/`.
 
 ```sh
-zig build test     # Run all tests via src/test_root.zig
+zig build test     # Run all Zig tests via src/test_root.zig
+swift test         # Run all Swift tests
 ```
 
-Test coverage:
+Zig test coverage:
 - File type categorization (extensions, dotfiles, compound extensions)
 - Query parsing and filter matching (`ext`/`kind`/`size`/`date`/`category`/`path`, negation)
-- UserState (pins JSON roundtrip, folder colors save/load, saved filters, terminal config)
 - Bitmap operations (contains, AND intersection, OR union, iteration)
 - Index format roundtrip (write → read, all columns) and scan-file parsing
 - Search (substring, case-insensitive, qualifier/category filters, scope + depth folder listings, column sort incl. folders-on-top)
 - C API (zest_query routing, histogram depth=1 vs subtree, ext_breakdown per-folder and merged)
-- SessionIndex (snapshot lifecycle, inode-based update detection)
 - Subtree operations (histogram aggregation, ext breakdown merging)
-- Navigator (history, root boundary, forward-stack clearing)
 - Config excludes, terminal-candidate resolution, and humanize formatters
 
-The UI layer (`ui/*`) is exercised by hand, not in the test suite, per project convention.
+Swift test coverage:
+- Filter parsing and query matching (ZestTests/FilterTests)
+- Theme derivation and color constants (ZestTests/ThemeTests)
+- ZestCore C ABI wrapper (ZestTests/ZestCoreTests)
+- UserState pins and folder colors persistence (ZestTests/UserStateTests)
+
+The Swift UI layer is exercised by hand, not in the test suite, per project convention.
 
 ## License
 

@@ -1,6 +1,5 @@
-//! Terminal-preference helpers for the "Open in Terminal" action. The actual
-//! `~/.config/zest/config.json` parsing lives in `core/user_state.zig`
-//! (`parseConfigJson`); this module just owns the candidate-list policy.
+//! Terminal-preference helpers for the "Open in Terminal" action.
+//! This module owns the candidate-list policy for terminal detection.
 
 const std = @import("std");
 
