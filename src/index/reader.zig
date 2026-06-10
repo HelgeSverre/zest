@@ -255,7 +255,8 @@ pub const IndexReader = struct {
         cat: u8,
         out: []ExtCount,
     ) usize {
-        const num_dirs = self.dirCount() orelse return 0;
+        const num_dirs = self.dirCount();
+        if (num_dirs == 0) return 0;
         if (dir_id >= num_dirs) return 0;
         if (cat >= types.FileCategory.count) return 0;
         if (out.len == 0) return 0;
@@ -277,12 +278,13 @@ pub const IndexReader = struct {
         return self.readBucketInto(pos, out);
     }
 
-    /// Number of directories in the dir table. Cached inline.
-    fn dirCount(self: IndexReader) ?u32 {
+    /// Number of directories in the dir table. Bounds-checked; returns 0 on
+    /// malformed/truncated index (matches the defensive pattern in findDirId).
+    pub fn dirCount(self: IndexReader) u32 {
         const num: usize = @intCast(self.header.num_entries);
         const parent_ids_start: usize = @intCast(self.header.paths_offset);
         const dir_count_offset = parent_ids_start + num * 4;
-        if (dir_count_offset + 4 > self.data.len) return null;
+        if (dir_count_offset + 4 > self.data.len) return 0;
         return std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
     }
 

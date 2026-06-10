@@ -109,7 +109,7 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
     const in_subtree = allocator.alloc(u8, num_dirs) catch return 0;
     defer allocator.free(in_subtree);
     @memset(in_subtree, 0);
-    if (!markSubtreeDirs(header, data, scope_path, in_subtree)) return 0;
+    if (!markSubtreeDirsRaw(header, data, scope_path, in_subtree)) return 0;
 
     // Single forward walk of the column. For each (dir_id, cat) bucket,
     // check if the bucket's cat matches AND dir_id is in the subtree. If
@@ -194,10 +194,19 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
     return n;
 }
 
+/// Fill `marks[dir_id] = 1` for `scope_path`'s dir and every descendant dir.
+/// `marks.len` must equal the dir-table count (reader.dirCount()). O(D) over
+/// the dedup'd dir table — built once per query so entry filtering is one byte
+/// test instead of a string prefix compare per entry.
+/// Uses the same boundary-safe predicate as config.isPathUnder.
+pub fn markSubtreeDirs(reader: reader_mod.IndexReader, scope_path: []const u8, marks: []u8) void {
+    _ = markSubtreeDirsRaw(reader.header, reader.data, scope_path, marks);
+}
+
 /// Mark `in_subtree[d] = 1` for every dir id that falls under
 /// `scope_path` (or every dir if `scope_path == "/"`). Returns false
 /// if the dir table is malformed.
-fn markSubtreeDirs(header: format.Header, data: []const u8, scope_path: []const u8, in_subtree: []u8) bool {
+fn markSubtreeDirsRaw(header: format.Header, data: []const u8, scope_path: []const u8, in_subtree: []u8) bool {
     const num = in_subtree.len;
     const parent_ids_start: usize = @intCast(header.paths_offset);
     const dir_count_offset = parent_ids_start + @as(usize, @intCast(header.num_entries)) * 4;

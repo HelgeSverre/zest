@@ -3,6 +3,7 @@ const types = @import("../core/types.zig");
 const reader_mod = @import("reader.zig");
 const bitmap_mod = @import("bitmap.zig");
 const filters_mod = @import("../core/filters.zig");
+const subtree_mod = @import("subtree.zig");
 
 pub const SearchOptions = struct {
     query: []const u8,
@@ -160,6 +161,24 @@ pub fn searchCancellable(
         else
             null;
 
+        // Subtree scope at unlimited depth: mark descendant dirs once (O(D) over
+        // the dedup'd dir table), then test one byte per entry instead of
+        // buildResult + string prefix compare for all entries. Finite depths > 1
+        // keep the old matchesScope path (depth-limited semantics require the
+        // actual string comparison that matchesScope does; the byte table ignores
+        // depth limits).
+        var subtree_marks: ?[]u8 = null;
+        defer if (subtree_marks) |m| allocator.free(m);
+        if (opts.max_depth == std.math.maxInt(u32) and !scope_is_root) {
+            const dc = reader.dirCount();
+            if (dc > 0) {
+                const m = try allocator.alloc(u8, dc);
+                @memset(m, 0);
+                subtree_mod.markSubtreeDirs(reader.*, stripTrailingSlash(opts.scope), m);
+                subtree_marks = m;
+            }
+        }
+
         var idx: u32 = 0;
         while (idx < num_entries and results.items.len < opts.max_results) : (idx += 1) {
             // Cancellation check every 512 entries
@@ -171,12 +190,18 @@ pub fn searchCancellable(
 
             if (scope_dir_id) |want| {
                 if ((reader.getParentId(idx) orelse continue) != want) continue;
+            } else if (subtree_marks) |m| {
+                const pid = reader.getParentId(idx) orelse continue;
+                if (pid >= m.len or m[pid] == 0) continue;
             }
             if (cat_bitmap) |bm| {
                 if (!bm.contains(idx)) continue;
             }
             if (buildResult(reader, idx)) |result| {
-                if (!matchesScope(result.dir_path, opts.scope, opts.max_depth)) continue;
+                // subtree_marks covers the unlimited-depth case; fall back to
+                // matchesScope only for the finite-depth > 1 case (rare; keeps
+                // depth-limited semantics exact).
+                if (subtree_marks == null and !matchesScope(result.dir_path, opts.scope, opts.max_depth)) continue;
                 if (!matchFilters(opts.filters, result)) continue;
                 try results.append(allocator, result);
             }
@@ -754,6 +779,39 @@ test "scope deeper than any entry returns empty" {
     const results = try search(allocator, &idx.reader, .{ .query = "", .scope = "/nonexistent/deep/path", .max_depth = std.math.maxInt(u32) });
     defer allocator.free(results);
     try std.testing.expectEqual(@as(usize, 0), results.len);
+}
+
+test "filter-only subtree query matches descendants but not siblings" {
+    const allocator = std.testing.allocator;
+    const entries = [_]format.IndexEntry{
+        .{ .name = "a.pdf", .dir_path = "/home/u/docs", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+        .{ .name = "b.pdf", .dir_path = "/home/u/docs/sub", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+        .{ .name = "c.pdf", .dir_path = "/home/other", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+        .{ .name = "sub", .dir_path = "/home/u/docs", .size = 0, .mtime = 1, .kind = .directory, .category = .uncategorized },
+    };
+    const data = try format.writeIndex(allocator, &entries);
+    defer allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(allocator, data);
+    defer reader.deinit();
+
+    // ext:pdf filter + scope "/home/u/docs" + unlimited depth:
+    // a.pdf (in /home/u/docs) and b.pdf (in /home/u/docs/sub) must match;
+    // c.pdf (in /home/other) must NOT match even though it is a PDF.
+    var ext_filter = filters_mod.FilterCriterion{ .extension = .{} };
+    @memcpy(ext_filter.extension.value[0..3], "pdf");
+    ext_filter.extension.len = 3;
+
+    const results = try search(allocator, &reader, .{
+        .query = "",
+        .filters = &.{ext_filter},
+        .scope = "/home/u/docs",
+        .max_depth = std.math.maxInt(u32),
+    });
+    defer allocator.free(results);
+    try std.testing.expectEqual(@as(usize, 2), results.len);
+    for (results) |r| {
+        try std.testing.expect(std.mem.startsWith(u8, r.dir_path, "/home/u/docs"));
+    }
 }
 
 test "scope root depth-1 selects only root-level entries" {
