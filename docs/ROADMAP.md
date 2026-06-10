@@ -66,16 +66,16 @@ every change (destroys the clicked row mid-double-click), stale-index
   `AppCoordinator` so `browser.reload()` and `filterBar.refresh()` share one
   query; wrap `SearchField.commit` (scope + text) in `withoutNotifying` so a
   keystroke fires `onChange` once, not twice. Net: 4 passes/keystroke → 1.
-- [ ] **A5. Query off the main thread** — serial background queue + generation
+- [x] **A5. Query off the main thread** — serial background queue + generation
   counter in `AppCoordinator` (the sidebar histogram already does exactly
   this pattern); deliver on main, drop stale generations. Optionally expose
   the existing cancellable search (`search.zig` already supports a
   generation atomic) through the C ABI.
-- [ ] **A6. Stop the daemon rebuild treadmill** — set
+- [x] **A6. Stop the daemon rebuild treadmill** — set
   `kFSEventStreamCreateFlagIgnoreSelf` and/or `FSEventStreamSetExclusionPaths`
   for `~/Library/Application Support/zest` in `src/index/fsevents.zig` /
   `daemon.zig`; filter those paths in `onFSEvent` before counting dirty events.
-- [ ] **A7. Index hot-reload in Swift** — poll the index inode/mtime (~5 s
+- [x] **A7. Index hot-reload in Swift** — poll the index inode/mtime (~5 s
   timer) in `ZestCore`/`AppCoordinator`; on change, build a new `ZestCore`,
   swap, release the old (rows are copied at the FFI boundary, so no dangling
   pointers). Also retry when launched before the first index exists
@@ -83,26 +83,26 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 ## Phase B — UX correctness
 
-- [ ] **B1. Fix double-click reliability** — stop `reloadData()` +
+- [x] **B1. Fix double-click reliability** — stop `reloadData()` +
   select-row-0 + `scrollRowToVisible(0)` on every change; preserve
   selection/scroll on refresh; only reset on actual navigation.
-- [ ] **B2. Navigation feedback** — `navigate()`'s `guard` currently fails
+- [x] **B2. Navigation feedback** — `navigate()`'s `guard` currently fails
   silently (stale paths, typos in address bar). Beep / shake / status-bar
   message on failure.
-- [ ] **B3. Lazy row formatting** — format size/date in
+- [x] **B3. Lazy row formatting** — format size/date in
   `tableView(_:viewFor:row:)` for visible rows only (or memoize); replace
   `ByteCountFormatter` with a hand-rolled formatter; sort on precomputed
   lowercase keys instead of `localizedCaseInsensitiveCompare` per comparison.
-- [ ] **B4. Subtree query fast path** (`search.zig` filter-only path with
+- [x] **B4. Subtree query fast path** (`search.zig` filter-only path with
   `max_depth > 1`) — mark subtree dirs once (reuse `markSubtreeDirs`), then
   test parent-id membership per entry instead of `buildResult` + string
   prefix compare for all 5.5M entries.
-- [ ] **B5. Fix subtree ext-breakdown merge** (`src/index/subtree.zig`) — the
+- [x] **B5. Fix subtree ext-breakdown merge** (`src/index/subtree.zig`) — the
   hash key is the storage *offset* (always unique) instead of the name, so
   per-extension counts never merge across dirs; sidebar shows duplicate
   split rows. Key by name bytes (`std.StringHashMap` over slices into the
   index buffer).
-- [ ] **B6. Empty/loading/no-index states** (redesign spec §6.4 +
+- [x] **B6. Empty/loading/no-index states** (redesign spec §6.4 +
   ARCHITECTURE.md known-gaps) — today a missing `index.zst` silently shows
   zero rows and `core == nil` is permanent. Add: no-index state with copy
   ("run `just index`"), no-results state, and a loading indicator once
@@ -110,18 +110,18 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 ## Phase C — Hardening (corrupt-index & daemon robustness)
 
-- [ ] C1. `@enumFromInt` on disk bytes (`reader.zig`, `bitmap.zig`) — use
+- [x] C1. `@enumFromInt` on disk bytes (`reader.zig`, `bitmap.zig`) — use
   `std.enums.fromInt(...) orelse default` (a corrupt byte currently panics).
-- [ ] C2. `getDirPath` missing `dir_offset <= next_offset` bounds check
+- [x] C2. `getDirPath` missing `dir_offset <= next_offset` bounds check
   (`reader.zig`).
-- [ ] C3. `cnt * 4` u32 overflow on disk-read count (`bitmap.zig`).
-- [ ] C4. Validate `num_entries` against `data.len` in reader init; consider a
+- [x] C3. `cnt * 4` u32 overflow on disk-read count (`bitmap.zig`).
+- [x] C4. Validate `num_entries` against `data.len` in reader init; consider a
   header checksum for the format.
-- [ ] C5. Escape `\t`/`\n` in scan lines (legal in APFS filenames; currently
+- [x] C5. Escape `\t`/`\n` in scan lines (legal in APFS filenames; currently
   corrupt the TSV records) — or move to length-prefixed records.
-- [ ] C6. Worker-pool deadlock: `pending` counts subdirs whose queue-append
+- [x] C6. Worker-pool deadlock: `pending` counts subdirs whose queue-append
   failed (`bulk_scan.zig`) — count only successful appends.
-- [ ] C7. Lazy bitmap init race (`reader.zig:getCategoryBitmaps`) — becomes a
+- [x] C7. Lazy bitmap init race (`reader.zig:getCategoryBitmaps`) — becomes a
   real data race once queries move off-main (A5). Init eagerly+fatally in
   `zest_open`, or guard with a once/mutex.
 - [ ] C8. C ABI error reporting — `zest_query` returns null for OOM and
@@ -137,7 +137,7 @@ every change (destroys the clicked row mid-double-click), stale-index
   `session.zig`'s inode-poll logic to Swift (A7) first, then delete the
   chain + the `zest` executable from `build.zig` (it links AppKit and slows
   every build). Keep: indexer chain + capi chain + shared core files.
-- [ ] **D2. Rewrite CLAUDE.md** — it still describes the pure-Zig AppKit app
+- [x] **D2. Rewrite CLAUDE.md** — it still describes the pure-Zig AppKit app
   and the 5s stat-poll; the real architecture is Swift UI + libzest-core.a
   (see docs/ARCHITECTURE.md, which is accurate).
 - [x] **D3. README drift** — references `just dev` / `just bench` recipes that
@@ -147,7 +147,7 @@ every change (destroys the clicked row mid-double-click), stale-index
 - [x] D6. Delete `Sample of Zest.txt` from the repo root — a committed
   213KB `sample(1)` profiler dump from the 2026-06-06 lag investigation,
   superseded by `benchmarks/bench_capi.zig` + docs/ROADMAP.md.
-- [ ] D5. Commit policy: `Sources/Zest/App/AppCoordinator.swift` working-tree
+- [x] D5. Commit policy: `Sources/Zest/App/AppCoordinator.swift` working-tree
   diff is a pure re-format (2→4-space) + one stray `).d` typo in a doc
   comment — fix the typo, settle on one swift-format config, commit.
 
@@ -155,7 +155,8 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 - [ ] E1. Saved-filters manager (the toolbar "Saved ▾" button is a render-only
   stub).
-- [ ] E1b. **Real pins + folder colors in the Swift app** — sidebar pins are
+- [x] E1b. **Real pins + folder colors in the Swift app** *(pins + colors
+  done 2026-06-10 via Swift `UserState`; saved-filters manager remains E1)* — sidebar pins are
   hardcoded (`SidebarViewController.pins()`, explicit TODO); the old app's
   `pins.json` / `folder_colors.json` (still on disk in app support) are
   ignored. Decision needed: expose `zest_pins_* / zest_filter_* /
@@ -199,6 +200,23 @@ history of this file. Method: mmap real index, 1 warmup + 7 samples (or 1
 sample if warmup > 5 s), median reported; drain pass measures FFI row-copy
 cost separately (it's ≤ 6 ms / 100k rows — data transfer was never the
 bottleneck; rendering eagerness and the engine were).
+
+Post-stabilization (2026-06-10, after the A5–A7 + Phase B + Phase C rounds;
+ReleaseFast):
+
+| op | median |
+|---|---|
+| search `i` @100k cap | 17.0 ms |
+| search `i` @2k (the app's cap) | ≤ 0.2 ms |
+| search `invoice` @2k | ~65 ms (full-blob-scan floor — E3 is the next win) |
+| browse (folder listing) | 5.1 ms |
+| histogram depth=1 / subtree | 0.0 / 1.2 ms |
+| ext_breakdown ×9 depth=1 / subtree | 0.0 / 83 ms (merge fix also sped it up) |
+
+All engine queries now run off the main thread in the app (generation-dropped
+staleness), so even the 65–135 ms floors never block the UI. Depth-1 sidebar
+reads dropped to ~0 ms once the daemon rebuild treadmill stopped churning the
+page cache.
 
 ## Archived docs
 
