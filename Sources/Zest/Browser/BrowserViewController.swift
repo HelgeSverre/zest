@@ -44,6 +44,19 @@ final class BrowserViewController: NSViewController {
   private let tableView = ZestTableView()
   private var emptyLabel: NSTextField?
 
+  // MARK: Reload key — context identity for selection/scroll policy
+
+  /// Captures the three axes that define a "different context" for the file
+  /// list. When all three match the previous reload the table is showing the
+  /// same logical folder/query, so selection should be preserved. When any one
+  /// differs (navigation, search text change, scope change) we reset to row 0.
+  private struct ReloadKey: Equatable {
+    let path: String
+    let query: String
+    let scope: AppCoordinator.Scope
+  }
+  private var lastReloadKey: ReloadKey?
+
   /// Derived accent family (dark) used by the selection chrome.
   fileprivate static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
 
@@ -101,13 +114,30 @@ final class BrowserViewController: NSViewController {
   // MARK: Data
 
   /// Re-run the coordinator's query (query/scope/sort aware), remap, and refresh
-  /// the table (or empty state). Picks the row height (34 browse / 48 search) and
-  /// reselects row 0 when non-empty.
+  /// the table (or empty state). Picks the row height (34 browse / 48 search).
+  ///
+  /// Selection/scroll policy (two-pass async aware):
+  /// - Context changed (path, query, or scope differs from last call): reset to
+  ///   row 0 + scroll top. This covers pass 1 of a navigation event.
+  /// - Same context (pass 2 delivery, hot-reload, sort re-order): try to
+  ///   re-select the item by path. If the item is still present, no scroll.
+  ///   If it disappeared (stale pass 1 item gone in pass 2), and NSTableView
+  ///   cleared the selection after reloadData(), fall back to row 0.
+  /// - Empty: deselect all.
+  ///
+  /// NSTableView clears (sets selectedRow = -1) or clamps selection after
+  /// reloadData() when the previously selected row is out of range; we capture
+  /// `selectedPath` before replacing `items` so the same-context branch can
+  /// find the item in the new list even if its index shifted.
   func reload() {
     searchMode = coordinator.isSearchMode
-    items = coordinator.results().map {
-      Self.makeItem(from: $0)
-    }
+
+    // Capture the currently-selected item's path BEFORE we replace `items` so
+    // the same-context branch can relocate it in the refreshed list.
+    let selectedPath = tableView.selectedRow >= 0 && tableView.selectedRow < items.count
+      ? items[tableView.selectedRow].path : nil
+
+    items = coordinator.results().map { Self.makeItem(from: $0) }
     updateSortIndicator()
 
     let isEmpty = items.isEmpty
@@ -126,12 +156,33 @@ final class BrowserViewController: NSViewController {
     }
 
     tableView.reloadData()  // re-asks heightOfRow, so the 34/48 switch applies
+
+    let key = ReloadKey(
+      path: coordinator.currentPath,
+      query: coordinator.queryText,
+      scope: coordinator.scope)
+    let contextChanged = key != lastReloadKey
+    lastReloadKey = key
+
     if isEmpty {
       tableView.deselectAll(nil)
+    } else if contextChanged {
+      // Real navigation / search change: reset to the top.
+      tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+      tableView.scrollRowToVisible(0)
+    } else if let selectedPath, let idx = items.firstIndex(where: { $0.path == selectedPath }) {
+      // Same context (delivery pass, hot-reload, sort): keep the user's
+      // selection. Scroll position is intentionally left alone so in-place
+      // refreshes don't jump the viewport.
+      tableView.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
     } else {
+      // Previously selected item is gone (or nothing was selected): fall back
+      // to row 0. reloadData() can preserve a same-index selection that now
+      // points at a different item — don't leave that lying around.
       tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
       tableView.scrollRowToVisible(0)
     }
+
     // Push the current selection summary directly: `selectRowIndexes` only
     // posts a change notification when the row actually changes, so a reload
     // that lands on the same row would otherwise leave the status bar stale.
