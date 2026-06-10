@@ -5,14 +5,28 @@ _default:
     @just --list
 
 # Build everything: Zig binaries (zest, zest-indexer) + static lib (libzest-core.a) + Swift app.
+# The core lib is rebuilt ReleaseFast last — the Swift app links zig-out/lib, and a
+# Debug engine is ~19x slower on real queries (82.8s vs 4.5s for a 1-char search).
 build:
     zig build
+    zig build core -Doptimize=ReleaseFast
     swift build
 
 # Run all tests: Zig unit tests + Swift unit tests.
+# (`zig build test` installs a Debug lib as a side effect; restore ReleaseFast
+# before swift test so the Swift suite — and the next `swift run` — use it.)
 test:
     zig build test
+    zig build core -Doptimize=ReleaseFast
     swift test
+
+# Benchmark the C-ABI engine (zest_query/histogram/ext_breakdown) against the
+# real index. Median over 7 samples; see benchmarks/bench_capi.zig.
+bench-capi:
+    zig build core -Doptimize=ReleaseFast --prefix zig-out/release
+    mkdir -p zig-out/bin
+    zig build-exe benchmarks/bench_capi.zig zig-out/release/lib/libzest-core.a -lc -OReleaseFast -femit-bin=zig-out/bin/bench-capi
+    ./zig-out/bin/bench-capi
 
 # Format all sources: `zig fmt` over src/ + `swift-format` over Sources/.
 format:
