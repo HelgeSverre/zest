@@ -69,6 +69,7 @@ final class AppCoordinator {
     enum SortColumn { case name, size, modified, kind, ext }
 
     let core: ZestCore?
+    let userState: UserState
     private(set) var currentPath: String
     private var backStack: [String] = []
     private var forwardStack: [String] = []
@@ -162,9 +163,9 @@ final class AppCoordinator {
     init() {
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        core = support.flatMap {
-            ZestCore(indexPath: $0.appendingPathComponent("zest/index.zst").path)
-        }
+        let zestDir = support?.appendingPathComponent("zest")
+        core = zestDir.flatMap { ZestCore(indexPath: $0.appendingPathComponent("index.zst").path) }
+        userState = UserState(directory: zestDir)
         currentPath = fm.homeDirectoryForCurrentUser.path
     }
 

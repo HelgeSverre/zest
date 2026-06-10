@@ -29,24 +29,20 @@ final class SidebarViewController: NSViewController {
     let path: String
   }
 
-  // TODO: load from configuration
   private func pins() -> [Pin] {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    return [
-      Pin(label: "Home", symbol: "house", path: home),
-      Pin(
-        label: "Desktop", symbol: "display",
-        path: (home as NSString).appendingPathComponent("Desktop"),
-      ),
-      Pin(
-        label: "Documents", symbol: "doc",
-        path: (home as NSString).appendingPathComponent("Documents"),
-      ),
-      Pin(
-        label: "Downloads", symbol: "arrow.down",
-        path: (home as NSString).appendingPathComponent("Downloads"),
-      ),
-    ]
+    coordinator.userState.pins.map { p in
+      Pin(label: p.name, symbol: Self.pinSymbol(for: p), path: p.path)
+    }
+  }
+
+  private static func pinSymbol(for pin: UserState.Pin) -> String {
+    switch pin.name {
+    case "Home": "house"
+    case "Desktop": "display"
+    case "Documents": "doc"
+    case "Downloads": "arrow.down"
+    default: "folder"
+    }
   }
 
   override func loadView() {
