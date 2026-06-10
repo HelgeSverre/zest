@@ -19,6 +19,7 @@ const types = @import("../core/types.zig");
 const file_types = @import("../core/file_types.zig");
 const config = @import("../config/config.zig");
 const runtime = @import("../core/runtime.zig");
+const format = @import("format.zig");
 
 /// Number of scan worker threads. 8 was the measured sweet spot (x4=5.2x,
 /// x8=6.6x) on a 12-core machine; more gave diminishing returns.
@@ -163,16 +164,21 @@ fn workerMain(w: *Worker) void {
         sh.alloc.free(dir_path);
 
         sh.mutex.lockUncancelable(io);
-        for (subdirs.items) |sd| sh.queue.append(sh.alloc, sd) catch {
-            sh.write_failed.store(true, .monotonic);
-            sh.alloc.free(sd);
-        };
-        sh.pending += subdirs.items.len;
+        var appended: usize = 0;
+        for (subdirs.items) |sd| {
+            if (sh.queue.append(sh.alloc, sd)) {
+                appended += 1;
+            } else |_| {
+                sh.write_failed.store(true, .monotonic);
+                sh.alloc.free(sd);
+            }
+        }
+        sh.pending += appended;
         sh.pending -= 1;
         if (sh.pending == 0) {
             sh.done = true;
             sh.cond.broadcast(io);
-        } else if (subdirs.items.len > 0) {
+        } else if (appended > 0) {
             sh.cond.broadcast(io);
         }
         sh.mutex.unlock(io);
@@ -197,6 +203,14 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
         .dirattr = 0,
         .fileattr = ATTR_FILE_DATALENGTH,
         .forkattr = 0,
+    };
+
+    // Hoist path escaping: `path` is invariant for this entire processDir call,
+    // so compute esc_path once rather than re-escaping it for every entry.
+    var esc_path_buf: [4096 * 2]u8 = undefined;
+    const esc_path = format.escapeTsv(&esc_path_buf, path) orelse {
+        w.shared.write_failed.store(true, .monotonic);
+        return;
     };
 
     var buf: [128 * 1024]u8 align(8) = undefined;
@@ -258,18 +272,35 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
 
             if (kind == .directory) {
                 if (path.len + 1 + name.len <= 4096) {
-                    const cp = std.fmt.allocPrint(alloc, "{s}/{s}", .{ path, name }) catch continue;
+                    const cp = std.fmt.allocPrint(alloc, "{s}/{s}", .{ path, name }) catch {
+                        w.shared.write_failed.store(true, .monotonic);
+                        continue;
+                    };
                     if (config.shouldExcludePath(cp)) {
                         alloc.free(cp);
                         continue;
                     }
-                    subdirs.append(alloc, cp) catch alloc.free(cp);
+                    subdirs.append(alloc, cp) catch {
+                        w.shared.write_failed.store(true, .monotonic);
+                        alloc.free(cp);
+                    };
                 } else continue; // path too long for the buffer; record entry, don't recurse
             }
 
             const cat: types.FileCategory = if (kind == .directory) .uncategorized else file_types.categorize(name);
+
+            // Escape tab/newline/backslash so a filename like "we\tird" (legal
+            // on APFS) doesn't shear the TSV line. esc_path was hoisted above
+            // the loop (path is invariant); only the name buffer is per-entry.
+            // Name buffer is sized at 2× NAME_MAX (255 bytes).
+            var esc_name_buf: [255 * 2]u8 = undefined;
+            const esc_name = format.escapeTsv(&esc_name_buf, name) orelse {
+                w.shared.write_failed.store(true, .monotonic);
+                continue;
+            };
+
             w.writer.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\n", .{
-                name, path, size, mtime, @intFromEnum(kind), @intFromEnum(cat),
+                esc_name, esc_path, size, mtime, @intFromEnum(kind), @intFromEnum(cat),
             }) catch {
                 // Don't count an entry we failed to write — the old code bumped
                 // local_entries unconditionally, overstating the index size.

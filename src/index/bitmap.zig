@@ -121,15 +121,19 @@ pub fn readCategoryBitmaps(allocator: std.mem.Allocator, data: []const u8, bitma
         const cnt = std.mem.readInt(u32, data[pos..][0..4], .little);
         pos += 4;
 
-        const end = pos + cnt * 4;
+        const end = pos + @as(usize, cnt) * 4;
         if (end > data.len) break;
+
+        const cat = std.enums.fromInt(types.FileCategory, cat_byte) orelse {
+            pos = end;
+            continue;
+        };
 
         const aligned = try allocator.alloc(u32, cnt);
         for (0..cnt) |i| {
             aligned[i] = std.mem.readInt(u32, data[pos + i * 4 ..][0..4], .little);
         }
 
-        const cat: types.FileCategory = @enumFromInt(cat_byte);
         try map.put(cat, .{ .indices = aligned, .allocator = allocator });
         pos = end;
     }

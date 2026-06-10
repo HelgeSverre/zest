@@ -109,6 +109,92 @@ const BufWriter = struct {
     }
 };
 
+/// Escape backslash, tab, and newline for the TSV scan records
+/// ('\\'→"\\\\", '\t'→"\\t", '\n'→"\\n").
+/// Returns null if `out` is too small (caller should skip the entry).
+pub fn escapeTsv(out: []u8, s: []const u8) ?[]const u8 {
+    var di: usize = 0;
+    for (s) |ch| {
+        switch (ch) {
+            '\\' => {
+                if (di + 2 > out.len) return null;
+                out[di] = '\\';
+                out[di + 1] = '\\';
+                di += 2;
+            },
+            '\t' => {
+                if (di + 2 > out.len) return null;
+                out[di] = '\\';
+                out[di + 1] = 't';
+                di += 2;
+            },
+            '\n' => {
+                if (di + 2 > out.len) return null;
+                out[di] = '\\';
+                out[di + 1] = 'n';
+                di += 2;
+            },
+            else => {
+                if (di + 1 > out.len) return null;
+                out[di] = ch;
+                di += 1;
+            },
+        }
+    }
+    return out[0..di];
+}
+
+/// Inverse of escapeTsv. Decodes "\\\\", "\\t", "\\n" back to their
+/// original characters. `out` may alias a buffer >= s.len.
+/// Unknown escape sequences (e.g. "\\x") are left as-is (the backslash
+/// and the following char are both copied).
+pub fn unescapeTsv(out: []u8, s: []const u8) []const u8 {
+    var si: usize = 0;
+    var di: usize = 0;
+    while (si < s.len) {
+        if (s[si] == '\\' and si + 1 < s.len) {
+            switch (s[si + 1]) {
+                '\\' => { out[di] = '\\'; di += 1; si += 2; },
+                't'  => { out[di] = '\t'; di += 1; si += 2; },
+                'n'  => { out[di] = '\n'; di += 1; si += 2; },
+                else => { out[di] = s[si]; di += 1; si += 1; },
+            }
+        } else {
+            out[di] = s[si];
+            di += 1;
+            si += 1;
+        }
+    }
+    return out[0..di];
+}
+
+// -------------------------------------------------------------------------
+// Tests
+// -------------------------------------------------------------------------
+
+test "escapeTsv / unescapeTsv round-trip with tab, newline, backslash" {
+    const original = "we\tird\nna\\me";
+    var esc_buf: [original.len * 2]u8 = undefined;
+    const escaped = escapeTsv(&esc_buf, original) orelse return error.TestUnexpectedResult;
+
+    // Escaped form must not contain raw tab or newline
+    for (escaped) |ch| {
+        try std.testing.expect(ch != '\t');
+        try std.testing.expect(ch != '\n');
+    }
+
+    // Round-trip: split on \t (none in escaped) then unescape
+    var unesc_buf: [original.len * 2]u8 = undefined;
+    const roundtrip = unescapeTsv(&unesc_buf, escaped);
+    try std.testing.expectEqualStrings(original, roundtrip);
+}
+
+test "escapeTsv returns null when output buffer too small" {
+    var tiny: [2]u8 = undefined;
+    const result = escapeTsv(&tiny, "ab\\cd");
+    try std.testing.expect(result == null);
+}
+
 pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);

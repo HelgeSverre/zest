@@ -62,7 +62,10 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8) ![
     for (scan_paths) |scan_path| {
         const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch continue;
         defer file.close(runtime.io);
-        var line_buf: [8192]u8 = undefined;
+        // Worst-case escaped record: name ≤ 255*2 + path ≤ 4096*2 + numeric
+        // fields — just under 9KB. 16KB gives comfortable headroom so a
+        // backslash-heavy path can't abort the build with StreamTooLong.
+        var line_buf: [16384]u8 = undefined;
         var file_reader = file.reader(runtime.io, &line_buf);
         try parseScanReader(allocator, &file_reader.interface, &entries, &owned_strings);
     }
@@ -102,10 +105,16 @@ fn parseScanReader(
         }
         if (field_idx < 6) continue; // malformed line
 
-        const name = try allocator.dupe(u8, fields[0]);
-        try owned_strings.append(allocator, name);
-        const dir_path = try allocator.dupe(u8, fields[1]);
-        try owned_strings.append(allocator, dir_path);
+        // Unescape tab/newline/backslash that were escaped by the scanner.
+        // unescapeTsv writes into a buffer <= s.len, so dupe-sized allocations are exact.
+        const name_raw = fields[0];
+        const dir_raw = fields[1];
+        const name_buf = try allocator.alloc(u8, name_raw.len);
+        try owned_strings.append(allocator, name_buf);
+        const name = format.unescapeTsv(name_buf, name_raw);
+        const dir_buf = try allocator.alloc(u8, dir_raw.len);
+        try owned_strings.append(allocator, dir_buf);
+        const dir_path = format.unescapeTsv(dir_buf, dir_raw);
 
         try entries.append(allocator, .{
             .name = name,
@@ -173,4 +182,33 @@ test "buildFromScanReader handles a final line without a trailing newline" {
 
     try std.testing.expectEqual(@as(u64, 1), idx_reader.numEntries());
     try std.testing.expectEqualStrings("only.txt", idx_reader.getName(0).?);
+}
+
+test "parseScanReader round-trips filenames containing tab, newline, and backslash" {
+    // Simulates what bulk_scan would write after escapeTsv:
+    // name "we\tird\nna\\me" at dir "/pa\\th" → escaped → TSV line → unescape → original.
+    const allocator = std.testing.allocator;
+    const original_name = "we\tird\nna\\me";
+    const original_path = "/pa\\th";
+
+    // Manually escape to build the TSV line (same logic as bulk_scan uses).
+    var esc_name_buf: [64]u8 = undefined;
+    var esc_path_buf: [64]u8 = undefined;
+    const esc_name = format.escapeTsv(&esc_name_buf, original_name).?;
+    const esc_path = format.escapeTsv(&esc_path_buf, original_path).?;
+
+    // Build TSV line: <esc_name>\t<esc_path>\t0\t0\t0\t2
+    var line_buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&line_buf, "{s}\t{s}\t0\t0\t0\t2\n", .{ esc_name, esc_path });
+
+    var reader = std.Io.Reader.fixed(line);
+    const index_data = try buildFromScanReader(allocator, &reader);
+    defer allocator.free(index_data);
+
+    var idx_reader = try reader_mod.IndexReader.init(allocator, index_data);
+    defer idx_reader.deinit();
+
+    try std.testing.expectEqual(@as(u64, 1), idx_reader.numEntries());
+    try std.testing.expectEqualStrings(original_name, idx_reader.getName(0).?);
+    try std.testing.expectEqualStrings(original_path, idx_reader.getDirPath(0).?);
 }

@@ -16,6 +16,13 @@ pub const IndexReader = struct {
         var header_reader = std.Io.Reader.fixed(data[0..format.HEADER_SIZE]);
         const header = format.Header.deserialize(&header_reader) catch return error.InvalidIndex;
 
+        // Reject indexes whose claimed num_entries can't possibly fit.
+        // The meta column alone needs num*(8+8+1+1)=18 bytes starting at meta_offset.
+        const num: usize = @intCast(header.num_entries);
+        const meta_need = std.math.mul(usize, num, 18) catch return error.MalformedIndex;
+        const meta_off: usize = @intCast(header.meta_offset);
+        if (meta_off > data.len or meta_need > data.len - meta_off) return error.MalformedIndex;
+
         var reader = IndexReader{
             .data = data,
             .header = header,
@@ -29,6 +36,10 @@ pub const IndexReader = struct {
             data,
             @intCast(header.bitmap_offset),
         ) catch null;
+        // Failure is tolerated silently: category filters degrade to full
+        // scans (see getCategoryBitmaps). No logging here — this file ships
+        // in libzest-core.a, whose charter is pure-CPU/no-Io, and a single
+        // std.debug.print drags ~1.8MB of std Io machinery into the lib.
 
         return reader;
     }
@@ -130,6 +141,7 @@ pub const IndexReader = struct {
         else
             dir_blob_len;
 
+        if (dir_offset > next_offset or next_offset > dir_blob_len) return null;
         const start = dir_blob_start + dir_offset;
         const end = dir_blob_start + next_offset;
         if (end > self.data.len) return null;
@@ -193,8 +205,8 @@ pub const IndexReader = struct {
 
         const size = std.mem.readInt(u64, self.data[sizes_start + idx * 8 ..][0..8], .little);
         const mtime = std.mem.readInt(i64, self.data[mtimes_start + idx * 8 ..][0..8], .little);
-        const kind: types.FileKind = @enumFromInt(self.data[kinds_start + idx]);
-        const category: types.FileCategory = @enumFromInt(self.data[cats_start + idx]);
+        const kind = std.enums.fromInt(types.FileKind, self.data[kinds_start + idx]) orelse .file;
+        const category = std.enums.fromInt(types.FileCategory, self.data[cats_start + idx]) orelse .uncategorized;
 
         return .{ .size = size, .mtime = mtime, .kind = kind, .category = category };
     }
@@ -360,6 +372,27 @@ pub const IndexReader = struct {
             if (p > self.data.len) return false;
         }
         return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests
+    // -------------------------------------------------------------------------
+
+    test "init rejects index with num_entries too large for buffer" {
+        const allocator = std.testing.allocator;
+        // Build a valid 1-entry index, then overwrite num_entries with 0xFFFFFFFFFFFFFFFF.
+        // The meta column would need num * 18 bytes which overflows usize — init must
+        // return MalformedIndex, not panic.
+        const entries = [_]format.IndexEntry{
+            .{ .name = "x.txt", .dir_path = "/x", .size = 0, .mtime = 0, .kind = .file, .category = .text },
+        };
+        var data = try format.writeIndex(allocator, &entries);
+        defer allocator.free(data);
+
+        // num_entries is at byte offset 16 (after magic u64 + version u32 + padding u32).
+        std.mem.writeInt(u64, data[16..24], 0xFFFFFFFFFFFFFFFF, .little);
+
+        try std.testing.expectError(error.MalformedIndex, IndexReader.init(allocator, data));
     }
 
     pub fn openFile(allocator: std.mem.Allocator, path: []const u8) !IndexReader {

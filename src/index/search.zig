@@ -7,7 +7,6 @@ const subtree_mod = @import("subtree.zig");
 
 pub const SearchOptions = struct {
     query: []const u8,
-    category: ?types.FileCategory = null,
     filters: []const filters_mod.FilterCriterion = &.{},
     max_results: u32 = 100,
     /// Absolute folder path to scope results to. "/" matches everything indexed.
@@ -58,13 +57,8 @@ pub fn searchCancellable(
     // scan — never a hard error, and never a lazy rebuild (see
     // `getCategoryBitmaps`: queries may run concurrently with the sidebar).
     var cat_bitmap: ?bitmap_mod.Bitmap = null;
-    if (opts.category) |cat| {
-        if (reader.getCategoryBitmaps()) |bitmaps| {
-            cat_bitmap = bitmaps.get(cat);
-        } else |_| {}
-    }
 
-    // Also extract category filters for early bitmap filtering
+    // Extract category filter for early bitmap filtering
     for (opts.filters) |f| {
         switch (f) {
             .category => |cf| {
@@ -174,8 +168,13 @@ pub fn searchCancellable(
             if (dc > 0) {
                 const m = try allocator.alloc(u8, dc);
                 @memset(m, 0);
-                subtree_mod.markSubtreeDirs(reader.*, stripTrailingSlash(opts.scope), m);
-                subtree_marks = m;
+                if (subtree_mod.markSubtreeDirs(reader.*, stripTrailingSlash(opts.scope), m)) {
+                    subtree_marks = m;
+                } else {
+                    // Malformed dir table: free the marks buffer and let the
+                    // string-compare path (matchesScope) handle scoping.
+                    allocator.free(m);
+                }
             }
         }
 

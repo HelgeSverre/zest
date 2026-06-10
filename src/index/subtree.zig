@@ -178,9 +178,11 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
 /// `marks.len` must equal the dir-table count (reader.dirCount()). O(D) over
 /// the dedup'd dir table — built once per query so entry filtering is one byte
 /// test instead of a string prefix compare per entry.
+/// Returns false if the dir table is malformed (caller should fall back to the
+/// string-compare path and free the marks buffer).
 /// Uses the same boundary-safe predicate as config.isPathUnder.
-pub fn markSubtreeDirs(reader: reader_mod.IndexReader, scope_path: []const u8, marks: []u8) void {
-    _ = markSubtreeDirsRaw(reader.header, reader.data, scope_path, marks);
+pub fn markSubtreeDirs(reader: reader_mod.IndexReader, scope_path: []const u8, marks: []u8) bool {
+    return markSubtreeDirsRaw(reader.header, reader.data, scope_path, marks);
 }
 
 /// Mark `in_subtree[d] = 1` for every dir id that falls under
