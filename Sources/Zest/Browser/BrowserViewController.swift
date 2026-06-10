@@ -2,30 +2,86 @@ import AppKit
 
 // MARK: - Model
 
-/// Display-ready row for the file list. Computed once from a ZestCore.Row so the
-/// table delegate does no formatting work per cell draw.
-struct FileItem {
+/// One row of the file list. A class (not struct) so the formatted display
+/// strings can be lazy — only the ~30 visible rows ever pay formatting cost.
+/// Lazy vars are accessed on the main thread only (cell config + status bar).
+final class FileItem {
   let name: String
+  /// Absolute path (dirPath + "/" + name).
   let path: String
-  // absolute path (dirPath + "/" + name)
+  /// Containing directory (for the search-mode path line).
   let dirPath: String
-  // containing directory (for the search-mode path line)
   let isDirectory: Bool
-  let sizeText: String
-  // "1.8 KB" / "—"
-  let isoDate: String
-  // "2026-01-01"
-  let agoText: String
-  // "5mo ago"
+  /// Raw byte size; formatted lazily into `sizeText`.
+  let size: UInt64
+  /// Unix-seconds mtime; formatted lazily into `isoDate`/`agoText`.
+  let mtime: Int64
+  /// "Folder" / "Code" / …
   let kindLabel: String
-  // "Folder" / "Code" / …
   let kindColor: NSColor
+  /// SF Symbol name.
   let symbol: String
-  // SF Symbol name
+  /// Category tint.
   let symbolColor: NSColor
-  // category tint
+  /// "swift" / "—".
   let extText: String
-  // "swift" / "—"
+
+  lazy var sizeText: String = isDirectory ? "—" : Self.formatSize(size)
+  lazy var isoDate: String = Self.isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(mtime)))
+  lazy var agoText: String = Self.relativeText(from: mtime)
+
+  init(
+    name: String, path: String, dirPath: String, isDirectory: Bool,
+    size: UInt64, mtime: Int64,
+    kindLabel: String, kindColor: NSColor,
+    symbol: String, symbolColor: NSColor,
+    extText: String
+  ) {
+    self.name = name
+    self.path = path
+    self.dirPath = dirPath
+    self.isDirectory = isDirectory
+    self.size = size
+    self.mtime = mtime
+    self.kindLabel = kindLabel
+    self.kindColor = kindColor
+    self.symbol = symbol
+    self.symbolColor = symbolColor
+    self.extText = extText
+  }
+
+  /// Hand-rolled size formatter: avoids ByteCountFormatter overhead and uses
+  /// SI (1000-based) units consistent with Finder's "file size" display.
+  static func formatSize(_ bytes: UInt64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB"]
+    var value = Double(bytes)
+    var unit = 0
+    while value >= 1000, unit < units.count - 1 {
+      value /= 1000
+      unit += 1
+    }
+    return unit == 0 ? "\(bytes) B" : String(format: "%.1f %@", value, units[unit])
+  }
+
+  // DateFormatter is not thread-safe; lazy vars (and thus this) are
+  // main-thread only per the class doc.
+  private static let isoFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd"
+    return f
+  }()
+
+  /// Relative bucket from a unix-seconds mtime: <1d "today", <30d "Nd ago",
+  /// <365d "Nmo ago", else "Ny ago".
+  static func relativeText(from mtime: Int64) -> String {
+    let now = Int64(Date().timeIntervalSince1970)
+    let days = max(0, (now - mtime) / 86400)
+    if days < 1 { return "today" }
+    if days < 30 { return "\(days)d ago" }
+    if days < 365 { return "\(days / 30)mo ago" }
+    return "\(days / 365)y ago"
+  }
 }
 
 // MARK: - View controller
@@ -66,13 +122,6 @@ final class BrowserViewController: NSViewController {
   private static let colMod = NSUserInterfaceItemIdentifier("modified")
   private static let colKind = NSUserInterfaceItemIdentifier("kind")
   private static let colExt = NSUserInterfaceItemIdentifier("ext")
-
-  private static let byteFormatter: ByteCountFormatter = {
-    let f = ByteCountFormatter()
-    f.countStyle = .file
-    f.allowsNonnumericFormatting = false
-    return f
-  }()
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -366,12 +415,6 @@ final class BrowserViewController: NSViewController {
     let isDir = r.kind == 1
     let meta = Category.meta(kind: r.kind, category: r.category)
 
-    let sizeText = isDir ? "—" : byteFormatter.string(fromByteCount: Int64(bitPattern: r.size))
-
-    let date = Date(timeIntervalSince1970: TimeInterval(r.mtime))
-    let iso = isoFormatter.string(from: date)
-    let ago = relativeText(from: r.mtime)
-
     let ext: String
     if isDir {
       ext = "—"
@@ -389,39 +432,14 @@ final class BrowserViewController: NSViewController {
       path: path,
       dirPath: r.dirPath,
       isDirectory: isDir,
-      sizeText: sizeText,
-      isoDate: iso,
-      agoText: ago,
+      size: r.size,
+      mtime: r.mtime,
       kindLabel: meta.label,
       kindColor: meta.color,
       symbol: meta.symbol,
       symbolColor: meta.color,
       extText: ext,
     )
-  }
-
-  private static let isoFormatter: DateFormatter = {
-    let f = DateFormatter()
-    f.locale = Locale(identifier: "en_US_POSIX")
-    f.dateFormat = "yyyy-MM-dd"
-    return f
-  }()
-
-  /// Relative bucket from a unix-seconds mtime: <1d "today", <30d "Nd ago",
-  /// <365d "Nmo ago", else "Ny ago".
-  private static func relativeText(from mtime: Int64) -> String {
-    let now = Int64(Date().timeIntervalSince1970)
-    let days = max(0, (now - mtime) / 86400)
-    if days < 1 {
-      return "today"
-    }
-    if days < 30 {
-      return "\(days)d ago"
-    }
-    if days < 365 {
-      return "\(days / 30)mo ago"
-    }
-    return "\(days / 365)y ago"
   }
 
   // MARK: Empty state
