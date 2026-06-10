@@ -115,10 +115,14 @@ final class BrowserViewController: NSViewController {
     emptyLabel?.isHidden = !isEmpty
     if isEmpty {
       // TODO: bundled-app copy should suggest zest-indexer --full-scan ~ instead of the repo-local just recipe.
-      emptyLabel?.stringValue =
-        coordinator.core == nil
-        ? "No search index yet — run \"just index\" to build it. Zest will pick it up automatically."
-        : (coordinator.isSearchMode ? "No results" : "Empty folder")
+      if coordinator.core == nil {
+        emptyLabel?.stringValue =
+          "No search index yet — run \"just index\" to build it. Zest will pick it up automatically."
+      } else if coordinator.isLoading {
+        emptyLabel?.stringValue = ""  // in flight — don't claim "No results" yet
+      } else {
+        emptyLabel?.stringValue = coordinator.isSearchMode ? "No results" : "Empty folder"
+      }
     }
 
     tableView.reloadData()  // re-asks heightOfRow, so the 34/48 switch applies

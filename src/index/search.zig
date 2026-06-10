@@ -53,10 +53,14 @@ pub fn searchCancellable(
 
     if (!has_text and !has_filters and !has_scope) return try allocator.alloc(SearchResult, 0);
 
+    // A missing bitmap (init failed to build them) degrades to a no-bitmap
+    // scan — never a hard error, and never a lazy rebuild (see
+    // `getCategoryBitmaps`: queries may run concurrently with the sidebar).
     var cat_bitmap: ?bitmap_mod.Bitmap = null;
     if (opts.category) |cat| {
-        var bitmaps = try reader.getCategoryBitmaps();
-        cat_bitmap = bitmaps.get(cat);
+        if (reader.getCategoryBitmaps()) |bitmaps| {
+            cat_bitmap = bitmaps.get(cat);
+        } else |_| {}
     }
 
     // Also extract category filters for early bitmap filtering
@@ -64,8 +68,9 @@ pub fn searchCancellable(
         switch (f) {
             .category => |cf| {
                 if (!cf.negated and cat_bitmap == null) {
-                    var bitmaps = try reader.getCategoryBitmaps();
-                    cat_bitmap = bitmaps.get(cf.value);
+                    if (reader.getCategoryBitmaps()) |bitmaps| {
+                        cat_bitmap = bitmaps.get(cf.value);
+                    } else |_| {}
                 }
             },
             else => {},

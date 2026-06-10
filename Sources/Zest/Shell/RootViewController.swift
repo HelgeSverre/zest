@@ -113,6 +113,10 @@ final class RootViewController: NSViewController {
     // Seed the center summary from the browser's default (row 0) selection —
     // its first `reload()` ran before `onSelectionChange` was wired.
     statusBar.setSelection(browser.currentSelectionSummary())
+    // Kick the initial query now that every observer is wired: the empty
+    // snapshot renders immediately and the first off-main delivery fires a
+    // second onChange with the real rows.
+    coordinator.start()
   }
 
   override func viewDidAppear() {

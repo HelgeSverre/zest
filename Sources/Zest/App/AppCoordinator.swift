@@ -77,6 +77,9 @@ final class AppCoordinator {
     /// Fired after any state change — navigation, query, scope, or sort — so
     /// observers refresh. The sidebar internally caches the histogram and only
     /// recomputes it when the folder context (path + scope) actually changes.
+    /// May fire twice per change: once immediately (observers render the
+    /// last-delivered rows; `isLoading` is true) and once when the fresh
+    /// result set lands.
     var onChange: (() -> Void)?
 
     private var indexPathForReload: String?
@@ -108,7 +111,7 @@ final class AppCoordinator {
         if let core, core.fileIdentity == onDisk { return }  // unchanged
         guard let fresh = ZestCore(indexPath: path) else { return }  // mid-rename; retry next tick
         core = fresh
-        notifyChange()  // invalidates the results cache + refreshes every observer
+        notifyChange()  // re-queries against the fresh core + refreshes every observer
     }
 
     /// The live query string. Empty == browse mode (subject to scope).
@@ -145,17 +148,34 @@ final class AppCoordinator {
         }
     }
 
-    /// Active sort column + direction (client-side, applied in `results()`).
+    /// Active sort column + direction (client-side, applied off-main in
+    /// `startQuery`). A sort change re-orders the cached rows in place — no
+    /// engine round-trip (see `resortOrRequery`).
     var sortColumn: SortColumn = .name {
         didSet {
             guard sortColumn != oldValue else { return }
-            notifyChange()
+            resortOrRequery()
         }
     }
 
     var sortAscending: Bool = true {
         didSet {
             guard sortAscending != oldValue else { return }
+            resortOrRequery()
+        }
+    }
+
+    /// A sort change re-orders the rows we already have — no engine round-trip.
+    /// Mid-flight (loading), fall back to a full re-query so the eventual
+    /// delivery carries the new order (the in-flight query snapshotted the old
+    /// sort state and would otherwise overwrite a locally re-sorted list).
+    private func resortOrRequery() {
+        guard !suppressChange else { return }
+        if !loading, var rows = cachedResults {
+            Self.applySort(to: &rows, column: sortColumn, ascending: sortAscending)
+            cachedResults = rows
+            onChange?()
+        } else {
             notifyChange()
         }
     }
@@ -252,8 +272,13 @@ final class AppCoordinator {
 
     private func notifyChange() {
         guard !suppressChange else { return }
-        cachedResults = nil
-        onChange?()
+        startQuery()
+        onChange?()  // observers render the last-delivered (stale) rows + loading state now
+    }
+
+    /// Kick the initial query once observers are wired (RootViewController).
+    func start() {
+        notifyChange()
     }
 
     private func withoutNotifying(_ block: () -> Void) {
@@ -286,38 +311,84 @@ final class AppCoordinator {
     /// How often the app checks whether the daemon published a new index.
     static let indexPollInterval: TimeInterval = 5
 
-    /// True when the last `results()` hit the cap (display "N+" counts).
+    /// True when the last delivered result set hit the cap (display "N+" counts).
     var resultsCapped: Bool {
         cachedResults?.count == Self.maxResults
     }
 
-    /// Result set for the current change-tick. Every observer that fires from
-    /// one `onChange` (browser list, filter-bar count) shares this single
-    /// query instead of re-running the engine. Invalidated in `notifyChange`.
+    /// Result set for the current change-tick, delivered by `startQuery`.
+    /// Every observer that fires from one `onChange` (browser list, filter-bar
+    /// count) shares this single query. Kept (stale) while a fresh query is in
+    /// flight so observers never render an empty flash; written only on the
+    /// main thread (a non-stale delivery, or `startQuery`'s no-core reset).
     private var cachedResults: [ZestCore.Row]?
 
-    /// The query that drives the file list: honours `queryText`, `scope`, and the
-    /// active sort. Scope maps to (root, depth); sorting is client-side. Cached
-    /// per change-tick — safe because all reads and all invalidating mutations
-    /// happen on the main thread.
+    /// Serial queue for engine queries — one in flight at a time; the
+    /// generation check drops stale deliveries (sidebar-style pattern).
+    private let queryQueue = DispatchQueue(label: "zest.query", qos: .userInitiated)
+    private var queryGeneration = 0
+
+    /// True while a query is in flight for the current state (drives the
+    /// filter bar's transient "…" count).
+    var isLoading: Bool { loading }
+
+    /// Set on main when `startQuery` dispatches, cleared on main when a
+    /// non-stale delivery lands (or immediately when there's no core).
+    private var loading = false
+
+    /// Run the query for the current `queryText`/`scope` snapshot off-main and
+    /// deliver on main. The engine call uses a strong local `core` captured on
+    /// the main thread — never `self.core` from the queue (data race on the
+    /// var + mid-swap hazard during index hot-reload); the strong capture
+    /// keeps the old mmap alive until the closure finishes, and ARC frees it
+    /// on the queue thread afterwards. Sort state is snapshotted alongside the
+    /// query so the sort also runs off-main, on the queue. A hot-reload (or
+    /// any state change) bumps the generation via `notifyChange`, so a late
+    /// delivery from an old core/query is dropped on main before it can
+    /// overwrite fresh state.
+    private func startQuery() {
+        queryGeneration += 1
+        let gen = queryGeneration
+        guard let core else {
+            // Nothing will deliver — results must read empty, not stale.
+            loading = false
+            cachedResults = nil
+            return
+        }
+        loading = true
+        let q = queryText
+        let root = scopeRoot
+        let depth = scopeDepth
+        let sortCol = sortColumn
+        let sortAsc = sortAscending
+        queryQueue.async { [weak self] in
+            var rows = core.query(q, scope: root, maxDepth: depth, maxResults: UInt32(Self.maxResults))
+            Self.applySort(to: &rows, column: sortCol, ascending: sortAsc)
+            DispatchQueue.main.async {
+                guard let self, self.queryGeneration == gen else { return }
+                self.cachedResults = rows
+                self.loading = false
+                self.onChange?()  // second pass: observers render fresh rows
+            }
+        }
+    }
+
+    /// Last delivered rows. Stale (previous change-tick) while a query is in
+    /// flight; empty before the first delivery or when no index is open.
+    /// Never blocks.
     func results() -> [ZestCore.Row] {
-        if let cached = cachedResults { return cached }
-        guard let core else { return [] }
-        var rows = core.query(
-            queryText, scope: scopeRoot, maxDepth: scopeDepth,
-            maxResults: UInt32(Self.maxResults))
-        applySort(to: &rows)
-        cachedResults = rows
-        return rows
+        cachedResults ?? []
     }
 
     // MARK: - Sorting
 
-    /// Apply the active sort column/direction. `.name` ascending keeps folders
-    /// first (the browse default); other columns sort purely by their key.
-    private func applySort(to rows: inout [ZestCore.Row]) {
-        let asc = sortAscending
-
+    /// Apply a sort column/direction. `.name` ascending keeps folders first
+    /// (the browse default); other columns sort purely by their key. Pure
+    /// (static, no instance state) so it can run off-main in `startQuery`
+    /// against the sort snapshot taken when the query was dispatched.
+    private static func applySort(
+        to rows: inout [ZestCore.Row], column: SortColumn, ascending asc: Bool
+    ) {
         func nameTieBreak(_ a: ZestCore.Row, _ b: ZestCore.Row) -> Bool {
             a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
@@ -325,7 +396,7 @@ final class AppCoordinator {
             asc ? less : !less
         }
 
-        switch sortColumn {
+        switch column {
         case .name:
             rows.sort { a, b in
                 if asc {

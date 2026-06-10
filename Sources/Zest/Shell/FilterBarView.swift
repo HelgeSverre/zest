@@ -54,8 +54,9 @@ final class FilterBarView: NSView {
     fatalError("init(coder:) not used")
   }
 
-  /// Re-read coordinator state: selected scope segment, the count label (which
-  /// runs the query once to count rows), and the sort label.
+  /// Re-read coordinator state: selected scope segment, the count label (from
+  /// the shared delivered results — "…" while a query is in flight), and the
+  /// sort label.
   func refresh() {
     scopeControl.refresh()
     sortButton.update(column: coordinator.sortColumn, ascending: coordinator.sortAscending)
@@ -66,8 +67,10 @@ final class FilterBarView: NSView {
     let n = coordinator.results().count
     let noun =
       coordinator.isSearchMode ? (n == 1 ? "result" : "results") : (n == 1 ? "item" : "items")
-    // A capped result set renders as "2,000+" — the engine stopped early.
-    let countText = coordinator.resultsCapped ? "\(n)+" : "\(n)"
+    // "…" while a query is in flight; a capped result set renders as
+    // "2,000+" — the engine stopped early.
+    let countText =
+      coordinator.isLoading ? "…" : (coordinator.resultsCapped ? "\(n)+" : "\(n)")
     let s = NSMutableAttributedString()
     s.append(
       NSAttributedString(

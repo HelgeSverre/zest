@@ -199,15 +199,12 @@ pub const IndexReader = struct {
         return .{ .size = size, .mtime = mtime, .kind = kind, .category = category };
     }
 
+    /// Bitmaps are built once in init; a failed build means category filters
+    /// degrade to no-bitmap scans. No lazy retry — queries may run off-main
+    /// concurrently with the sidebar, and mutating here would be a data race.
     pub fn getCategoryBitmaps(self: *IndexReader) !*std.AutoHashMap(types.FileCategory, bitmap_mod.Bitmap) {
-        if (self.category_bitmaps == null) {
-            self.category_bitmaps = try bitmap_mod.readCategoryBitmaps(
-                self.allocator,
-                self.data,
-                @intCast(self.header.bitmap_offset),
-            );
-        }
-        return &self.category_bitmaps.?;
+        if (self.category_bitmaps) |*bm| return bm;
+        return error.BitmapsUnavailable;
     }
 
     /// O(1) read of 9 per-category counts for `dir_id`. Writes zeros to `out`
