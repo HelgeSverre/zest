@@ -69,7 +69,7 @@ final class SidebarViewController: NSViewController {
     for pin in pins() {
       let row = PinRow(label: pin.label, symbol: pin.symbol, path: pin.path) {
         [weak self] path in
-        self?.coordinator.navigate(to: path)
+        if self?.coordinator.navigate(to: path) == false { NSSound.beep() }
       }
       stack.addArrangedSubview(row)
       row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true

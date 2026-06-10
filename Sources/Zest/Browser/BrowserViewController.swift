@@ -227,7 +227,7 @@ final class BrowserViewController: NSViewController {
     }
     let item = items[row]
     if item.isDirectory {
-      coordinator.navigate(to: item.path)
+      if !coordinator.navigate(to: item.path) { NSSound.beep() }
     } else {
       NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
     }
@@ -285,7 +285,7 @@ final class BrowserViewController: NSViewController {
     var isDir: ObjCBool = false
     FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
     if isDir.boolValue {
-      coordinator.navigate(to: path)
+      if !coordinator.navigate(to: path) { NSSound.beep() }
     } else {
       NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }

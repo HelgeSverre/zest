@@ -225,14 +225,17 @@ final class AppCoordinator {
 
     // MARK: - Navigation
 
-    func navigate(to path: String) {
+    @discardableResult
+    func navigate(to path: String) -> Bool {
         let resolved = Self.resolve(path, relativeTo: currentPath)
-        guard isDirectory(resolved), resolved != currentPath else { return }
+        guard isDirectory(resolved) else { return false }
+        guard resolved != currentPath else { return true }  // no-op, not a failure
         backStack.append(currentPath)
         forwardStack.removeAll()
         currentPath = resolved
         resetQueryForNavigation()
         notifyChange()
+        return true
     }
 
     func goBack() {

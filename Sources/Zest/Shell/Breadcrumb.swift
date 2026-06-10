@@ -211,15 +211,24 @@ final class Breadcrumb: NSView {
 
   private func commitEdit() {
     let value = editField.stringValue
-    editing = false  // allow refresh inside navigate's onChange to run
+    let ok = coordinator.navigate(to: value)
+    guard ok else {
+      // Bad path: beep and stay in edit mode with text selected.
+      NSSound.beep()
+      editField.currentEditor()?.selectAll(nil)
+      return
+    }
+    // Success: exit edit mode. Set editing = false before refresh() so the
+    // rebuilt crumbs reflect the new path (refresh() guards on editing).
+    editing = false
     editField.isHidden = true
     stack.isHidden = false
     layer?.backgroundColor = NSColor.clear.cgColor
     layer?.borderColor = NSColor.clear.cgColor
     layer?.shadowOpacity = 0
     window?.makeFirstResponder(window)  // drop focus off the now-hidden field
-    coordinator.navigate(to: value)  // fires onChange → refresh(); reverts visually if path didn't change
     refresh()
+    needsDisplay = true  // parity with exitEdit()'s visual teardown
   }
 
   // MARK: Hit-testing for click-to-edit
