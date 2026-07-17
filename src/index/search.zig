@@ -111,7 +111,7 @@ pub fn searchCancellable(
 
                 if (blob[pos] == first_char and blob[pos + qlen - 1] == last_char) {
                     if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
-                        if (findEntryForBlobPos(reader, @intCast(pos), num_entries)) |entry_idx| {
+                        if (findEntryForBlobPos(reader, @intCast(pos), @intCast(qlen), num_entries)) |entry_idx| {
                             const duplicate = entry_idx == last_seen_entry;
                             last_seen_entry = entry_idx;
 
@@ -244,7 +244,7 @@ fn matchFilters(filter_criteria: []const filters_mod.FilterCriterion, result: Se
     return filters_mod.matchesAll(filter_criteria, target);
 }
 
-fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, num_entries: u32) ?u32 {
+fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, match_len: u32, num_entries: u32) ?u32 {
     const names_start: usize = @intCast(reader.header.names_offset);
     const offsets_start = names_start;
     const data = reader.data;
@@ -273,7 +273,10 @@ fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, num_entri
     const entry_offset = std.mem.readInt(u32, data[offsets_start + @as(usize, entry_idx) * 4 ..][0..4], .little);
     const entry_len = std.mem.readInt(u16, data[lengths_start + @as(usize, entry_idx) * 2 ..][0..2], .little);
 
-    if (blob_pos >= entry_offset and blob_pos + 1 <= entry_offset + entry_len) {
+    // The whole match span must lie inside this entry's name: the blob packs
+    // names back-to-back with no separator, so a match that straddles the
+    // boundary into the next name belongs to neither entry.
+    if (blob_pos >= entry_offset and blob_pos + match_len <= entry_offset + entry_len) {
         return entry_idx;
     }
     return null;
@@ -483,6 +486,31 @@ test "search filter only kind:folder" {
     defer allocator.free(results);
     try std.testing.expectEqual(@as(usize, 1), results.len);
     try std.testing.expectEqualStrings("src", results[0].name);
+}
+
+test "query spanning two adjacent blob names matches neither" {
+    // The lowercase blob concatenates names with no separator: "report" +
+    // "notes" = "reportnotes", and "tno" occurs at position 5 straddling the
+    // boundary. Neither name contains "tno", so the search must return 0
+    // rows — not misattribute the match to the entry holding the first byte.
+    const allocator = std.testing.allocator;
+    const entries = [_]format.IndexEntry{
+        .{ .name = "report", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "notes", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+    };
+    const data = try format.writeIndex(allocator, &entries);
+    defer allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(allocator, data);
+    defer reader.deinit();
+
+    const results = try search(allocator, &reader, .{ .query = "tno" });
+    defer allocator.free(results);
+    try std.testing.expectEqual(@as(usize, 0), results.len);
+
+    // Sanity: fully-inside matches still work.
+    const inside = try search(allocator, &reader, .{ .query = "note" });
+    defer allocator.free(inside);
+    try std.testing.expectEqual(@as(usize, 1), inside.len);
 }
 
 test "size filter matches folders by their baked subtree size" {

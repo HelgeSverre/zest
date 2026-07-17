@@ -14,6 +14,8 @@ final class SidebarViewController: NSViewController {
   /// Fingerprint of the last-rendered pin set so structural rebuilds are
   /// data-driven (count, order, or label changes all trigger a rebuild).
   private var lastPinFingerprint: String = ""
+  /// Created once on first rebuild; the CategorySection outlives rebuilds.
+  private var catSectionWidthConstraint: NSLayoutConstraint?
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -111,16 +113,14 @@ final class SidebarViewController: NSViewController {
   }
 
   private func makeHeader(_ text: String) -> NSTextField {
-    let header = NSTextField(labelWithString: text)
-    header.font = .systemFont(ofSize: 10.5, weight: .semibold)
-    header.textColor = Theme.textTertiary
+    let header = NSTextField(labelWithString: "")
     header.translatesAutoresizingMaskIntoConstraints = false
     header.attributedStringValue = NSAttributedString(
       string: text,
       attributes: [
         .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
         .foregroundColor: Theme.textTertiary,
-        .kern: 0.95,
+        .kern: Theme.sectionHeaderKern,
       ],
     )
     return header
@@ -219,7 +219,13 @@ final class SidebarViewController: NSViewController {
 
     if let catSection = catSection {
       stack.addArrangedSubview(catSection)
-      catSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+      // The section survives rebuilds, so create its width constraint once —
+      // re-activating a fresh copy every rebuild accumulates duplicates.
+      if catSectionWidthConstraint == nil {
+        let c = catSection.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        c.isActive = true
+        catSectionWidthConstraint = c
+      }
     }
 
     // Apply current visual state to the new rows.
@@ -522,7 +528,7 @@ private final class CatRow: NSView {
   private var expanded: Bool
   private var active = false
   private var hovering = false
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   /// Leading 22pt is the chevron-only hit zone; the rest of the row selects.
   private static let chevronHitWidth: CGFloat = 22
@@ -694,7 +700,7 @@ private final class ExtRow: NSView {
   private let onSelect: (_ additive: Bool) -> Void
   private var active = false
   private var hovering = false
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let dot = NSView()
   private let label = NSTextField(labelWithString: "")
@@ -833,7 +839,7 @@ private final class PinRow: NSView {
   var folderColor: NSColor? {
     didSet { applyIconTint() }
   }
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let icon = NSImageView()
   private let label = NSTextField(labelWithString: "")
@@ -925,12 +931,6 @@ private final class PinRow: NSView {
   }
 
   override func mouseDown(with event: NSEvent) {
-    if event.type == .rightMouseDown {
-      if let menu = contextMenuProvider?(path) {
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
-      }
-      return
-    }
     let up = window?.nextEvent(matching: [.leftMouseUp])
     if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
       onClick(path)

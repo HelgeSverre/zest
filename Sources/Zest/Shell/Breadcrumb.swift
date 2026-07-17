@@ -19,7 +19,7 @@ import AppKit
 /// edits. This satisfies both "jump to an ancestor" and "paste a path and go".
 final class Breadcrumb: NSView {
   private let coordinator: AppCoordinator
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let stack = NSStackView()
   private let editField = EditField()

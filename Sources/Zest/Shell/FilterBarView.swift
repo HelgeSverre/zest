@@ -154,7 +154,7 @@ private final class ScopeControl: NSView {
     private let onClick: () -> Void
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+    private static let accent = Theme.darkAccent
     private var selected = false
 
     init(title: String, symbol: String, onClick: @escaping () -> Void) {

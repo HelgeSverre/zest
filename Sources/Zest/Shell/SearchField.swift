@@ -12,7 +12,7 @@ import AppKit
 /// the field and the query.
 final class SearchField: NSView {
   private let coordinator: AppCoordinator
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let magnifier = NSImageView()
   private let field = InsetTextField()
@@ -137,6 +137,11 @@ final class SearchField: NSView {
         field.stringValue = value
         settingProgrammatically = false
       }
+      // The field now reflects the coordinator, so record it as our own
+      // state — otherwise the next refresh (onChange fires twice per change)
+      // still sees a mismatch, takes this branch again, and its cancel/rewrite
+      // clobbers keystrokes typed in between.
+      lastCommitted = value
       clearButton.isHidden = value.isEmpty
     }
   }

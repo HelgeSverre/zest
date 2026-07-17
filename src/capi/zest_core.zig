@@ -10,6 +10,11 @@ const filters_mod = @import("../core/filters.zig");
 
 const alloc = std.heap.c_allocator;
 
+/// libc clock — deliberately NOT std.Io (this lib has no Io and runtime.io
+/// is undefined here). Anchors relative `date:` qualifiers at parse time.
+/// time_t is i64 on every Apple platform we target.
+extern "c" fn time(tloc: ?*i64) i64;
+
 const Core = struct {
     reader: reader_mod.IndexReader,
 };
@@ -82,7 +87,7 @@ export fn zest_query(
     // Parse qualifiers out of the raw string. On parse failure (e.g. the
     // qualifier value is malformed), fall back to a plain text search so a
     // typo never blackholes the result set.
-    var parsed = filters_mod.parse(alloc, raw_query) catch {
+    var parsed = filters_mod.parse(alloc, raw_query, time(null)) catch {
         const results = search_mod.search(alloc, &core.reader, .{
             .query = raw_query,
             .scope = scope,

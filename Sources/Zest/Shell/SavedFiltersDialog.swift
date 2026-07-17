@@ -337,7 +337,7 @@ final class DialogButton: NSButton {
   enum Style { case neutral, primary, ghost }
 
   private let style: Style
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   init(title: String, style: Style) {
     self.style = style
@@ -592,7 +592,7 @@ private final class FocusReportingTextField: NSTextField {
 /// Prototype `.sf-edit`: inline form on the window-background surface with
 /// bordered fields (accent border while focused) + ghost Cancel / primary Save.
 private final class DialogEditForm: NSView {
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let onSave: (String, String) -> Void
   private let onCancel: () -> Void

@@ -99,7 +99,7 @@ final class ToolbarView: NSView {
 /// Saved button is a render-only stub.
 final class PillButton: NSView {
   var onClick: (() -> Void)?
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   private let leadingIcon = NSImageView()
   private let label = NSTextField(labelWithString: "")

@@ -132,21 +132,35 @@ final class UserState {
     ]
   }
 
+  /// A decode failure means the file exists but is unreadable. Move it aside
+  /// to `<name>.corrupt` before falling back to defaults — the next save
+  /// would otherwise atomically overwrite possibly-recoverable user data.
+  private static func quarantineCorrupt(_ url: URL) {
+    let backup = url.appendingPathExtension("corrupt")
+    try? FileManager.default.removeItem(at: backup)
+    do {
+      try FileManager.default.moveItem(at: url, to: backup)
+      NSLog("UserState: %@ failed to decode; moved to %@", url.lastPathComponent, backup.lastPathComponent)
+    } catch {
+      NSLog("UserState: %@ failed to decode and could not be quarantined: %@", url.lastPathComponent, "\(error)")
+    }
+  }
+
   private static func loadPins(from url: URL?) -> [Pin]? {
     guard let url, let data = try? Data(contentsOf: url) else { return nil }
     guard let parsed = try? JSONDecoder().decode([Pin].self, from: data) else {
-      if FileManager.default.fileExists(atPath: url.path) {
-        NSLog("UserState: pins.json exists but failed to decode (corrupt?)")
-      }
+      quarantineCorrupt(url)
       return nil
     }
     return parsed
   }
 
   private static func loadColors(from url: URL?) -> [String: NSColor] {
-    guard let url, let data = try? Data(contentsOf: url),
-      let parsed = try? JSONDecoder().decode(ColorsFile.self, from: data)
-    else { return [:] }
+    guard let url, let data = try? Data(contentsOf: url) else { return [:] }
+    guard let parsed = try? JSONDecoder().decode(ColorsFile.self, from: data) else {
+      quarantineCorrupt(url)
+      return [:]
+    }
     return parsed.folders.mapValues { e in
       NSColor(
         red: CGFloat(e.red) / 255, green: CGFloat(e.green) / 255,
@@ -157,9 +171,7 @@ final class UserState {
   private static func loadFilters(from url: URL?) -> [SavedFilter] {
     guard let url, let data = try? Data(contentsOf: url) else { return [] }
     guard let parsed = try? JSONDecoder().decode([SavedFilter].self, from: data) else {
-      if FileManager.default.fileExists(atPath: url.path) {
-        NSLog("UserState: filters.json exists but failed to decode (corrupt?)")
-      }
+      quarantineCorrupt(url)
       return []
     }
     return parsed
@@ -210,9 +222,11 @@ final class UserState {
   }
 
   private static func loadPrefs(from url: URL?) -> Prefs {
-    guard let url, let data = try? Data(contentsOf: url),
-      let parsed = try? JSONDecoder().decode(Prefs.self, from: data)
-    else { return Prefs() }
+    guard let url, let data = try? Data(contentsOf: url) else { return Prefs() }
+    guard let parsed = try? JSONDecoder().decode(Prefs.self, from: data) else {
+      quarantineCorrupt(url)
+      return Prefs()
+    }
     return parsed
   }
 

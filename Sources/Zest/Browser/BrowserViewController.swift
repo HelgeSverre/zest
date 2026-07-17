@@ -120,7 +120,7 @@ final class BrowserViewController: NSViewController {
   private var lastReloadKey: ReloadKey?
 
   /// Derived accent family (dark) used by the selection chrome.
-  fileprivate static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  fileprivate static let accent = Theme.darkAccent
 
   // Column identifiers.
   private static let colName = NSUserInterfaceItemIdentifier("name")
@@ -459,7 +459,7 @@ final class BrowserViewController: NSViewController {
     let img = NSImage(size: size)
     img.lockFocus()
     let path = NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: 12, height: 12))
-    NSColor.tertiaryLabelColor.setStroke()
+    Theme.textTertiary.setStroke()
     path.lineWidth = 1.5
     path.stroke()
     img.unlockFocus()
@@ -892,7 +892,7 @@ private final class ZestHeaderCell: NSTableHeaderCell {
 
   var sortIndicator: SortIndicator = .none
 
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
     drawInterior(withFrame: cellFrame, in: controlView)

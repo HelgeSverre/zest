@@ -7,7 +7,7 @@ import AppKit
 /// RootViewController, hidden until shown.
 final class SavedFiltersCard: NSView {
   private let coordinator: AppCoordinator
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   var onManage: (() -> Void)?
   var onSaveCurrent: ((String) -> Void)?
@@ -202,7 +202,7 @@ final class SavedFiltersCard: NSView {
       attributes: [
         .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
         .foregroundColor: Theme.textTertiary,
-        .kern: 0.84,
+        .kern: Theme.sectionHeaderKern,
       ])
     label.translatesAutoresizingMaskIntoConstraints = false
 
@@ -316,6 +316,7 @@ private final class CardRow: NSView {
   }
 
   override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     layer?.backgroundColor = Theme.hover.cgColor
   }
   override func mouseExited(with event: NSEvent) {

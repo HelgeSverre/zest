@@ -1,6 +1,8 @@
+// NOTE: no runtime.zig import here — this module is compiled into
+// libzest-core, which must stay Io-free (runtime.io is undefined in lib
+// builds). "Now" is always a caller-supplied parameter.
 const std = @import("std");
 const types = @import("types.zig");
-const runtime = @import("runtime.zig");
 
 pub const ParsedQuery = struct {
     text: []const u8,
@@ -13,7 +15,10 @@ pub const ParsedQuery = struct {
     }
 };
 
-pub fn parse(allocator: std.mem.Allocator, input: []const u8) !ParsedQuery {
+/// `now_unix` anchors relative date qualifiers (`date:today` etc.); pass the
+/// caller's clock (libc `time` in the C ABI, runtime.unixTimestamp in
+/// binaries).
+pub fn parse(allocator: std.mem.Allocator, input: []const u8, now_unix: i64) !ParsedQuery {
     var text_parts: std.ArrayList([]const u8) = .empty;
     defer text_parts.deinit(allocator);
     var filter_list: std.ArrayList(FilterCriterion) = .empty;
@@ -21,7 +26,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !ParsedQuery {
 
     var iter = std.mem.tokenizeScalar(u8, input, ' ');
     while (iter.next()) |token| {
-        if (parseQualifier(token)) |criterion| {
+        if (parseQualifier(token, now_unix)) |criterion| {
             try filter_list.append(allocator, criterion);
         } else {
             try text_parts.append(allocator, token);
@@ -40,7 +45,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !ParsedQuery {
     };
 }
 
-fn parseQualifier(token: []const u8) ?FilterCriterion {
+fn parseQualifier(token: []const u8, now_unix: i64) ?FilterCriterion {
     var rest = token;
     var negated = false;
     if (rest.len > 0 and rest[0] == '!') {
@@ -61,7 +66,7 @@ fn parseQualifier(token: []const u8) ?FilterCriterion {
     } else if (std.ascii.eqlIgnoreCase(key, "size")) {
         return parseSizeFilter(value);
     } else if (std.ascii.eqlIgnoreCase(key, "date")) {
-        return parseDateFilter(value);
+        return parseDateFilter(value, now_unix);
     } else if (std.ascii.eqlIgnoreCase(key, "cat")) {
         return parseCategory(negated, value);
     } else if (std.ascii.eqlIgnoreCase(key, "path")) {
@@ -130,8 +135,8 @@ fn parseSizeFilter(value: []const u8) ?FilterCriterion {
     return .{ .size = .{ .op = .eq, .value = bytes } };
 }
 
-fn parseDateFilter(value: []const u8) ?FilterCriterion {
-    const result = parseDate(value) catch return null;
+fn parseDateFilter(value: []const u8, now_unix: i64) ?FilterCriterion {
+    const result = parseDate(value, now_unix) catch return null;
     return .{ .date = .{ .op = result.op, .value = result.value, .value_upper = result.value_upper } };
 }
 
@@ -167,6 +172,9 @@ fn parsePath(negated: bool, value: []const u8) ?FilterCriterion {
     f.path.len = @intCast(value.len);
     return f;
 }
+
+/// Fixed clock for tests: relative-date parsing is deterministic under test.
+const test_now: i64 = 1_700_000_000;
 
 pub const CompareOp = enum {
     eq,
@@ -326,8 +334,8 @@ fn sizeMultiplierInt(suffix: []const u8) ?u64 {
 
 /// Parse a date string into a unix timestamp.
 /// Supports: "today", "week", "month", "year", ">YYYY-MM-DD", "<YYYY-MM-DD", "YYYY-MM-DD..YYYY-MM-DD"
-pub fn parseDate(input: []const u8) !DateResult {
-    const now = runtime.unixTimestamp();
+pub fn parseDate(input: []const u8, now_unix: i64) !DateResult {
+    const now = now_unix;
     const day_secs: i64 = 86400;
 
     if (std.ascii.eqlIgnoreCase(input, "today")) {
@@ -402,7 +410,7 @@ fn parseDateString(input: []const u8) !i64 {
 }
 
 /// Format a criterion back to its text representation for display.
-pub fn formatCriterion(criterion: FilterCriterion, buf: []u8) []const u8 {
+pub fn formatCriterion(criterion: FilterCriterion, buf: []u8, now_unix: i64) []const u8 {
     return switch (criterion) {
         .kind => |f| {
             const prefix: []const u8 = if (f.negated) "!kind:" else "kind:";
@@ -418,7 +426,7 @@ pub fn formatCriterion(criterion: FilterCriterion, buf: []u8) []const u8 {
             return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, f.value[0..f.len] }) catch "";
         },
         .size => |f| formatSizeCriterion(f, buf),
-        .date => |f| formatDateCriterion(f, buf),
+        .date => |f| formatDateCriterion(f, buf, now_unix),
         .category => |f| {
             const prefix: []const u8 = if (f.negated) "!cat:" else "cat:";
             return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, categoryName(f.value) }) catch "";
@@ -488,9 +496,9 @@ fn formatBytesValue(bytes: u64, buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{d}b", .{bytes}) catch "";
 }
 
-fn formatDateCriterion(f: anytype, buf: []u8) []const u8 {
+fn formatDateCriterion(f: anytype, buf: []u8, now_unix: i64) []const u8 {
     const day_secs: i64 = 86400;
-    const now = runtime.unixTimestamp();
+    const now = now_unix;
 
     // Try to detect relative keywords
     if (f.op == .gte) {
@@ -552,14 +560,14 @@ fn formatEpochDate(timestamp: i64, buf: []u8) []const u8 {
 // ---------------------------------------------------------------------------
 
 test "parse plain text only" {
-    var result = try parse(std.testing.allocator, "hello world");
+    var result = try parse(std.testing.allocator, "hello world", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("hello world", result.text);
     try std.testing.expectEqual(@as(usize, 0), result.filters_list.len);
 }
 
 test "parse kind:folder only" {
-    var result = try parse(std.testing.allocator, "kind:folder");
+    var result = try parse(std.testing.allocator, "kind:folder", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("", result.text);
     try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
@@ -567,7 +575,7 @@ test "parse kind:folder only" {
 }
 
 test "parse mixed text and filters" {
-    var result = try parse(std.testing.allocator, "report ext:pdf size:>1mb");
+    var result = try parse(std.testing.allocator, "report ext:pdf size:>1mb", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("report", result.text);
     try std.testing.expectEqual(@as(usize, 2), result.filters_list.len);
@@ -577,7 +585,7 @@ test "parse mixed text and filters" {
 }
 
 test "parse negated filter" {
-    var result = try parse(std.testing.allocator, "!ext:lock !kind:symlink");
+    var result = try parse(std.testing.allocator, "!ext:lock !kind:symlink", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("", result.text);
     try std.testing.expectEqual(@as(usize, 2), result.filters_list.len);
@@ -586,14 +594,14 @@ test "parse negated filter" {
 }
 
 test "parse category filter" {
-    var result = try parse(std.testing.allocator, "cat:images date:week");
+    var result = try parse(std.testing.allocator, "cat:images date:week", test_now);
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 2), result.filters_list.len);
     try std.testing.expectEqual(types.FileCategory.images, result.filters_list[0].category.value);
 }
 
 test "parse size range" {
-    var result = try parse(std.testing.allocator, "size:1mb..10mb");
+    var result = try parse(std.testing.allocator, "size:1mb..10mb", test_now);
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
     try std.testing.expectEqual(CompareOp.range, result.filters_list[0].size.op);
@@ -602,28 +610,28 @@ test "parse size range" {
 }
 
 test "parse path filter" {
-    var result = try parse(std.testing.allocator, "path:src/");
+    var result = try parse(std.testing.allocator, "path:src/", test_now);
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
     try std.testing.expectEqualStrings("src/", result.filters_list[0].path.value[0..result.filters_list[0].path.len]);
 }
 
 test "parse empty input" {
-    var result = try parse(std.testing.allocator, "");
+    var result = try parse(std.testing.allocator, "", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("", result.text);
     try std.testing.expectEqual(@as(usize, 0), result.filters_list.len);
 }
 
 test "unknown qualifier treated as text" {
-    var result = try parse(std.testing.allocator, "foo:bar hello");
+    var result = try parse(std.testing.allocator, "foo:bar hello", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("foo:bar hello", result.text);
     try std.testing.expectEqual(@as(usize, 0), result.filters_list.len);
 }
 
 test "parse multiple text words with filter" {
-    var result = try parse(std.testing.allocator, "my report ext:pdf");
+    var result = try parse(std.testing.allocator, "my report ext:pdf", test_now);
     defer result.deinit();
     try std.testing.expectEqualStrings("my report", result.text);
     try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
@@ -659,14 +667,14 @@ test "parseSize overflow returns error instead of panicking" {
 }
 
 test "parseDate rejects impossible dates" {
-    try std.testing.expectError(error.InvalidDate, parseDate("2024-02-31"));
-    try std.testing.expectError(error.InvalidDate, parseDate("2024-04-31"));
-    try std.testing.expectError(error.InvalidDate, parseDate("2023-02-29")); // not a leap year
-    try std.testing.expectError(error.InvalidDate, parseDate("2024-13-01"));
-    try std.testing.expectError(error.InvalidDate, parseDate("2024-00-10"));
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-02-31", test_now));
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-04-31", test_now));
+    try std.testing.expectError(error.InvalidDate, parseDate("2023-02-29", test_now)); // not a leap year
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-13-01", test_now));
+    try std.testing.expectError(error.InvalidDate, parseDate("2024-00-10", test_now));
     // Valid dates still parse, including a real leap day.
-    _ = try parseDate("2024-02-29");
-    _ = try parseDate("2024-12-31");
+    _ = try parseDate("2024-02-29", test_now);
+    _ = try parseDate("2024-12-31", test_now);
 }
 
 test "filter kind matches" {
@@ -762,7 +770,7 @@ fn testExtCriterion(value: []const u8, negated: bool) FilterCriterion {
 }
 
 test "parse comma extension list is one criterion" {
-    var result = try parse(std.testing.allocator, "ext:PHP,html");
+    var result = try parse(std.testing.allocator, "ext:PHP,html", test_now);
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
     const f = result.filters_list[0].extension;
@@ -805,13 +813,13 @@ test "multi-part extension matches" {
 }
 
 test "extension value with no segment degrades to text" {
-    var result = try parse(std.testing.allocator, "ext:,");
+    var result = try parse(std.testing.allocator, "ext:,", test_now);
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 0), result.filters_list.len);
     try std.testing.expectEqualStrings("ext:,", result.text);
 
     const long = "ext:" ++ "a" ** 65;
-    var result2 = try parse(std.testing.allocator, long);
+    var result2 = try parse(std.testing.allocator, long, test_now);
     defer result2.deinit();
     try std.testing.expectEqual(@as(usize, 0), result2.filters_list.len);
     try std.testing.expectEqualStrings(long, result2.text);
@@ -856,45 +864,55 @@ test "matchesAll keeps negated extensions ANDed" {
 test "formatCriterion comma extension round-trip" {
     var buf: [128]u8 = undefined;
     const f = testExtCriterion("php,html", false);
-    try std.testing.expectEqualStrings("ext:php,html", formatCriterion(f, &buf));
+    try std.testing.expectEqualStrings("ext:php,html", formatCriterion(f, &buf, test_now));
     const neg = testExtCriterion("blade.php,html", true);
-    try std.testing.expectEqualStrings("!ext:blade.php,html", formatCriterion(neg, &buf));
+    try std.testing.expectEqualStrings("!ext:blade.php,html", formatCriterion(neg, &buf, test_now));
+}
+
+test "parse date:today with injected now is deterministic" {
+    // `now` is a parameter (not a clock read) so this module stays Io-free —
+    // it's compiled into libzest-core, where the global runtime.io is
+    // undefined and any std Io reference is UB + ~1.8MB of dead weight.
+    var result = try parse(std.testing.allocator, "date:today", 1_700_000_000);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
+    try std.testing.expectEqual(@as(i64, 1_700_000_000 - 86_400), result.filters_list[0].date.value);
 }
 
 test "parseDate relative" {
-    const result = try parseDate("today");
+    const result = try parseDate("today", test_now);
     try std.testing.expectEqual(CompareOp.gte, result.op);
     try std.testing.expect(result.value > 0);
 }
 
 test "parseDate comparison" {
-    const result = try parseDate(">2024-01-01");
+    const result = try parseDate(">2024-01-01", test_now);
     try std.testing.expectEqual(CompareOp.gt, result.op);
     try std.testing.expect(result.value > 0);
 }
 
 test "parseDate range" {
-    const result = try parseDate("2024-01-01..2024-12-31");
+    const result = try parseDate("2024-01-01..2024-12-31", test_now);
     try std.testing.expectEqual(CompareOp.range, result.op);
     try std.testing.expect(result.value < result.value_upper);
 }
 
 test "parseDate invalid" {
-    try std.testing.expectError(error.InvalidDate, parseDate("notadate"));
-    try std.testing.expectError(error.InvalidDate, parseDate(">bad"));
+    try std.testing.expectError(error.InvalidDate, parseDate("notadate", test_now));
+    try std.testing.expectError(error.InvalidDate, parseDate(">bad", test_now));
 }
 
 test "formatCriterion kind" {
     var buf: [64]u8 = undefined;
     const f = FilterCriterion{ .kind = .{ .value = .directory } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("kind:folder", result);
 }
 
 test "formatCriterion negated kind" {
     var buf: [64]u8 = undefined;
     const f = FilterCriterion{ .kind = .{ .negated = true, .value = .symlink } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("!kind:symlink", result);
 }
 
@@ -903,35 +921,35 @@ test "formatCriterion extension" {
     var f = FilterCriterion{ .extension = .{} };
     @memcpy(f.extension.value[0..3], "pdf");
     f.extension.len = 3;
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("ext:pdf", result);
 }
 
 test "formatCriterion category" {
     var buf: [64]u8 = undefined;
     const f = FilterCriterion{ .category = .{ .value = .code } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("cat:code", result);
 }
 
 test "formatCriterion size gt round-trip" {
     var buf: [128]u8 = undefined;
     const f = FilterCriterion{ .size = .{ .op = .gt, .value = 1024 * 1024 } }; // >1mb
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("size:>1mb", result);
 }
 
 test "formatCriterion size range round-trip" {
     var buf: [128]u8 = undefined;
     const f = FilterCriterion{ .size = .{ .op = .range, .value = 1024 * 1024, .value_upper = 10 * 1024 * 1024 } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("size:1mb..10mb", result);
 }
 
 test "formatCriterion size 500kb" {
     var buf: [128]u8 = undefined;
     const f = FilterCriterion{ .size = .{ .op = .gt, .value = 500 * 1024 } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("size:>500kb", result);
 }
 
@@ -939,7 +957,7 @@ test "formatCriterion date comparison" {
     var buf: [128]u8 = undefined;
     // Jan 1, 2024 midnight UTC = 1704067200
     const f = FilterCriterion{ .date = .{ .op = .gt, .value = 1704067200 } };
-    const result = formatCriterion(f, &buf);
+    const result = formatCriterion(f, &buf, test_now);
     try std.testing.expectEqualStrings("date:>2024-01-01", result);
 }
 

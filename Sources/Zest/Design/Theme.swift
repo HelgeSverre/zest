@@ -32,6 +32,15 @@ enum Theme {
   static let catVideo = srgb(0xFF, 0x7B, 0x72)  // doubles as the destructive-hover red
   // … remaining categories added in a later phase …
 
+  /// Letter-spacing for the 10.5pt uppercase section headers (sidebar
+  /// PINNED/CATEGORIES, saved-filters SAVED FILTERS). One constant so the
+  /// chrome tracks identically everywhere.
+  static let sectionHeaderKern: CGFloat = 0.9
+
+  /// The app currently ships dark-only; every view derives the same accent
+  /// family. Compute it once instead of per-type statics.
+  static let darkAccent = deriveAccent(base: defaultAccentBase, theme: .dark)
+
   struct Accent {
     let accent: NSColor
     // effective

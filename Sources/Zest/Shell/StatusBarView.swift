@@ -14,7 +14,7 @@ final class StatusBarView: NSView {
   private let selectionLabel = NSTextField(labelWithString: "")
   private let freshnessLabel = NSTextField(labelWithString: "")
 
-  private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
+  private static let accent = Theme.darkAccent
 
   /// Count formatter: SPACE thousands separators (e.g. 1 240 118).
   private static let countFormatter: NumberFormatter = {

@@ -127,7 +127,21 @@ pub fn parallelScan(
 
     const threads = try allocator.alloc(std.Thread, n);
     defer allocator.free(threads);
-    for (threads, 0..) |*t, i| t.* = try std.Thread.spawn(.{}, workerMain, .{&workers[i]});
+    var spawned: usize = 0;
+    for (threads, 0..) |*t, i| {
+        t.* = std.Thread.spawn(.{}, workerMain, .{&workers[i]}) catch |err| {
+            // Threads 0..spawned hold pointers into workers/wbufs/sh, which the
+            // defers above free on error — stop and join them first or they
+            // race a freed queue.
+            sh.mutex.lockUncancelable(io);
+            sh.done = true;
+            sh.cond.broadcast(io);
+            sh.mutex.unlock(io);
+            for (threads[0..spawned]) |st| st.join();
+            return err;
+        };
+        spawned += 1;
+    }
     for (threads) |t| t.join();
 
     // Flush and close each worker's temp file.
