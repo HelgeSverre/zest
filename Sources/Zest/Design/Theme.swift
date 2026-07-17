@@ -14,10 +14,9 @@ enum Theme {
   static let panel2 = srgb(0x1A, 0x1E, 0x23)
   static let panelElevated = srgb(0x1F, 0x24, 0x2A)
   static let hover = srgb(0x20, 0x25, 0x2B)
-  /// Hover tint for elements sitting ON an already-hover-tinted surface
-  /// (e.g. a breadcrumb segment inside the hovered address pill) — one step
-  /// lighter than `hover` so it stays visible against it.
-  static let hoverRaised = srgb(0x2C, 0x32, 0x3A)
+  /// Container-level hover wash (e.g. the whole address pill) — half-strength
+  /// so per-element highlights (full `hover`) read on top of it.
+  static let hoverDim = srgb(0x20, 0x25, 0x2B).withAlphaComponent(0.5)
   static let border = srgb(0x27, 0x2C, 0x33)
   static let text = srgb(0xE9, 0xEC, 0xEF)
   static let textSecondary = srgb(0x86, 0x8E, 0x99)

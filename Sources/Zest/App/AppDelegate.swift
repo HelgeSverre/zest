@@ -91,8 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let selectAll = NSMenuItem(
       title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a",
     )
+    let find = NSMenuItem(title: "Find", action: #selector(menuFocusSearch(_:)), keyEquivalent: "f")
+    find.target = self
     mainMenu.addItem(
-      makeMenu("Edit", items: [undo, redo, .separator(), cut, copy, paste, selectAll]),
+      makeMenu(
+        "Edit", items: [undo, redo, .separator(), cut, copy, paste, selectAll, .separator(), find]),
     )
 
     // View menu. Checkmark state comes from validateMenuItem, so it stays in
@@ -101,7 +104,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       title: "Folders on Top", action: #selector(menuToggleFoldersOnTop(_:)), keyEquivalent: "",
     )
     foldersOnTop.target = self
-    mainMenu.addItem(makeMenu("View", items: [foldersOnTop]))
+    let focusSidebar = NSMenuItem(
+      title: "Focus Sidebar", action: #selector(menuFocusSidebar(_:)), keyEquivalent: "1")
+    focusSidebar.target = self
+    let focusList = NSMenuItem(
+      title: "Focus File List", action: #selector(menuFocusFileList(_:)), keyEquivalent: "2")
+    focusList.target = self
+    mainMenu.addItem(
+      makeMenu("View", items: [foldersOnTop, .separator(), focusSidebar, focusList]))
 
     // Navigation — the new keyboard shortcuts from the old Zig UI.
     let navMenu = NSMenu(title: "Navigation")
@@ -156,6 +166,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   // MARK: Menu actions
+
+  @objc private func menuFocusSearch(_: Any?) {
+    rootViewController?.focusSearch()
+  }
+
+  @objc private func menuFocusSidebar(_: Any?) {
+    rootViewController?.focusSidebar()
+  }
+
+  @objc private func menuFocusFileList(_: Any?) {
+    rootViewController?.focusFileList()
+  }
 
   @objc private func menuToggleFoldersOnTop(_: Any?) {
     guard let coordinator = rootViewController?.coordinator else { return }

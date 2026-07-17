@@ -19,6 +19,12 @@ final class ToolbarView: NSView {
   var onSavedClick: (() -> Void)?
   /// Exposed so the card's dismissal monitor can exclude the toggle button.
   var savedButtonView: NSView { savedButton }
+  /// Exposed for the outside-click blur monitor's hit test.
+  var searchFieldView: NSView { searchField }
+  var isSearchEditing: Bool { searchField.isEditing }
+
+  /// ⌘F: put the caret in the search field.
+  func focusSearch() { searchField.focus() }
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -74,9 +80,6 @@ final class ToolbarView: NSView {
     // so neither control stretches on resize/fullscreen and clicks in the
     // gap hit inert toolbar chrome. On narrow windows the search compresses
     // to its 200pt minimum first, then the breadcrumb truncates.
-    let crumbCap = breadcrumb.widthAnchor.constraint(lessThanOrEqualToConstant: 420)
-    crumbCap.priority = .defaultHigh
-    crumbCap.isActive = true
     let preferred = searchField.widthAnchor.constraint(equalToConstant: 360)
     preferred.priority = NSLayoutConstraint.Priority(500)
     preferred.isActive = true
@@ -91,13 +94,16 @@ final class ToolbarView: NSView {
 
   /// Feed the breadcrumb the width it may occupy so it can middle-collapse
   /// deep paths: everything between the nav cluster and the search field at
-  /// its 200pt minimum, capped at the crumb ceiling. The breadcrumb only
-  /// reacts to real changes, so this can't feed back into layout.
+  /// its 200pt minimum. The breadcrumb only reacts to real changes, so this
+  /// can't feed back into layout.
   override func layout() {
     super.layout()
+    // No fixed ceiling: long paths may use all the slack between the nav
+    // cluster and the search field at its 200pt minimum. The breadcrumb
+    // hugs its content, so short paths don't stretch.
     let available =
       (savedButton.frame.minX - 10 - 200 - 10) - (navStack.frame.maxX + 12)
-    breadcrumb.availableWidth = min(420, max(120, available))
+    breadcrumb.availableWidth = max(120, available)
   }
 
   /// Update enabled/disabled state for back/forward, the breadcrumb display, and

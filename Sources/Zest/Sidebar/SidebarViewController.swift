@@ -107,9 +107,30 @@ final class SidebarViewController: NSViewController {
     // CategorySection is created once and preserved across rebuilds so its
     // expanded-indices and cached histogram survive pin changes.
     let catSection = CategorySection(coordinator: coordinator, widthProvider: stack)
+    catSection.onRowsRebuilt = { [weak self] in self?.rewireKeyViewLoop() }
     categorySection = catSection
 
     rebuildSidebar()
+  }
+
+  // MARK: - Keyboard focus
+
+  /// ⌘1: focus the first pin (Tab/↑↓ walk on from there).
+  func focusFirstRow() {
+    guard let first = pinRows.first else { return }
+    view.window?.makeFirstResponder(first)
+  }
+
+  /// Chain pins → category rows → visible ext rows so Tab and ↑/↓ walk the
+  /// sidebar in visual order. Rows are rebuilt frequently (histogram
+  /// refreshes), so this reruns after every rebuild.
+  private func rewireKeyViewLoop() {
+    let rows: [NSView] = pinRows + (categorySection?.focusableRows ?? [])
+    for (a, b) in zip(rows, rows.dropFirst()) {
+      a.nextKeyView = b
+    }
+    rows.last?.nextKeyView = nil
+    view.window?.recalculateKeyViewLoop()
   }
 
   private func makeHeader(_ text: String) -> NSTextField {
@@ -236,6 +257,7 @@ final class SidebarViewController: NSViewController {
     }
 
     lastPinFingerprint = pinFingerprint()
+    rewireKeyViewLoop()
   }
 
   private func pinFingerprint() -> String {
@@ -266,6 +288,11 @@ private final class CategorySection: NSView {
   private let widthProvider: NSView
   private var rows: [NSView] = []
   private let stack = NSStackView()
+
+  /// The section's rows in visual order, for the sidebar's key-view chain.
+  var focusableRows: [NSView] { rows }
+  /// Fired after every row rebuild so the owner can rewire the key loop.
+  var onRowsRebuilt: (() -> Void)?
 
   /// Category indices the user has explicitly expanded via the chevron.
   /// Persists across refreshes (lives on the long-lived section view). Active
@@ -461,6 +488,7 @@ private final class CategorySection: NSView {
         }
       }
     }
+    onRowsRebuilt?()
   }
 
   // MARK: Histogram builder
@@ -521,7 +549,58 @@ private final class CategorySection: NSView {
 
 // TODO: rename something more self explanatory
 /// A 26pt category row: optional chevron, colored dot, label, right-aligned count.
-private final class CatRow: NSView {
+// MARK: - Focusable row base
+
+/// Keyboard support shared by the sidebar rows: accent focus ring,
+/// Return/Enter/Space activate (same as a click), Tab/Shift-Tab walk the key
+/// view loop, ↑/↓ move between sibling rows, Esc drops focus. Subclasses
+/// override `performRowAction()`.
+private class FocusableRow: NSView {
+  override var acceptsFirstResponder: Bool { true }
+
+  /// The row's activation — what a plain click does.
+  func performRowAction() {}
+
+  private func showFocusRing(_ focused: Bool) {
+    layer?.borderWidth = focused ? 1.5 : 0
+    layer?.borderColor = focused ? Theme.darkAccent.accentLine.cgColor : nil
+  }
+
+  override func becomeFirstResponder() -> Bool {
+    let ok = super.becomeFirstResponder()
+    if ok { showFocusRing(true) }
+    return ok
+  }
+
+  override func resignFirstResponder() -> Bool {
+    let ok = super.resignFirstResponder()
+    if ok { showFocusRing(false) }
+    return ok
+  }
+
+  override func keyDown(with event: NSEvent) {
+    switch event.keyCode {
+    case 36, 76, 49:  // Return / Enter / Space
+      performRowAction()
+    case 48:  // Tab — explicit so it works regardless of Full Keyboard Access
+      if event.modifierFlags.contains(.shift) {
+        window?.selectPreviousKeyView(nil)
+      } else {
+        window?.selectNextKeyView(nil)
+      }
+    case 125:  // ↓ — stay within the sidebar's row chain
+      if let row = nextValidKeyView as? FocusableRow { window?.makeFirstResponder(row) }
+    case 126:  // ↑
+      if let row = previousValidKeyView as? FocusableRow { window?.makeFirstResponder(row) }
+    case 53:  // Esc
+      window?.makeFirstResponder(nil)
+    default:
+      super.keyDown(with: event)
+    }
+  }
+}
+
+private final class CatRow: FocusableRow {
   private let onSelect: () -> Void
   private let onToggleExpand: (() -> Void)?
   private let hasChildren: Bool
@@ -651,6 +730,10 @@ private final class CatRow: NSView {
     }
   }
 
+  override func performRowAction() {
+    onSelect()
+  }
+
   private var tracking: NSTrackingArea?
 
   override func updateTrackingAreas() {
@@ -682,7 +765,7 @@ private final class CatRow: NSView {
 
 // TODO: rename better
 /// A 22pt indented extension row under a category. "• .zig  2"
-private final class ExtRow: NSView {
+private final class ExtRow: FocusableRow {
   /// `additive` is true for ⌘/⌃-clicks (toggle in the multi-ext OR-set).
   private let onSelect: (_ additive: Bool) -> Void
   private var active = false
@@ -774,6 +857,10 @@ private final class ExtRow: NSView {
     }
   }
 
+  override func performRowAction() {
+    onSelect(false)
+  }
+
   private var tracking: NSTrackingArea?
 
   override func updateTrackingAreas() {
@@ -807,7 +894,7 @@ private final class ExtRow: NSView {
 /// A 30pt-tall pin row: SF Symbol + label, rounded `Theme.hover` background on
 /// hover, and (when active) the rounded `accentSoft` fill.
 /// Right-click shows a context menu (Remove + Folder Color).
-private final class PinRow: NSView {
+private final class PinRow: FocusableRow {
   let path: String
   private let onClick: (String) -> Void
   var contextMenuProvider: ((String) -> NSMenu?)?
@@ -898,6 +985,10 @@ private final class PinRow: NSView {
     if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
       onClick(path)
     }
+  }
+
+  override func performRowAction() {
+    onClick(path)
   }
 
   override func rightMouseDown(with event: NSEvent) {

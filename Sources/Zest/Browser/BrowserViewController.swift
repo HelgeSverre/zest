@@ -150,6 +150,15 @@ final class BrowserViewController: NSViewController {
   /// (`"<name> — <Kind>"` plus `" · <size>"` for files) or nil for no selection.
   var onSelectionChange: ((String?) -> Void)?
 
+  /// ⌘2: give the table keyboard focus (selecting row 0 first if nothing
+  /// is selected, so arrow keys have somewhere to start).
+  func focusTable() {
+    if tableView.selectedRow < 0, !items.isEmpty {
+      tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
+    view.window?.makeFirstResponder(tableView)
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     buildTable()
@@ -803,10 +812,19 @@ private final class ZestTableView: NSTableView {
   var menuForRow: ((Int) -> NSMenu?)?
 
   override func keyDown(with event: NSEvent) {
-    // Return (36) / Enter (76) activate the selection; everything else
+    // Return (36) / Enter (76) activate the selection; Tab (48) leaves the
+    // table via the key view loop instead of dying; everything else
     // (arrow up/down selection, page keys, …) flows to AppKit.
     if event.keyCode == 36 || event.keyCode == 76 {
       onActivateSelection?()
+      return
+    }
+    if event.keyCode == 48 {
+      if event.modifierFlags.contains(.shift) {
+        window?.selectPreviousKeyView(nil)
+      } else {
+        window?.selectNextKeyView(nil)
+      }
       return
     }
     super.keyDown(with: event)

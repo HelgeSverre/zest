@@ -20,6 +20,14 @@ final class SearchField: NSView {
 
   private var debounce: DispatchWorkItem?
   private var focused = false
+  /// Whether the field is currently being edited (accent ring shown). Read
+  /// by RootViewController's outside-click blur monitor.
+  var isEditing: Bool { focused }
+
+  /// Programmatic focus (⌘F): puts the caret in the field.
+  func focus() {
+    window?.makeFirstResponder(field)
+  }
   /// Guards programmatic field updates (refresh) from re-triggering the change
   /// pipeline / auto-scope switch.
   private var settingProgrammatically = false
@@ -54,6 +62,7 @@ final class SearchField: NSView {
     field.cell?.usesSingleLineMode = true
     field.cell?.isScrollable = true
     field.delegate = self
+    field.onFocus = { [weak self] in self?.setFocused(true) }
     field.placeholderAttributedString = NSAttributedString(
       string: "Search — try kind:folder, ext:pdf",
       attributes: [
@@ -216,6 +225,18 @@ extension SearchField: NSTextFieldDelegate {
     setFocused(true)
   }
 
+  /// Esc blurs the field (query text stays). Mirrors the breadcrumb's
+  /// `doCommandBy` handling; without this, Esc inside the field editor is a
+  /// no-op and there is no keyboard way out.
+  func control(_: NSControl, textView _: NSTextView, doCommandBy commandSelector: Selector) -> Bool
+  {
+    if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+      window?.makeFirstResponder(nil)
+      return true
+    }
+    return false
+  }
+
   func controlTextDidEndEditing(_: Notification) {
     setFocused(false)
     // Flush any pending commit now, then canonicalize the display. The
@@ -231,6 +252,17 @@ extension SearchField: NSTextFieldDelegate {
 // MARK: - Field with an I-beam cursor
 
 private final class InsetTextField: NSTextField {
+  /// Focus acquisition hook: `controlTextDidBeginEditing` only fires on the
+  /// first keystroke, so click/⌘F focus wouldn't show the accent ring
+  /// without this (same pattern as the dialog's FocusReportingTextField).
+  var onFocus: (() -> Void)?
+
+  override func becomeFirstResponder() -> Bool {
+    let ok = super.becomeFirstResponder()
+    if ok { onFocus?() }
+    return ok
+  }
+
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .iBeam)
   }

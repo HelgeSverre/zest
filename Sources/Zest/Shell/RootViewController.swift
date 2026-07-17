@@ -137,11 +137,21 @@ final class RootViewController: NSViewController {
     // Mouse thumb buttons (Razer/Logitech etc.): 3 = back, 4 = forward.
     // Fire on mouse-UP (matching browser/Finder feel); consume the event so
     // it doesn't also reach a view. Ignored while the manager dialog is up.
-    mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp]) {
+    mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .leftMouseDown]) {
       [weak self] event in
       guard let self, event.window === self.view.window,
         !self.savedFiltersDialog.isShown
       else { return event }
+      if event.type == .leftMouseDown {
+        // Clicking outside an editing search field blurs it; the click
+        // still lands on its target (event returned unmodified).
+        if self.toolbar.isSearchEditing {
+          let inField = self.toolbar.searchFieldView.bounds.contains(
+            self.toolbar.searchFieldView.convert(event.locationInWindow, from: nil))
+          if !inField { self.view.window?.makeFirstResponder(nil) }
+        }
+        return event
+      }
       switch event.buttonNumber {
       case 3:
         self.coordinator.goBack()
@@ -173,6 +183,20 @@ final class RootViewController: NSViewController {
 
   deinit {
     if let mouseNavMonitor { NSEvent.removeMonitor(mouseNavMonitor) }
+  }
+
+  // MARK: - Focus shortcuts (⌘F / ⌘1 / ⌘2, via AppDelegate menu items)
+
+  func focusSearch() {
+    toolbar.focusSearch()
+  }
+
+  func focusSidebar() {
+    sidebar.focusFirstRow()
+  }
+
+  func focusFileList() {
+    browser.focusTable()
   }
 
   override func viewDidAppear() {

@@ -18,6 +18,15 @@ import AppKit
 /// mode, and clicking the container background (mouseDown not on a segment) also
 /// edits. This satisfies both "jump to an ancestor" and "paste a path and go".
 final class Breadcrumb: NSView {
+  /// Shared by layout and the width-measurement math in `refresh()` — keep
+  /// them in one place so they can't drift.
+  enum Metrics {
+    /// Horizontal padding inside a segment/… pill (text → pill edge).
+    static let segPad: CGFloat = 3
+    /// Gap between arranged items (segment ↔ ⁄ separator).
+    static let spacing: CGFloat = 5
+  }
+
   private let coordinator: AppCoordinator
   private static let accent = Theme.darkAccent
 
@@ -38,7 +47,7 @@ final class Breadcrumb: NSView {
 
     stack.orientation = .horizontal
     stack.alignment = .centerY
-    stack.spacing = 2
+    stack.spacing = Metrics.spacing
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
     addSubview(stack)
@@ -143,8 +152,9 @@ final class Breadcrumb: NSView {
 
     // Content budget: control width minus the stack's 10+10 edge insets.
     let contentAvailable = max(0, availableWidth - 20)
-    let sepWidth = Self.measure("\u{2044}", font: .systemFont(ofSize: 13)) + stack.spacing * 2
-    let ellipsisWidth = Self.measure("…", font: .systemFont(ofSize: 12.5)) + 10 + stack.spacing
+    let sepWidth = Self.measure("\u{2044}", font: .systemFont(ofSize: 13)) + Metrics.spacing * 2
+    let ellipsisWidth =
+      Self.measure("…", font: .systemFont(ofSize: 12.5)) + Metrics.segPad * 2 + Metrics.spacing
     let widths = tokens.map { tokenWidth($0) }
     let hidden = Self.segmentsToCollapse(
       widths: widths, ellipsisWidth: ellipsisWidth, separatorWidth: sepWidth,
@@ -225,7 +235,7 @@ final class Breadcrumb: NSView {
   /// padding + the stack's spacing share.
   private func tokenWidth(_ token: Token) -> CGFloat {
     let (font, _) = attributes(for: token.style, path: token.path)
-    return Self.measure(token.text, font: font) + 10 + stack.spacing
+    return Self.measure(token.text, font: font) + Metrics.segPad * 2 + Metrics.spacing
   }
 
   private enum SegStyle {
@@ -253,6 +263,14 @@ final class Breadcrumb: NSView {
 
   private func makeSegment(text: String, path: String, style: SegStyle) -> SegmentView {
     let (font, color) = attributes(for: style, path: path)
+    // Navigating to the pwd is a no-op, so the current crumb doubles as a
+    // second click-to-edit target.
+    if style == .current {
+      return SegmentView(text: text, font: font, color: color, navPath: path) {
+        [weak self] _ in
+        self?.enterEdit()
+      }
+    }
     return SegmentView(text: text, font: font, color: color, navPath: path) {
       [weak self] target in
       self?.coordinator.navigate(to: target)
@@ -267,7 +285,7 @@ final class Breadcrumb: NSView {
     token.onClick = { [weak self, weak token] in
       guard let self, let token else { return }
       let menu = NSMenu()
-      for t in hidden.reversed() {
+      for t in hidden {  // document order: top-level ancestor first
         let item = NSMenuItem(
           title: t.text, action: #selector(self.collapsedMenuNavigate(_:)), keyEquivalent: "")
         item.target = self
@@ -390,7 +408,9 @@ final class Breadcrumb: NSView {
     guard !editing else {
       return
     }
-    layer?.backgroundColor = Theme.hover.cgColor
+    // Half-strength wash: the per-segment highlight (full Theme.hover)
+    // must read on top of the container hover.
+    layer?.backgroundColor = Theme.hoverDim.cgColor
   }
 
   override func mouseExited(with event: NSEvent) {
@@ -459,8 +479,8 @@ private final class SegmentView: NSView {
     label.translatesAutoresizingMaskIntoConstraints = false
     addSubview(label)
     NSLayoutConstraint.activate([
-      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
-      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Breadcrumb.Metrics.segPad),
+      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
       label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
       label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
     ])
@@ -498,7 +518,7 @@ private final class SegmentView: NSView {
     // One step lighter than the container pill's Theme.hover — the same
     // color would make the per-segment highlight invisible while the whole
     // breadcrumb is hovered.
-    layer?.backgroundColor = Theme.hoverRaised.cgColor
+    layer?.backgroundColor = Theme.hover.cgColor
   }
 
   override func mouseExited(with event: NSEvent) {
@@ -525,8 +545,8 @@ private final class CollapsedToken: NSView {
     label.translatesAutoresizingMaskIntoConstraints = false
     addSubview(label)
     NSLayoutConstraint.activate([
-      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
-      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Breadcrumb.Metrics.segPad),
+      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
       label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
       label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
     ])
@@ -552,7 +572,7 @@ private final class CollapsedToken: NSView {
 
   override func mouseEntered(with event: NSEvent) {
     guard isTopmostUnderMouse else { return }
-    layer?.backgroundColor = Theme.hoverRaised.cgColor
+    layer?.backgroundColor = Theme.hover.cgColor
   }
 
   override func mouseExited(with event: NSEvent) {
