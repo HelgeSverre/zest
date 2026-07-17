@@ -15,6 +15,10 @@ final class RootViewController: NSViewController {
   private var statusBar: StatusBarView!
   private var savedFiltersCard: SavedFiltersCard!
   private var savedFiltersDialog: SavedFiltersDialog!
+  /// Local monitor for mouse thumb buttons (button 3 = back, 4 = forward) —
+  /// a monitor rather than a responder override so it works regardless of
+  /// which subview is under the cursor.
+  private var mouseNavMonitor: Any?
 
   override func loadView() {
     view = NSView()
@@ -129,6 +133,26 @@ final class RootViewController: NSViewController {
       self.statusBar.refresh()
     }
     coordinator.startIndexReloadTimer()
+
+    // Mouse thumb buttons (Razer/Logitech etc.): 3 = back, 4 = forward.
+    // Fire on mouse-UP (matching browser/Finder feel); consume the event so
+    // it doesn't also reach a view. Ignored while the manager dialog is up.
+    mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp]) {
+      [weak self] event in
+      guard let self, event.window === self.view.window,
+        !self.savedFiltersDialog.isShown
+      else { return event }
+      switch event.buttonNumber {
+      case 3:
+        self.coordinator.goBack()
+        return nil
+      case 4:
+        self.coordinator.goForward()
+        return nil
+      default:
+        return event
+      }
+    }
     // The browser's selection drives the status bar's center summary.
     browser.onSelectionChange = { [weak self] summary in
       self?.statusBar.setSelection(summary)
@@ -145,6 +169,10 @@ final class RootViewController: NSViewController {
     // snapshot renders immediately and the first off-main delivery fires a
     // second onChange with the real rows.
     coordinator.start()
+  }
+
+  deinit {
+    if let mouseNavMonitor { NSEvent.removeMonitor(mouseNavMonitor) }
   }
 
   override func viewDidAppear() {

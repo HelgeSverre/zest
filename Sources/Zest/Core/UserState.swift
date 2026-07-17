@@ -140,9 +140,13 @@ final class UserState {
     try? FileManager.default.removeItem(at: backup)
     do {
       try FileManager.default.moveItem(at: url, to: backup)
-      NSLog("UserState: %@ failed to decode; moved to %@", url.lastPathComponent, backup.lastPathComponent)
+      NSLog(
+        "UserState: %@ failed to decode; moved to %@", url.lastPathComponent,
+        backup.lastPathComponent)
     } catch {
-      NSLog("UserState: %@ failed to decode and could not be quarantined: %@", url.lastPathComponent, "\(error)")
+      NSLog(
+        "UserState: %@ failed to decode and could not be quarantined: %@", url.lastPathComponent,
+        "\(error)")
     }
   }
 

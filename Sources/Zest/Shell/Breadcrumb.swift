@@ -24,6 +24,8 @@ final class Breadcrumb: NSView {
   private let stack = NSStackView()
   private let editField = EditField()
   private var editing = false
+  /// Active only in edit mode — display mode hugs the crumb content.
+  private var editWidthConstraint: NSLayoutConstraint?
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -56,7 +58,9 @@ final class Breadcrumb: NSView {
 
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-      stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+      // Equality: the control is exactly as wide as its crumbs, so the
+      // click-to-edit hit target never extends into the empty toolbar gap.
+      stack.trailingAnchor.constraint(equalTo: trailingAnchor),
       stack.centerYAnchor.constraint(equalTo: centerYAnchor),
 
       editField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
@@ -65,7 +69,11 @@ final class Breadcrumb: NSView {
 
       heightAnchor.constraint(equalToConstant: 32),
     ])
-    setContentHuggingPriority(.defaultLow, for: .horizontal)
+    // A pasted path needs room to read/type: while editing, the control
+    // stretches toward the toolbar's cap instead of hugging the crumbs.
+    editWidthConstraint = widthAnchor.constraint(greaterThanOrEqualToConstant: 360)
+    editWidthConstraint?.priority = NSLayoutConstraint.Priority(750)
+    setContentHuggingPriority(.required, for: .horizontal)
     setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
     refresh()
@@ -178,6 +186,7 @@ final class Breadcrumb: NSView {
     editing = true
     stack.isHidden = true
     editField.isHidden = false
+    editWidthConstraint?.isActive = true
     editField.stringValue = coordinator.currentPath
 
     // Accent focus ring: border accentLine + soft glow.
@@ -202,6 +211,7 @@ final class Breadcrumb: NSView {
     editing = false
     editField.isHidden = true
     stack.isHidden = false
+    editWidthConstraint?.isActive = false
     layer?.backgroundColor = NSColor.clear.cgColor
     layer?.borderColor = NSColor.clear.cgColor
     layer?.shadowOpacity = 0
@@ -223,6 +233,7 @@ final class Breadcrumb: NSView {
     editing = false
     editField.isHidden = true
     stack.isHidden = false
+    editWidthConstraint?.isActive = false
     layer?.backgroundColor = NSColor.clear.cgColor
     layer?.borderColor = NSColor.clear.cgColor
     layer?.shadowOpacity = 0
@@ -364,7 +375,10 @@ private final class SegmentView: NSView {
 
   override func mouseEntered(with event: NSEvent) {
     guard isTopmostUnderMouse else { return }
-    layer?.backgroundColor = Theme.hover.cgColor
+    // One step lighter than the container pill's Theme.hover — the same
+    // color would make the per-segment highlight invisible while the whole
+    // breadcrumb is hovered.
+    layer?.backgroundColor = Theme.hoverRaised.cgColor
   }
 
   override func mouseExited(with event: NSEvent) {

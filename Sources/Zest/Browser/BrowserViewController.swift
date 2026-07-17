@@ -581,7 +581,7 @@ final class BrowserViewController: NSViewController {
 
     addColumn(Self.colName, "NAME", width: 360, min: 240, max: 100_000)
     addColumn(Self.colSize, "SIZE", width: 90, min: 90, max: 90, alignment: .right)
-    addColumn(Self.colMod, "MODIFIED", width: 170, min: 170, max: 170)
+    addColumn(Self.colMod, "MODIFIED", width: 184, min: 184, max: 184)
     addColumn(Self.colKind, "KIND", width: 120, min: 120, max: 120)
     addColumn(Self.colExt, "EXT", width: 70, min: 70, max: 70)
 
@@ -727,7 +727,9 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
       cell.configure(item, searchMode: searchMode)
       return cell
     case BrowserViewController.colMod:
-      let cell = dequeueLabel(id, alignment: .left, leading: 0, trailing: 12)
+      // 14pt leading (matches the header title inset) keeps the date clear
+      // of the right-aligned size text in the previous column.
+      let cell = dequeueLabel(id, alignment: .left, leading: 14, trailing: 12)
       cell.label.attributedStringValue = ModifiedCell.attributed(
         iso: item.isoDate, ago: item.agoText,
       )
@@ -927,7 +929,11 @@ private final class ZestHeaderCell: NSTableHeaderCell {
     )
     text.draw(in: drawRect, withAttributes: attrs)
 
-    guard active else {
+    // AppKit fills the header area beyond the last column (and other spacer
+    // regions) by drawing a COPY of a real column's header cell with an
+    // empty title — the copy inherits `sortIndicator`, which painted stray
+    // chevrons into the empty filler. No title, no glyph.
+    guard active, stringValue.isEmpty == false else {
       return
     }
     let arrow = sortIndicator == .ascending ? "\u{2191}" : "\u{2193}"  // ↑ / ↓

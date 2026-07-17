@@ -67,12 +67,19 @@ final class ToolbarView: NSView {
       savedButton.centerYAnchor.constraint(equalTo: centerYAnchor),
     ])
 
-    // The breadcrumb may grow but shouldn't pin to the trailing edge: cap it
-    // like the prototype (max ~360) yet let it shrink on narrow windows. The
-    // search field is the flexible element that fills the remaining width.
-    let maxWidth = breadcrumb.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
-    maxWidth.priority = .defaultHigh
-    maxWidth.isActive = true
+    // Width policy: the breadcrumb hugs its crumbs (equality inside the
+    // control), the search field aims for a fixed preferred width, and the
+    // `>=` gap between them absorbs ALL remaining slack — an explicit spacer,
+    // so neither control stretches on resize/fullscreen and clicks in the
+    // gap hit inert toolbar chrome. On narrow windows the search compresses
+    // to its 200pt minimum first, then the breadcrumb truncates.
+    let crumbCap = breadcrumb.widthAnchor.constraint(lessThanOrEqualToConstant: 420)
+    crumbCap.priority = .defaultHigh
+    crumbCap.isActive = true
+    let preferred = searchField.widthAnchor.constraint(equalToConstant: 360)
+    preferred.priority = NSLayoutConstraint.Priority(500)
+    preferred.isActive = true
+    searchField.widthAnchor.constraint(lessThanOrEqualToConstant: 420).isActive = true
     // The breadcrumb compresses before the search field shrinks below its min.
     breadcrumb.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
