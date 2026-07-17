@@ -132,6 +132,33 @@ final class FilterTests: XCTestCase {
   }
 }
 
+/// The saved-filters card hides "Save current search" when the current query
+/// is semantically already saved (comparison via Filter.parse, so token order
+/// and qualifier case don't defeat the match).
+final class SavedFilterDedupTests: XCTestCase {
+  private let saved = [
+    UserState.SavedFilter(name: "Big videos", query: "cat:video size:>100mb"),
+    UserState.SavedFilter(name: "PHP", query: "ext:php"),
+  ]
+
+  func testExactQueryIsSaved() {
+    XCTAssertTrue(SavedFiltersCard.querySavedAlready("cat:video size:>100mb", in: saved))
+  }
+
+  func testSemanticallyEqualQueryIsSaved() {
+    // Same filter, different token order and qualifier case.
+    XCTAssertTrue(SavedFiltersCard.querySavedAlready("ext:PHP", in: saved))
+  }
+
+  func testDifferentQueryIsNotSaved() {
+    XCTAssertFalse(SavedFiltersCard.querySavedAlready("ext:php report", in: saved))
+  }
+
+  func testEmptyQueryIsNeverSaved() {
+    XCTAssertFalse(SavedFiltersCard.querySavedAlready("", in: saved))
+  }
+}
+
 /// Tests for `SearchField.refreshDecision`, the guard that keeps `refresh()`
 /// from rewriting the field with canonicalized text while the user is typing
 /// (the coordinator lags the field by the 150ms debounce), while still letting

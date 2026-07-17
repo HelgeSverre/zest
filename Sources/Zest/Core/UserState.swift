@@ -35,12 +35,20 @@ final class UserState {
     let folders: [String: ColorEntry]
   }
 
+  /// Small scalar view preferences (prefs.json). Additive: unknown keys are
+  /// dropped on decode, absent keys take their defaults.
+  private struct Prefs: Codable {
+    var foldersOnTop: Bool = false
+  }
+
   private(set) var pins: [Pin]
   private(set) var colors: [String: NSColor]
   private(set) var filters: [SavedFilter]
+  private var prefs: Prefs
   private let pinsURL: URL?
   private let colorsURL: URL?
   private let filtersURL: URL?
+  private let prefsURL: URL?
 
   /// `directory` is the zest app-support dir; nil (no app support) yields
   /// in-memory defaults that don't persist.
@@ -48,9 +56,20 @@ final class UserState {
     pinsURL = directory?.appendingPathComponent("pins.json")
     colorsURL = directory?.appendingPathComponent("folder_colors.json")
     filtersURL = directory?.appendingPathComponent("filters.json")
+    prefsURL = directory?.appendingPathComponent("prefs.json")
     pins = Self.loadPins(from: pinsURL) ?? Self.defaultPins()
     colors = Self.loadColors(from: colorsURL)
     filters = Self.loadFilters(from: filtersURL)
+    prefs = Self.loadPrefs(from: prefsURL)
+  }
+
+  // MARK: - View preferences
+
+  var foldersOnTop: Bool { prefs.foldersOnTop }
+
+  func setFoldersOnTop(_ value: Bool) {
+    prefs.foldersOnTop = value
+    savePrefs()
   }
 
   func folderColor(forPath path: String) -> NSColor? {
@@ -187,6 +206,30 @@ final class UserState {
       try data.write(to: colorsURL, options: .atomic)
     } catch {
       NSLog("UserState: failed to save folder colors: \(error)")
+    }
+  }
+
+  private static func loadPrefs(from url: URL?) -> Prefs {
+    guard let url, let data = try? Data(contentsOf: url),
+      let parsed = try? JSONDecoder().decode(Prefs.self, from: data)
+    else { return Prefs() }
+    return parsed
+  }
+
+  private func savePrefs() {
+    guard let prefsURL else { return }
+    try? FileManager.default.createDirectory(
+      at: prefsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(prefs) else {
+      NSLog("UserState: failed to encode prefs")
+      return
+    }
+    do {
+      try data.write(to: prefsURL, options: .atomic)
+    } catch {
+      NSLog("UserState: failed to save prefs: \(error)")
     }
   }
 

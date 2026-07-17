@@ -95,8 +95,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       makeMenu("Edit", items: [undo, redo, .separator(), cut, copy, paste, selectAll]),
     )
 
-    // View menu — empty for now; future: Toggle Sidebar, Show Path Bar, etc.
-    mainMenu.addItem(makeMenu("View", items: []))
+    // View menu. Checkmark state comes from validateMenuItem, so it stays in
+    // sync however the pref changes.
+    let foldersOnTop = NSMenuItem(
+      title: "Folders on Top", action: #selector(menuToggleFoldersOnTop(_:)), keyEquivalent: "",
+    )
+    foldersOnTop.target = self
+    mainMenu.addItem(makeMenu("View", items: [foldersOnTop]))
 
     // Navigation — the new keyboard shortcuts from the old Zig UI.
     let navMenu = NSMenu(title: "Navigation")
@@ -151,6 +156,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   // MARK: Menu actions
+
+  @objc private func menuToggleFoldersOnTop(_: Any?) {
+    guard let coordinator = rootViewController?.coordinator else { return }
+    coordinator.foldersOnTop.toggle()
+  }
+
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    if item.action == #selector(menuToggleFoldersOnTop(_:)) {
+      item.state = (rootViewController?.coordinator.foldersOnTop ?? false) ? .on : .off
+    }
+    return true
+  }
 
   @objc private func menuGoUp(_: Any?) {
     rootViewController?.coordinator.goUp()

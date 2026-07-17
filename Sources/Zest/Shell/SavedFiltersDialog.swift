@@ -485,6 +485,9 @@ private final class DialogFilterRow: NSView {
     let nameLabel = NSTextField(labelWithString: filter.name)
     nameLabel.font = .systemFont(ofSize: 13, weight: .medium)
     nameLabel.textColor = Theme.text
+    nameLabel.lineBreakMode = .byTruncatingTail
+    nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    nameLabel.toolTip = filter.name
     nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
     let queryLabel = NSTextField(labelWithString: filter.query)
@@ -494,10 +497,15 @@ private final class DialogFilterRow: NSView {
     queryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     queryLabel.translatesAutoresizingMaskIntoConstraints = false
 
+    // The text block absorbs all slack so the pencil/trash buttons stay
+    // pinned at the trailing edge regardless of name/query length.
     let vStack = NSStackView(views: [nameLabel, queryLabel])
     vStack.orientation = .vertical
     vStack.alignment = .leading
     vStack.spacing = 2
+    vStack.setContentHuggingPriority(.init(1), for: .horizontal)
+    nameLabel.setContentHuggingPriority(.init(1), for: .horizontal)
+    queryLabel.setContentHuggingPriority(.init(1), for: .horizontal)
     vStack.translatesAutoresizingMaskIntoConstraints = false
 
     let editBtn = DialogIconButton(

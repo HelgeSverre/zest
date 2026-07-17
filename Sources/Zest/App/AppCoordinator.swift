@@ -165,6 +165,16 @@ final class AppCoordinator {
     }
   }
 
+  /// View ▸ Folders on Top: pin directories before files regardless of the
+  /// active sort. Persisted in UserState; lazily seeded from it on first read.
+  lazy var foldersOnTop: Bool = userState.foldersOnTop {
+    didSet {
+      guard foldersOnTop != oldValue else { return }
+      userState.setFoldersOnTop(foldersOnTop)
+      resortOrRequery()
+    }
+  }
+
   /// A sort change re-orders the rows we already have — no engine round-trip.
   /// Mid-flight (loading), fall back to a full re-query so the eventual
   /// delivery carries the new order (the in-flight query snapshotted the old
@@ -172,7 +182,8 @@ final class AppCoordinator {
   private func resortOrRequery() {
     guard !suppressChange else { return }
     if !loading, var rows = cachedResults {
-      Self.applySort(to: &rows, column: sortColumn, ascending: sortAscending)
+      Self.applySort(
+        to: &rows, column: sortColumn, ascending: sortAscending, foldersOnTop: foldersOnTop)
       cachedResults = rows
       onChange?()
     } else {
@@ -410,9 +421,10 @@ final class AppCoordinator {
     let depth = scopeDepth
     let sortCol = sortColumn
     let sortAsc = sortAscending
+    let foldersTop = foldersOnTop
     queryQueue.async { [weak self] in
       var rows = core.query(q, scope: root, maxDepth: depth, maxResults: UInt32(Self.maxResults))
-      Self.applySort(to: &rows, column: sortCol, ascending: sortAsc)
+      Self.applySort(to: &rows, column: sortCol, ascending: sortAsc, foldersOnTop: foldersTop)
       DispatchQueue.main.async {
         guard let self, self.queryGeneration == gen else { return }
         self.cachedResults = rows
@@ -440,8 +452,13 @@ final class AppCoordinator {
   /// `.name` ascending keeps folders first (browse default); other columns
   /// sort purely by their key. Folders-first applies only when ascending —
   /// exactly mirroring the previous behaviour.
-  private static func applySort(
-    to rows: inout [ZestCore.Row], column: SortColumn, ascending asc: Bool
+  ///
+  /// `foldersOnTop` (View ▸ Folders on Top) pins directories before files for
+  /// every column/direction; within each group the column sort still applies.
+  /// Internal (not private) so sort semantics stay unit-testable.
+  static func applySort(
+    to rows: inout [ZestCore.Row], column: SortColumn, ascending asc: Bool,
+    foldersOnTop: Bool = false
   ) {
     func ascending(_ less: Bool) -> Bool { asc ? less : !less }
     let nameKeys = rows.map { $0.name.lowercased() }
@@ -482,6 +499,11 @@ final class AppCoordinator {
       }
     }
     rows = order.map { rows[$0] }
+
+    // Stable partition: the column sort above is preserved within each group.
+    if foldersOnTop {
+      rows = rows.filter { $0.kind == 1 } + rows.filter { $0.kind != 1 }
+    }
   }
 
   // MARK: - Path helpers

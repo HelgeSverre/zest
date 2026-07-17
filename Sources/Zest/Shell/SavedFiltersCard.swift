@@ -121,6 +121,15 @@ final class SavedFiltersCard: NSView {
     monitor = nil
   }
 
+  /// True when `query` parses to the same Filter as one of the saved
+  /// filters — "Save current search" is pointless then. Semantic comparison
+  /// (Filter.parse) so token order / qualifier case don't defeat the match.
+  static func querySavedAlready(_ query: String, in filters: [UserState.SavedFilter]) -> Bool {
+    let current = Filter.parse(query)
+    guard !current.isEmpty else { return false }
+    return filters.contains { Filter.parse($0.query) == current }
+  }
+
   // MARK: - Content
 
   /// Adds a row inset 4pt per side within the 6pt card padding.
@@ -164,7 +173,7 @@ final class SavedFiltersCard: NSView {
     stack.setCustomSpacing(5, after: sep)
 
     let currentQuery = coordinator.queryText.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !currentQuery.isEmpty {
+    if !currentQuery.isEmpty, !Self.querySavedAlready(currentQuery, in: filters) {
       let saveRow = CardRow(
         icon: "plus.circle", iconTint: SavedFiltersCard.accent.accent,
         title: "Save current search", titleColor: SavedFiltersCard.accent.accent,
@@ -242,6 +251,12 @@ private final class CardRow: NSView {
     let titleLabel = NSTextField(labelWithString: title)
     titleLabel.font = .systemFont(ofSize: 12.5, weight: titleWeight)
     titleLabel.textColor = titleColor
+    // Long names truncate (full name in the tooltip) rather than bleeding
+    // into the right-aligned query text: the title gives way first (lower
+    // compression resistance than the query label's .defaultLow).
+    titleLabel.lineBreakMode = .byTruncatingTail
+    titleLabel.setContentCompressionResistancePriority(.init(249), for: .horizontal)
+    titleLabel.toolTip = title
     titleLabel.translatesAutoresizingMaskIntoConstraints = false
     views.append(titleLabel)
 

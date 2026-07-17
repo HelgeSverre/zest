@@ -71,11 +71,10 @@ uninstall-daemon:
 open-index:
     open ~/Library/Application\ Support/zest/
 
-# Wipe the generated search index (index.zst + any leftover .tmp write).
-# Leaves user data (pins.json, folder_colors.json, filters.json) untouched.
-# Rebuild with `just index`.
+# Wipe the generated search index (index.zst). Leaves user data
+# (pins.json, folder_colors.json, filters.json) untouched. Rebuild with `just index`.
 wipe-index:
-    rm -f ~/Library/Application\ Support/zest/index.zst ~/Library/Application\ Support/zest/index.zst.tmp
+    rm -f ~/Library/Application\ Support/zest/index.zst
 
 # Remove build output and caches (Zig + Swift PM).
 clean:
