@@ -66,6 +66,8 @@ It's a custom binary format (`src/index/format.zig`, magic `"ZESTINDX"`,
 │ u32 dir_offsets[dir_count] │ u32 dir_blob_len │ dir_blob       │
 ├──────────────────── METADATA column ──────────────────────────┤
 │ u64 size[num] │ i64 mtime[num] │ u8 kind[num] │ u8 cat[num]    │
+│   (v4: directory entries' size = recursive subtree total,       │
+│    rolled up at build time; files keep their scanned st_size)   │
 ├──────────────────── BITMAPS ───────────────────────────────────┤
 │ u32 num_bitmaps                                                  │
 │ for each: u8 cat │ u32 count │ u32 indices[count] (sorted)      │

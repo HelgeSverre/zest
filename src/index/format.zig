@@ -5,8 +5,10 @@ const runtime = @import("../core/runtime.zig");
 pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 /// v2: per-folder × per-category histogram column.
 /// v3: per-(folder × category) extension breakdown column.
+/// v4: directory entries' size = recursive subtree total (layout unchanged;
+///     the bump forces a reindex so folders never show stale zeros).
 /// Reader's version check forces a full re-index on first launch with a new build.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;
@@ -205,6 +207,62 @@ test "escapeTsv / unescapeTsv round-trip with tab, newline, backslash" {
     try std.testing.expectEqualStrings(original, roundtrip);
 }
 
+test "writeIndex bakes recursive folder sizes into directory entries" {
+    const reader_mod = @import("reader.zig");
+    const entries = [_]IndexEntry{
+        .{ .name = "a.txt", .dir_path = "/home/u/docs", .size = 100, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "b.txt", .dir_path = "/home/u/docs", .size = 20, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "c.txt", .dir_path = "/home/u/docs/sub", .size = 3, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "sub", .dir_path = "/home/u/docs", .size = 0, .mtime = 1, .kind = .directory, .category = .uncategorized },
+        .{ .name = "docs", .dir_path = "/home/u", .size = 0, .mtime = 1, .kind = .directory, .category = .uncategorized },
+        .{ .name = "top.txt", .dir_path = "/home/u", .size = 4000, .mtime = 1, .kind = .file, .category = .text },
+    };
+    const data = try writeIndex(std.testing.allocator, &entries);
+    defer std.testing.allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(std.testing.allocator, data);
+    defer reader.deinit();
+
+    // Files keep their own sizes.
+    try std.testing.expectEqual(@as(u64, 100), reader.getMeta(0).?.size);
+    try std.testing.expectEqual(@as(u64, 3), reader.getMeta(2).?.size);
+    // "sub" = its one file; "docs" = its files + sub's subtree.
+    try std.testing.expectEqual(@as(u64, 3), reader.getMeta(3).?.size);
+    try std.testing.expectEqual(@as(u64, 123), reader.getMeta(4).?.size);
+}
+
+test "writeIndex gives an empty directory size zero" {
+    const reader_mod = @import("reader.zig");
+    const entries = [_]IndexEntry{
+        .{ .name = "empty", .dir_path = "/home/u", .size = 999, .mtime = 1, .kind = .directory, .category = .uncategorized },
+        .{ .name = "f.txt", .dir_path = "/home/u", .size = 7, .mtime = 1, .kind = .file, .category = .text },
+    };
+    const data = try writeIndex(std.testing.allocator, &entries);
+    defer std.testing.allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(std.testing.allocator, data);
+    defer reader.deinit();
+
+    // The scanner-reported dir st_size (999 here) is discarded; nothing is
+    // indexed under /home/u/empty, so its subtree size is 0.
+    try std.testing.expectEqual(@as(u64, 0), reader.getMeta(0).?.size);
+}
+
+test "writeIndex folder sizes do not bleed between sibling-prefix dirs" {
+    const reader_mod = @import("reader.zig");
+    const entries = [_]IndexEntry{
+        .{ .name = "x.txt", .dir_path = "/a/b", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "y.txt", .dir_path = "/a/bc", .size = 10, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "b", .dir_path = "/a", .size = 0, .mtime = 1, .kind = .directory, .category = .uncategorized },
+        .{ .name = "bc", .dir_path = "/a", .size = 0, .mtime = 1, .kind = .directory, .category = .uncategorized },
+    };
+    const data = try writeIndex(std.testing.allocator, &entries);
+    defer std.testing.allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(std.testing.allocator, data);
+    defer reader.deinit();
+
+    try std.testing.expectEqual(@as(u64, 1), reader.getMeta(2).?.size); // b
+    try std.testing.expectEqual(@as(u64, 10), reader.getMeta(3).?.size); // bc
+}
+
 test "escapeTsv returns null when output buffer too small" {
     var tiny: [2]u8 = undefined;
     const result = escapeTsv(&tiny, "ab\\cd");
@@ -307,10 +365,63 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     try writer.writeInt(u32, @intCast(dir_blob.items.len), .little);
     try writer.writeAll(dir_blob.items);
 
+    // === Recursive folder sizes ===
+    // Files keep their scanned size; directory entries get their subtree
+    // total (the scanner writes 0 for dirs — DATALENGTH is absent for them).
+    // Local per-dir sums roll up child→parent in path-length-descending
+    // order: a child's path is strictly longer than its parent's, so length
+    // order is a valid bottom-up topological order.
+    var sizes = try allocator.alloc(u64, num);
+    defer allocator.free(sizes);
+
+    var dir_totals = try allocator.alloc(u64, dir_list.items.len);
+    defer allocator.free(dir_totals);
+    @memset(dir_totals, 0);
+
+    for (entries, 0..) |entry, i| {
+        sizes[i] = entry.size;
+        if (entry.kind != .directory) dir_totals[parent_ids[i]] += entry.size;
+    }
+
+    const roll_order = try allocator.alloc(u32, dir_list.items.len);
+    defer allocator.free(roll_order);
+    for (roll_order, 0..) |*o, i| o.* = @intCast(i);
+    const deeperFirst = struct {
+        fn f(paths: []const []const u8, a: u32, b: u32) bool {
+            return paths[a].len > paths[b].len;
+        }
+    }.f;
+    std.mem.sort(u32, roll_order, @as([]const []const u8, dir_list.items), deeperFirst);
+
+    for (roll_order) |d| {
+        const dpath = dir_list.items[d];
+        const slash = std.mem.lastIndexOfScalar(u8, dpath, '/') orelse continue;
+        // "/x" → "/"; deeper paths cut at the last slash. Roll-up stops
+        // naturally when the parent isn't in the table (scan root's parent).
+        const parent = if (slash == 0) dpath[0..1] else dpath[0..slash];
+        const pid = dir_table.get(parent) orelse continue;
+        if (pid == d) continue; // "/" is its own dirname
+        dir_totals[pid] += dir_totals[d];
+    }
+
+    // Directory entries own the total of the dir-table row matching their
+    // full path. Dirs with no indexed content have no row → 0.
+    var dir_path_buf: std.ArrayList(u8) = .empty;
+    defer dir_path_buf.deinit(allocator);
+    for (entries, 0..) |entry, i| {
+        if (entry.kind != .directory) continue;
+        dir_path_buf.clearRetainingCapacity();
+        try dir_path_buf.appendSlice(allocator, entry.dir_path);
+        if (dir_path_buf.items.len == 0 or dir_path_buf.items[dir_path_buf.items.len - 1] != '/')
+            try dir_path_buf.append(allocator, '/');
+        try dir_path_buf.appendSlice(allocator, entry.name);
+        sizes[i] = if (dir_table.get(dir_path_buf.items)) |d| dir_totals[d] else 0;
+    }
+
     // === Metadata Column ===
     const meta_offset: u64 = buf.items.len;
 
-    for (entries) |entry| try writer.writeInt(u64, entry.size, .little);
+    for (sizes) |s| try writer.writeInt(u64, s, .little);
     for (entries) |entry| try writer.writeInt(i64, entry.mtime, .little);
     for (entries) |entry| try writer.writeByte(@intFromEnum(entry.kind));
     for (entries) |entry| try writer.writeByte(@intFromEnum(entry.category));

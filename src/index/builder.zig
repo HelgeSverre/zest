@@ -31,7 +31,10 @@ pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 
     // Phase 2: read the temp files back, build the columnar index.
     std.debug.print("  building columnar index...\n", .{});
-    const index_data = try buildFromScanFiles(allocator, scan_paths);
+    var parsed: usize = 0;
+    const index_data = try buildFromScanFiles(allocator, scan_paths, &parsed);
+    errdefer allocator.free(index_data);
+    try validateParsedCount(entry_count, parsed);
     const t_built = runtime.nowNanos();
 
     var walk_buf: [16]u8 = undefined;
@@ -49,7 +52,7 @@ pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 
 /// Read one or more TSV scan files and build the columnar index from all of
 /// them. Entry order across files is irrelevant — the columnar format reindexes.
-fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8) ![]u8 {
+fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, parsed_out: ?*usize) ![]u8 {
     var entries: std.ArrayList(format.IndexEntry) = .empty;
     defer entries.deinit(allocator);
 
@@ -60,7 +63,12 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8) ![
     }
 
     for (scan_paths) |scan_path| {
-        const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch continue;
+        const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch |err| {
+            // Keep building from the remaining shards, but say so — a silent
+            // skip here once turned a 4.1M-entry walk into an empty index.
+            std.debug.print("warning: cannot re-open scan shard {s}: {}\n", .{ scan_path, err });
+            continue;
+        };
         defer file.close(runtime.io);
         // Worst-case escaped record: name ≤ 255*2 + path ≤ 4096*2 + numeric
         // fields — just under 9KB. 16KB gives comfortable headroom so a
@@ -70,6 +78,7 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8) ![
         try parseScanReader(allocator, &file_reader.interface, &entries, &owned_strings);
     }
 
+    if (parsed_out) |p| p.* = entries.items.len;
     return format.writeIndex(allocator, entries.items);
 }
 
@@ -125,6 +134,21 @@ fn parseScanReader(
             .category = std.enums.fromInt(types.FileCategory, std.fmt.parseInt(u8, fields[5], 10) catch 0) orelse .uncategorized,
         });
     }
+}
+
+/// Refuse to publish an index that lost the entire scan: the walk counted
+/// entries but the parse phase read none back (unreadable/vanished shard
+/// files). Publishing would atomically replace a good index with an empty
+/// one — observed once when all 8 shard re-opens failed silently.
+fn validateParsedCount(walked: u64, parsed: usize) !void {
+    if (walked > 0 and parsed == 0) return error.ScanParseLostAllEntries;
+}
+
+test "validateParsedCount rejects a zero-entry parse of a non-empty walk" {
+    try std.testing.expectError(error.ScanParseLostAllEntries, validateParsedCount(4_110_431, 0));
+    try validateParsedCount(0, 0); // genuinely empty tree is fine
+    try validateParsedCount(17, 17);
+    try validateParsedCount(17, 12); // partial loss still publishes (warned elsewhere)
 }
 
 /// Test helper: build an index from a single in-memory scan reader.

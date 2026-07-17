@@ -213,6 +213,11 @@ ReleaseFast):
 | histogram depth=1 / subtree | 0.0 / 1.2 ms |
 | ext_breakdown ×9 depth=1 / subtree | 0.0 / 83 ms (merge fix also sped it up) |
 
+> **Result-count note (2026-07-17, index v4):** directory entries now carry
+> their recursive subtree size in the size column, so `size:` queries also
+> match folders. Result counts for size-filtered queries are intentionally
+> higher than the pre-v4 baselines — not a regression.
+
 All engine queries now run off the main thread in the app (generation-dropped
 staleness), so even the 65–135 ms floors never block the UI. Depth-1 sidebar
 reads dropped to ~0 ms once the daemon rebuild treadmill stopped churning the

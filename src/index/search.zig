@@ -485,6 +485,33 @@ test "search filter only kind:folder" {
     try std.testing.expectEqualStrings("src", results[0].name);
 }
 
+test "size filter matches folders by their baked subtree size" {
+    const allocator = std.testing.allocator;
+    var idx = try buildTestIndex(allocator);
+    defer allocator.free(idx.data);
+    defer idx.reader.deinit();
+
+    // /home/user/src contains app.zig (8192 bytes), so the folder's baked
+    // size is 8192 and both it and the file clear a >5000 threshold.
+    const results = try search(allocator, &idx.reader, .{
+        .query = "",
+        .filters = &.{filters_mod.FilterCriterion{ .size = .{ .op = .gt, .value = 5000 } }},
+    });
+    defer allocator.free(results);
+    var dir_hits: usize = 0;
+    var file_hits: usize = 0;
+    for (results) |r| {
+        if (r.kind == .directory) {
+            dir_hits += 1;
+            try std.testing.expectEqualStrings("src", r.name);
+            try std.testing.expectEqual(@as(u64, 8192), r.size);
+        } else file_hits += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), dir_hits);
+    // report.pdf (2MB), photo.jpg (500KB), report_v2.pdf (5MB), app.zig (8192).
+    try std.testing.expectEqual(@as(usize, 4), file_hits);
+}
+
 test "search filter only size:>1mb" {
     const allocator = std.testing.allocator;
     var idx = try buildTestIndex(allocator);

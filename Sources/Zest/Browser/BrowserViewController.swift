@@ -28,7 +28,9 @@ final class FileItem {
   /// Folder color tint (from folder_colors.json), nil when unset.
   let folderColor: NSColor?
 
-  lazy var sizeText: String = isDirectory ? "—" : Self.formatSize(size)
+  /// Folders show their recursive subtree size — the v4 index bakes it into
+  /// the size column, so this is the same O(1) read as a file's size.
+  lazy var sizeText: String = Self.formatSize(size)
   lazy var isoDate: String = Self.isoFormatter.string(
     from: Date(timeIntervalSince1970: TimeInterval(mtime)))
   lazy var agoText: String = Self.relativeText(from: mtime)
@@ -913,13 +915,14 @@ private final class ZestHeaderCell: NSTableHeaderCell {
     let text = (stringValue as NSString)
     let inset: CGFloat = alignment == .right ? 0 : 14
     let rect = cellFrame.insetBy(dx: 0, dy: 0).offsetBy(dx: 0, dy: 5)
-    // Reserve room on the trailing side for the sort glyph when active.
+    // Reserve room on the trailing side for the sort glyph when active —
+    // the glyph trails the title for every alignment (a right-aligned
+    // column's title hugs drawRect.maxX, so the glyph sits just past it).
     let glyphSpace: CGFloat = active ? 14 : 0
     let drawRect = NSRect(
       x: rect.minX + (alignment == .right ? 6 : inset),
       y: rect.minY,
-      width: rect.width - inset - (alignment == .right ? 6 : 0)
-        - (alignment == .right ? 0 : glyphSpace),
+      width: rect.width - inset - (alignment == .right ? 6 : 0) - glyphSpace,
       height: rect.height,
     )
     text.draw(in: drawRect, withAttributes: attrs)
@@ -933,10 +936,9 @@ private final class ZestHeaderCell: NSTableHeaderCell {
       .foregroundColor: ZestHeaderCell.accent.accent,
     ]
     let arrowSize = (arrow as NSString).size(withAttributes: arrowAttrs)
-    // Glyph trails the title for left-aligned columns; precedes for right-aligned.
     let glyphX: CGFloat
     if alignment == .right {
-      glyphX = drawRect.minX
+      glyphX = drawRect.maxX + 3
     } else {
       let titleWidth = min(text.size(withAttributes: attrs).width, drawRect.width)
       glyphX = min(drawRect.minX + titleWidth + 5, cellFrame.maxX - arrowSize.width - 4)
