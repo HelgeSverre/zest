@@ -85,7 +85,50 @@ final class Breadcrumb: NSView {
 
   // MARK: Display mode
 
-  /// Rebuild the token row from `coordinator.currentPath`.
+  /// Width the toolbar allows the display control to occupy (set from
+  /// `ToolbarView.layout()`), driving the middle-collapse. Re-truncates only
+  /// on real changes so the layout pass can't feed back into itself.
+  var availableWidth: CGFloat = 420 {
+    didSet {
+      guard abs(availableWidth - oldValue) > 0.5 else { return }
+      refresh()
+    }
+  }
+
+  private struct Token {
+    let text: String
+    let path: String
+    let style: SegStyle
+  }
+
+  /// Given per-token pixel widths (index 0 = root token, last = current
+  /// folder), the … token width, and the per-gap separator width, return the
+  /// range of middle tokens to hide behind one … token. Empty = all fit.
+  /// Root and current are always kept; ancestors are re-added deepest-first
+  /// while they fit next to root + … + current.
+  static func segmentsToCollapse(
+    widths: [CGFloat], ellipsisWidth: CGFloat, separatorWidth: CGFloat, available: CGFloat
+  ) -> Range<Int> {
+    guard widths.count > 2 else { return 0..<0 }
+    let total = widths.reduce(0, +) + separatorWidth * CGFloat(widths.count - 1)
+    if total <= available { return 0..<0 }
+
+    let last = widths.count - 1
+    var used = widths[0] + ellipsisWidth + widths[last] + separatorWidth * 2
+    var firstKept = last
+    var i = last - 1
+    while i >= 1 {
+      let w = widths[i] + separatorWidth
+      if used + w > available { break }
+      used += w
+      firstKept = i
+      i -= 1
+    }
+    return 1..<firstKept
+  }
+
+  /// Rebuild the token row from `coordinator.currentPath`, collapsing middle
+  /// ancestors behind a … token when the trail exceeds `availableWidth`.
   func refresh() {
     guard !editing else {
       return
@@ -95,18 +138,64 @@ final class Breadcrumb: NSView {
       sub.removeFromSuperview()
     }
 
+    let tokens = buildTokens()
+    guard !tokens.isEmpty else { return }
+
+    // Content budget: control width minus the stack's 10+10 edge insets.
+    let contentAvailable = max(0, availableWidth - 20)
+    let sepWidth = Self.measure("\u{2044}", font: .systemFont(ofSize: 13)) + stack.spacing * 2
+    let ellipsisWidth = Self.measure("…", font: .systemFont(ofSize: 12.5)) + 10 + stack.spacing
+    let widths = tokens.map { tokenWidth($0) }
+    let hidden = Self.segmentsToCollapse(
+      widths: widths, ellipsisWidth: ellipsisWidth, separatorWidth: sepWidth,
+      available: contentAvailable)
+
+    var currentSegment: SegmentView?
+    for (i, token) in tokens.enumerated() {
+      if hidden.contains(i) {
+        if i == hidden.lowerBound {
+          stack.addArrangedSubview(makeSeparator())
+          stack.addArrangedSubview(makeCollapsedToken(hidden: hidden.map { tokens[$0] }))
+        }
+        continue
+      }
+      if i > 0 { stack.addArrangedSubview(makeSeparator()) }
+      let seg = makeSegment(text: token.text, path: token.path, style: token.style)
+      // Ancestors resist compression; the current segment truncates first.
+      seg.setContentCompressionResistancePriority(
+        token.style == .current ? .defaultLow : NSLayoutConstraint.Priority(750),
+        for: .horizontal)
+      stack.addArrangedSubview(seg)
+      if token.style == .current { currentSegment = seg }
+    }
+
+    // Worst case: root + … + current still overflow — clamp the current
+    // segment so its label tail-truncates on one line instead of pushing
+    // the control past its budget.
+    if !hidden.isEmpty, let current = currentSegment {
+      let base = widths[0] + ellipsisWidth + sepWidth * 2
+      if base + widths[widths.count - 1] > contentAvailable {
+        let clamp = current.widthAnchor.constraint(
+          lessThanOrEqualToConstant: max(60, contentAvailable - base))
+        clamp.isActive = true
+      }
+    }
+  }
+
+  /// The full crumb model: root token (`~` under home, `/` otherwise) plus
+  /// one token per path component; the last is styled `.current`.
+  private func buildTokens() -> [Token] {
     let path = coordinator.currentPath
     let home = FileManager.default.homeDirectoryForCurrentUser.path
 
     if path == home {
-      stack.addArrangedSubview(makeSegment(text: "~", path: home, style: .home))
-      return
+      return [Token(text: "~", path: home, style: .home)]
     }
 
-    // Render under-home paths with a `~` prefix; otherwise from root `/`.
+    var tokens: [Token] = []
     var segments: [(name: String, fullPath: String)] = []
     if path.hasPrefix(home + "/") {
-      stack.addArrangedSubview(makeSegment(text: "~", path: home, style: .home))
+      tokens.append(Token(text: "~", path: home, style: .home))
       let rest = String(path.dropFirst(home.count + 1))
       var acc = home
       for name in rest.split(separator: "/").map(String.init) {
@@ -114,48 +203,85 @@ final class Breadcrumb: NSView {
         segments.append((name, acc))
       }
     } else {
-      stack.addArrangedSubview(makeRootToken())
+      tokens.append(Token(text: "/", path: "/", style: .root))
       var acc = ""
       for name in path.split(separator: "/").map(String.init) {
         acc = acc + "/" + name
         segments.append((name, acc))
       }
     }
-
     for (i, seg) in segments.enumerated() {
-      // Separator before every segment that follows the home/root token,
-      // and between segments.
-      if i > 0 || !stack.arrangedSubviews.isEmpty {
-        stack.addArrangedSubview(makeSeparator())
-      }
-      let isCurrent = i == segments.count - 1
-      stack.addArrangedSubview(
-        makeSegment(text: seg.name, path: seg.fullPath, style: isCurrent ? .current : .parent))
+      tokens.append(
+        Token(text: seg.name, path: seg.fullPath, style: i == segments.count - 1 ? .current : .parent))
     }
+    return tokens
+  }
+
+  private static func measure(_ text: String, font: NSFont) -> CGFloat {
+    ceil((text as NSString).size(withAttributes: [.font: font]).width)
+  }
+
+  /// Rendered outer width of a token: text width + the segment's 5+5 label
+  /// padding + the stack's spacing share.
+  private func tokenWidth(_ token: Token) -> CGFloat {
+    let (font, _) = attributes(for: token.style, path: token.path)
+    return Self.measure(token.text, font: font) + 10 + stack.spacing
   }
 
   private enum SegStyle {
-    case home, parent, current
+    case home, root, parent, current
+  }
+
+  private func attributes(for style: SegStyle, path: String) -> (NSFont, NSColor) {
+    switch style {
+    case .home:
+      return (.monospacedSystemFont(ofSize: 12.5, weight: .semibold), Breadcrumb.accent.accent)
+    case .root:
+      return (.systemFont(ofSize: 12.5, weight: .regular), Theme.textTertiary)
+    case .parent:
+      return (
+        .systemFont(ofSize: 12.5, weight: .regular),
+        coordinator.userState.folderColor(forPath: path) ?? Theme.textTertiary
+      )
+    case .current:
+      return (
+        .systemFont(ofSize: 12.5, weight: .semibold),
+        coordinator.userState.folderColor(forPath: path) ?? Theme.text
+      )
+    }
   }
 
   private func makeSegment(text: String, path: String, style: SegStyle) -> SegmentView {
-    let font: NSFont
-    let color: NSColor
-    switch style {
-    case .home:
-      font = .monospacedSystemFont(ofSize: 12.5, weight: .semibold)
-      color = Breadcrumb.accent.accent
-    case .parent:
-      font = .systemFont(ofSize: 12.5, weight: .regular)
-      color = coordinator.userState.folderColor(forPath: path) ?? Theme.textTertiary
-    case .current:
-      font = .systemFont(ofSize: 12.5, weight: .semibold)
-      color = coordinator.userState.folderColor(forPath: path) ?? Theme.text
-    }
+    let (font, color) = attributes(for: style, path: path)
     return SegmentView(text: text, font: font, color: color, navPath: path) {
       [weak self] target in
       self?.coordinator.navigate(to: target)
     }
+  }
+
+  /// The … token standing in for hidden middle ancestors. Clicking it pops
+  /// a menu of those folders (deepest first); picking one navigates there.
+  private func makeCollapsedToken(hidden: [Token]) -> NSView {
+    let token = CollapsedToken(font: .systemFont(ofSize: 12.5), color: Theme.textTertiary)
+    token.toolTip = hidden.map(\.text).joined(separator: " / ")
+    token.onClick = { [weak self, weak token] in
+      guard let self, let token else { return }
+      let menu = NSMenu()
+      for t in hidden.reversed() {
+        let item = NSMenuItem(
+          title: t.text, action: #selector(self.collapsedMenuNavigate(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = t.path
+        menu.addItem(item)
+      }
+      menu.popUp(positioning: nil, at: NSPoint(x: 0, y: token.bounds.maxY + 4), in: token)
+    }
+    return token
+  }
+
+  @objc private func collapsedMenuNavigate(_ sender: NSMenuItem) {
+    guard let path = sender.representedObject as? String else { return }
+    coordinator.navigate(to: path)
   }
 
   private func makeSeparator() -> NSTextField {
@@ -165,16 +291,6 @@ final class Breadcrumb: NSView {
     l.alphaValue = 0.7
     l.translatesAutoresizingMaskIntoConstraints = false
     return l
-  }
-
-  private func makeRootToken() -> SegmentView {
-    SegmentView(
-      text: "/", font: .systemFont(ofSize: 12.5, weight: .regular),
-      color: Theme.textTertiary, navPath: "/"
-    ) {
-      [weak self] target in
-      self?.coordinator.navigate(to: target)
-    }
   }
 
   // MARK: Edit mode
@@ -335,7 +451,11 @@ private final class SegmentView: NSView {
       attributes: [
         .font: font, .foregroundColor: color,
       ])
+    // Never wrap: a squeezed segment must tail-truncate on one line (deep
+    // paths used to word-break the last crumb onto a second row).
     label.lineBreakMode = .byTruncatingTail
+    label.maximumNumberOfLines = 1
+    label.cell?.usesSingleLineMode = true
     label.translatesAutoresizingMaskIntoConstraints = false
     addSubview(label)
     NSLayoutConstraint.activate([
@@ -378,6 +498,60 @@ private final class SegmentView: NSView {
     // One step lighter than the container pill's Theme.hover — the same
     // color would make the per-segment highlight invisible while the whole
     // breadcrumb is hovered.
+    layer?.backgroundColor = Theme.hoverRaised.cgColor
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    layer?.backgroundColor = NSColor.clear.cgColor
+  }
+}
+
+// MARK: - Collapsed (…) token
+
+/// The … stand-in for hidden middle ancestors. Same chrome as SegmentView
+/// (hover pill, 5pt side padding); click fires `onClick` (menu shown by the
+/// owning Breadcrumb).
+private final class CollapsedToken: NSView {
+  var onClick: (() -> Void)?
+  private let label = NSTextField(labelWithString: "")
+
+  init(font: NSFont, color: NSColor) {
+    super.init(frame: .zero)
+    translatesAutoresizingMaskIntoConstraints = false
+    wantsLayer = true
+    layer?.cornerRadius = 4
+    label.attributedStringValue = NSAttributedString(
+      string: "…", attributes: [.font: font, .foregroundColor: color])
+    label.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(label)
+    NSLayoutConstraint.activate([
+      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
+      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+      label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+      label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+    ])
+  }
+
+  required init?(coder: NSCoder) { fatalError() }
+
+  override func mouseDown(with event: NSEvent) {
+    onClick?()
+  }
+
+  private var tracking: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let t = tracking { removeTrackingArea(t) }
+    let t = NSTrackingArea(
+      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+      owner: self, userInfo: nil)
+    addTrackingArea(t)
+    tracking = t
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     layer?.backgroundColor = Theme.hoverRaised.cgColor
   }
 

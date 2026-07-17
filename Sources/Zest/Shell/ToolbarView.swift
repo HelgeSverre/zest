@@ -13,6 +13,7 @@ final class ToolbarView: NSView {
   private let breadcrumb: Breadcrumb
   private let searchField: SearchField
   private let savedButton: PillButton
+  private var navStack: NSStackView!
 
   /// Fired by the Saved button; RootViewController toggles the card.
   var onSavedClick: (() -> Void)?
@@ -39,7 +40,7 @@ final class ToolbarView: NSView {
     upButton.onClick = { [weak coordinator] in coordinator?.goUp() }
     savedButton.onClick = { [weak self] in self?.onSavedClick?() }
 
-    let navStack = NSStackView(views: [backButton, forwardButton, upButton])
+    navStack = NSStackView(views: [backButton, forwardButton, upButton])
     navStack.orientation = .horizontal
     navStack.spacing = 2
     navStack.translatesAutoresizingMaskIntoConstraints = false
@@ -87,6 +88,17 @@ final class ToolbarView: NSView {
   }
 
   required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+  /// Feed the breadcrumb the width it may occupy so it can middle-collapse
+  /// deep paths: everything between the nav cluster and the search field at
+  /// its 200pt minimum, capped at the crumb ceiling. The breadcrumb only
+  /// reacts to real changes, so this can't feed back into layout.
+  override func layout() {
+    super.layout()
+    let available =
+      (savedButton.frame.minX - 10 - 200 - 10) - (navStack.frame.maxX + 12)
+    breadcrumb.availableWidth = min(420, max(120, available))
+  }
 
   /// Update enabled/disabled state for back/forward, the breadcrumb display, and
   /// the search field (which clears itself when navigation reset the query).
