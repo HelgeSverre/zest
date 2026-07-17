@@ -23,6 +23,9 @@ final class SearchField: NSView {
   /// Guards programmatic field updates (refresh) from re-triggering the change
   /// pipeline / auto-scope switch.
   private var settingProgrammatically = false
+  /// The text last pushed to the coordinator (via commit or clear). Lets
+  /// `refresh` tell our own change echoing back from an external mutation.
+  private var lastCommitted = ""
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -97,25 +100,54 @@ final class SearchField: NSView {
     fatalError("init(coder:) not used")
   }
 
+  /// Whether a refresh may rewrite the field. While the user is typing, the
+  /// coordinator lags the field (150ms debounce) and its `queryText` is the
+  /// *canonicalized* form (cat → sorted ext → text, lowercased) — rewriting
+  /// from it would clobber or reorder in-flight typing. Skip when the
+  /// coordinator state is just the echo of our own last commit; sync when an
+  /// external mutation happened (saved filter applied, navigation reset) or
+  /// the field isn't being edited.
+  enum RefreshDecision {
+    case skipWhileTyping
+    case syncFromCoordinator
+  }
+
+  static func refreshDecision(
+    focused: Bool, lastCommitted: String, current: Filter
+  ) -> RefreshDecision {
+    focused && Filter.parse(lastCommitted) == current ? .skipWhileTyping : .syncFromCoordinator
+  }
+
   /// Sync the field text from the coordinator (e.g. after navigation clears the
   /// query). Programmatic; does not re-fire the change pipeline.
   func refresh() {
-    let value = coordinator.queryText
-    if field.stringValue != value {
-      settingProgrammatically = true
-      field.stringValue = value
-      settingProgrammatically = false
+    switch Self.refreshDecision(
+      focused: focused, lastCommitted: lastCommitted, current: coordinator.filter)
+    {
+    case .skipWhileTyping:
+      // The field is ahead of the coordinator here — drive the ✕ from it.
+      clearButton.isHidden = field.stringValue.isEmpty
+    case .syncFromCoordinator:
+      // An external change wins over any uncommitted keystrokes; without the
+      // cancel, the stale pending commit would clobber it 150ms later.
+      debounce?.cancel()
+      let value = coordinator.queryText
+      if field.stringValue != value {
+        settingProgrammatically = true
+        field.stringValue = value
+        settingProgrammatically = false
+      }
+      clearButton.isHidden = value.isEmpty
     }
-    clearButton.isHidden = value.isEmpty
   }
 
   private func clear() {
     debounce?.cancel()
-    // TODO: liekly a code smell, this is probably poorly impemented and a hack.
     settingProgrammatically = true
     field.stringValue = ""
     settingProgrammatically = false
     clearButton.isHidden = true
+    lastCommitted = ""
     coordinator.queryText = ""  // fires onChange via didSet
   }
 
@@ -131,6 +163,10 @@ final class SearchField: NSView {
   }
 
   private func commit(_ text: String) {
+    // commitSearch fires onChange *synchronously*, which re-enters refresh()
+    // — lastCommitted must be updated first or the echo check sees the stale
+    // previous commit and rewrites the field mid-typing.
+    lastCommitted = text
     // Typing into a folder-scoped search searches the subtree; an explicit
     // Everywhere scope is left alone. One onChange for the whole transition.
     coordinator.commitSearch(text)
@@ -177,6 +213,13 @@ extension SearchField: NSTextFieldDelegate {
 
   func controlTextDidEndEditing(_: Notification) {
     setFocused(false)
+    // Flush any pending commit now, then canonicalize the display. The
+    // explicit refresh matters because commitSearch no-ops when nothing
+    // changed, yet the field may hold non-canonical text ("Report ext:PDF")
+    // that should normalize ("ext:pdf Report") once editing ends.
+    debounce?.cancel()
+    commit(field.stringValue)
+    refresh()
   }
 }
 
@@ -246,6 +289,7 @@ private final class ClearButton: NSView {
   }
 
   override func mouseEntered(with _: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     imageView.contentTintColor = Theme.text
   }
 

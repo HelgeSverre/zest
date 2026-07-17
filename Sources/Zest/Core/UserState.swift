@@ -18,6 +18,11 @@ final class UserState {
     }
   }
 
+  struct SavedFilter: Codable, Equatable {
+    let name: String
+    let query: String
+  }
+
   private struct ColorEntry: Codable {
     let red: Int
     let green: Int
@@ -31,25 +36,42 @@ final class UserState {
   }
 
   private(set) var pins: [Pin]
-  private var colors: [String: NSColor]
+  private(set) var colors: [String: NSColor]
+  private(set) var filters: [SavedFilter]
   private let pinsURL: URL?
   private let colorsURL: URL?
+  private let filtersURL: URL?
 
   /// `directory` is the zest app-support dir; nil (no app support) yields
   /// in-memory defaults that don't persist.
   init(directory: URL?) {
     pinsURL = directory?.appendingPathComponent("pins.json")
     colorsURL = directory?.appendingPathComponent("folder_colors.json")
+    filtersURL = directory?.appendingPathComponent("filters.json")
     pins = Self.loadPins(from: pinsURL) ?? Self.defaultPins()
     colors = Self.loadColors(from: colorsURL)
+    filters = Self.loadFilters(from: filtersURL)
   }
 
   func folderColor(forPath path: String) -> NSColor? {
     colors[path]
   }
 
+  func setFolderColor(forPath path: String, color: NSColor?) {
+    if let color {
+      colors[path] = color
+    } else {
+      colors.removeValue(forKey: path)
+    }
+    saveColors()
+  }
+
+  func isPinned(path: String) -> Bool {
+    pins.contains { $0.path == path }
+  }
+
   func addPin(name: String, path: String) {
-    guard !pins.contains(where: { $0.path == path }) else { return }
+    guard !isPinned(path: path) else { return }
     pins.append(Pin(name: name, path: path, isDefault: false))
     savePins()
   }
@@ -57,6 +79,25 @@ final class UserState {
   func removePin(path: String) {
     pins.removeAll { $0.path == path }
     savePins()
+  }
+
+  // MARK: - Saved filters
+
+  func addFilter(name: String, query: String) {
+    filters.append(SavedFilter(name: name, query: query))
+    saveFilters()
+  }
+
+  func removeFilter(at index: Int) {
+    guard filters.indices.contains(index) else { return }
+    filters.remove(at: index)
+    saveFilters()
+  }
+
+  func updateFilter(at index: Int, name: String, query: String) {
+    guard filters.indices.contains(index) else { return }
+    filters[index] = SavedFilter(name: name, query: query)
+    saveFilters()
   }
 
   // MARK: - Load / save
@@ -94,6 +135,17 @@ final class UserState {
     }
   }
 
+  private static func loadFilters(from url: URL?) -> [SavedFilter] {
+    guard let url, let data = try? Data(contentsOf: url) else { return [] }
+    guard let parsed = try? JSONDecoder().decode([SavedFilter].self, from: data) else {
+      if FileManager.default.fileExists(atPath: url.path) {
+        NSLog("UserState: filters.json exists but failed to decode (corrupt?)")
+      }
+      return []
+    }
+    return parsed
+  }
+
   private func savePins() {
     guard let pinsURL else { return }
     try? FileManager.default.createDirectory(
@@ -108,6 +160,50 @@ final class UserState {
       try data.write(to: pinsURL, options: .atomic)
     } catch {
       NSLog("UserState: failed to save pins: \(error)")
+    }
+  }
+
+  private func saveColors() {
+    guard let colorsURL else { return }
+    try? FileManager.default.createDirectory(
+      at: colorsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    var entries: [String: ColorEntry] = [:]
+    for (path, color) in colors {
+      guard let rgb = color.usingColorSpace(.extendedSRGB) else { continue }
+      entries[path] = ColorEntry(
+        red: Int(round(rgb.redComponent * 255)),
+        green: Int(round(rgb.greenComponent * 255)),
+        blue: Int(round(rgb.blueComponent * 255)),
+        alpha: Int(round(rgb.alphaComponent * 255)))
+    }
+    let file = ColorsFile(version: 1, folders: entries)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(file) else {
+      NSLog("UserState: failed to encode folder colors")
+      return
+    }
+    do {
+      try data.write(to: colorsURL, options: .atomic)
+    } catch {
+      NSLog("UserState: failed to save folder colors: \(error)")
+    }
+  }
+
+  private func saveFilters() {
+    guard let filtersURL else { return }
+    try? FileManager.default.createDirectory(
+      at: filtersURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(filters) else {
+      NSLog("UserState: failed to encode filters")
+      return
+    }
+    do {
+      try data.write(to: filtersURL, options: .atomic)
+    } catch {
+      NSLog("UserState: failed to save filters: \(error)")
     }
   }
 }

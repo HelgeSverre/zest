@@ -4,11 +4,16 @@ import AppKit
 /// The categories tree is scope-aware: it histograms the current folder
 /// (or sub-tree when scope is Subfolders/Everywhere) and shows extension
 /// drill-downs. Clicking a category injects `cat:<key>` into the query;
-/// clicking an extension injects `cat:<key> ext:<ext>`.
+/// clicking an extension injects `cat:<key> ext:<ext>`; ⌘/⌃-clicking
+/// extensions toggles them in an OR-set (`ext:a ext:b` — the engine ORs
+/// non-negated extension filters).
 final class SidebarViewController: NSViewController {
   private let coordinator: AppCoordinator
   private var pinRows: [PinRow] = []
   private var categorySection: CategorySection?
+  /// Fingerprint of the last-rendered pin set so structural rebuilds are
+  /// data-driven (count, order, or label changes all trigger a rebuild).
+  private var lastPinFingerprint: String = ""
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -18,6 +23,38 @@ final class SidebarViewController: NSViewController {
   @available(*, unavailable)
   required init?(coder _: NSCoder) {
     fatalError("init(coder:) not used")
+  }
+
+  /// Pure decision logic for an extension-row click. Plain click replaces the
+  /// selection (or toggles off the sole selected extension); ⌘/⌃-click toggles
+  /// the extension in the OR-set the engine supports. Cross-category
+  /// multi-select drops the category filter — keeping it would AND-exclude
+  /// every other category's files.
+  static func extClickResult(
+    current: Filter, clickedExt: String, clickedCategory: String, additive: Bool
+  ) -> (category: String?, extensions: Set<String>) {
+    var exts = current.extensions
+    if additive {
+      if exts.contains(clickedExt) {
+        exts.remove(clickedExt)
+        return (current.category, exts)
+      }
+      if exts.isEmpty {
+        return (clickedCategory, [clickedExt])
+      }
+      exts.insert(clickedExt)
+      return (current.category == clickedCategory ? current.category : nil, exts)
+    }
+    if exts == [clickedExt] {
+      return (current.category, [])
+    }
+    return (clickedCategory, [clickedExt])
+  }
+
+  /// Whether an extension row should highlight: a member of the filter set,
+  /// either as its own element or inside a typed comma list ("php,html").
+  static func extIsSelected(_ ext: String, in extensions: Set<String>) -> Bool {
+    extensions.contains { $0.split(separator: ",").contains(Substring(ext)) }
   }
 
   private struct Pin {
@@ -58,32 +95,6 @@ final class SidebarViewController: NSViewController {
     stack.spacing = 0
     stack.translatesAutoresizingMaskIntoConstraints = false
 
-    // ── PINNED ──
-    let pinnedHeader = makeHeader("PINNED")
-    stack.addArrangedSubview(pinnedHeader)
-    stack.setCustomSpacing(8, after: pinnedHeader)
-
-    for pin in pins() {
-      let row = PinRow(label: pin.label, symbol: pin.symbol, path: pin.path) {
-        [weak self] path in
-        if self?.coordinator.navigate(to: path) == false { NSSound.beep() }
-      }
-      stack.addArrangedSubview(row)
-      row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-      pinRows.append(row)
-    }
-
-    // ── CATEGORIES ──
-    let catHeader = makeHeader("CATEGORIES")
-    stack.setCustomSpacing(18, after: pinRows.last!)
-    stack.addArrangedSubview(catHeader)
-    stack.setCustomSpacing(8, after: catHeader)
-
-    let catSection = CategorySection(coordinator: coordinator, widthProvider: stack)
-    categorySection = catSection
-    stack.addArrangedSubview(catSection)
-    catSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-
     view.addSubview(stack)
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
@@ -91,7 +102,12 @@ final class SidebarViewController: NSViewController {
       stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
     ])
 
-    refresh()
+    // CategorySection is created once and preserved across rebuilds so its
+    // expanded-indices and cached histogram survive pin changes.
+    let catSection = CategorySection(coordinator: coordinator, widthProvider: stack)
+    categorySection = catSection
+
+    rebuildSidebar()
   }
 
   private func makeHeader(_ text: String) -> NSTextField {
@@ -110,11 +126,127 @@ final class SidebarViewController: NSViewController {
     return header
   }
 
-  /// Update active-pin highlight + trigger a background histogram recomputation.
-  func refresh() {
+  private func buildPinContextMenu(for path: String) -> NSMenu? {
+    let menu = NSMenu()
+
+    let remove = NSMenuItem(
+      title: "Remove from Pinned", action: #selector(pinMenuRemove(_:)), keyEquivalent: "")
+    remove.target = self
+    remove.representedObject = path
+    menu.addItem(remove)
+
+    let colorMenu = NSMenu()
+    let colorItem = NSMenuItem(title: "Assign Color", action: nil, keyEquivalent: "")
+    colorItem.submenu = colorMenu
+
+    let none = NSMenuItem(
+      title: "None", action: #selector(pinMenuSetColor(_:)), keyEquivalent: "")
+    none.target = self
+    none.representedObject = (path, nil as NSColor?) as (String, NSColor?)
+    none.image = BrowserViewController.emptyColorSwatch()
+    colorMenu.addItem(none)
+
+    for preset in BrowserViewController.folderColorPresets {
+      let mi = NSMenuItem(title: "", action: #selector(pinMenuSetColor(_:)), keyEquivalent: "")
+      mi.target = self
+      mi.representedObject = (path, preset.color) as (String, NSColor)
+      mi.image = BrowserViewController.colorSwatch(preset.color, label: preset.name)
+      colorMenu.addItem(mi)
+    }
+    menu.addItem(colorItem)
+
+    return menu
+  }
+
+  @objc private func pinMenuRemove(_ sender: NSMenuItem) {
+    guard let path = sender.representedObject as? String else { return }
+    coordinator.unpinFolder(path: path)
+  }
+
+  @objc private func pinMenuSetColor(_ sender: NSMenuItem) {
+    guard let (path, color) = sender.representedObject as? (String, NSColor?) else { return }
+    coordinator.setFolderColor(for: path, color: color)
+  }
+
+  // MARK: - Declarative rebuild
+
+  /// Rebuilds the sidebar from `coordinator.userState.pins` and the current
+  /// category section. Call this when the pin set changes structurally
+  /// (count, order, or labels). For visual-only changes (active state,
+  /// folder color) use `refresh()`.
+  private func rebuildSidebar() {
+    guard let stack = view.subviews.first as? NSStackView else { return }
+
+    // Tear down everything except the CategorySection (it owns expensive state
+    // like expandedIndices and lastHistogram).
+    let catSection = categorySection
+    for view in stack.arrangedSubviews {
+      stack.removeArrangedSubview(view)
+      if view !== catSection {
+        view.removeFromSuperview()
+      }
+    }
+    pinRows.removeAll()
+
+    // ── PINNED ──
+    let pinnedHeader = makeHeader("PINNED")
+    stack.addArrangedSubview(pinnedHeader)
+    stack.setCustomSpacing(8, after: pinnedHeader)
+
+    for pin in pins() {
+      let row = PinRow(label: pin.label, symbol: pin.symbol, path: pin.path) {
+        [weak self] path in
+        if self?.coordinator.navigate(to: path) == false { NSSound.beep() }
+      }
+      row.folderColor = coordinator.userState.folderColor(forPath: pin.path)
+      row.contextMenuProvider = { [weak self] path in
+        self?.buildPinContextMenu(for: path)
+      }
+      stack.addArrangedSubview(row)
+      row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+      pinRows.append(row)
+    }
+
+    // 18 pt gap between the last pin and the CATEGORIES header.
+    if let lastPin = pinRows.last {
+      stack.setCustomSpacing(18, after: lastPin)
+    }
+
+    // ── CATEGORIES ──
+    let catHeader = makeHeader("CATEGORIES")
+    stack.addArrangedSubview(catHeader)
+    stack.setCustomSpacing(8, after: catHeader)
+
+    if let catSection = catSection {
+      stack.addArrangedSubview(catSection)
+      catSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+    }
+
+    // Apply current visual state to the new rows.
     let current = coordinator.currentPath
     for row in pinRows {
+      row.folderColor = coordinator.userState.folderColor(forPath: row.path)
       row.setActive(row.path == current)
+    }
+
+    lastPinFingerprint = pinFingerprint()
+  }
+
+  private func pinFingerprint() -> String {
+    pins().map { "\($0.path):\($0.label)" }.joined(separator: "|")
+  }
+
+  /// Update active-pin highlight + trigger a background histogram recomputation.
+  /// Rebuilds the entire sidebar structure only when the pin set changed.
+  func refresh() {
+    if pinFingerprint() != lastPinFingerprint {
+      rebuildSidebar()
+    } else {
+      let current = coordinator.currentPath
+      for row in pinRows {
+        row.folderColor = coordinator.userState.folderColor(forPath: row.path)
+        row.setActive(row.path == current)
+      }
     }
     categorySection?.refresh()
   }
@@ -145,7 +277,8 @@ private final class CategorySection: NSView {
   /// state. The `index` component detects daemon hot-swaps (new inode/mtime)
   /// when path+scope are unchanged — including the launch-before-first-index
   /// case where core was nil, so an all-zeros histogram never sticks.
-  private var lastRefreshKey: (path: String, scope: AppCoordinator.Scope, index: ZestCore.FileIdentity?)?
+  private var lastRefreshKey:
+    (path: String, scope: AppCoordinator.Scope, index: ZestCore.FileIdentity?)?
 
   /// Histogram generation counter (owned by sidebar, passed here implicitly via refresh).
   private var histogramGeneration = 0
@@ -242,14 +375,19 @@ private final class CategorySection: NSView {
     rows.removeAll()
 
     let activeCat = coordinator.filter.category
-    let activeExt = coordinator.filter.extensions.first
+    let selectedExts = coordinator.filter.extensions
 
     for entry in histogram.categories {
       let meta = Category.meta(category: entry.index)
       let isActive = activeCat == meta.queryKey
       let hasChildren = entry.extensions.count > 1
-      // Active categories auto-expand; manually-toggled ones stay open across refreshes.
-      let isExpanded = hasChildren && (expandedIndices.contains(entry.index) || isActive)
+      let hasSelectedExt = entry.extensions.contains {
+        SidebarViewController.extIsSelected($0.ext, in: selectedExts)
+      }
+      // Categories with an active filter (their own, or one of their exts)
+      // auto-expand; manually-toggled ones stay open across refreshes.
+      let isExpanded =
+        hasChildren && (expandedIndices.contains(entry.index) || isActive || hasSelectedExt)
 
       let row = CatRow(
         meta: meta,
@@ -290,21 +428,24 @@ private final class CategorySection: NSView {
             meta: meta,
             ext: extEntry.ext,
             count: extEntry.count,
-            isActive: isActive && activeExt == extEntry.ext,
+            isActive: SidebarViewController.extIsSelected(extEntry.ext, in: selectedExts),
             onSelect: {
-              [weak self] in
+              [weak self] additive in
               guard let self else {
                 return
               }
-              // Toggle: re-clicking the active ext removes it
-              // from the filter, keeping the parent category set
-              // and any search text intact.
-              if isActive, activeExt == extEntry.ext {
-                coordinator.filter.extensions.remove(extEntry.ext)
-              } else {
-                coordinator.filter.category = meta.queryKey
-                coordinator.filter.extensions = [extEntry.ext]
-              }
+              // Plain click replaces (re-clicking the sole active ext clears
+              // it); ⌘/⌃-click toggles the ext in the OR-set. Search text is
+              // always kept. One filter assignment = one onChange.
+              let result = SidebarViewController.extClickResult(
+                current: coordinator.filter,
+                clickedExt: extEntry.ext,
+                clickedCategory: meta.queryKey,
+                additive: additive)
+              var filter = coordinator.filter
+              filter.category = result.category
+              filter.extensions = result.extensions
+              coordinator.filter = filter
               rebuildRows(with: histogram)
             },
           )
@@ -533,6 +674,7 @@ private final class CatRow: NSView {
   }
 
   override func mouseEntered(with _: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     hovering = true
     updateBackground()
   }
@@ -548,7 +690,8 @@ private final class CatRow: NSView {
 // TODO: rename better
 /// A 22pt indented extension row under a category. "• .zig  2"
 private final class ExtRow: NSView {
-  private let onSelect: () -> Void
+  /// `additive` is true for ⌘/⌃-clicks (toggle in the multi-ext OR-set).
+  private let onSelect: (_ additive: Bool) -> Void
   private var active = false
   private var hovering = false
   private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
@@ -558,8 +701,10 @@ private final class ExtRow: NSView {
   private let countLabel = NSTextField(labelWithString: "")
   private let rail = NSView()
 
-  init(meta: Category.Meta, ext: String, count: Int, isActive: Bool, onSelect: @escaping () -> Void)
-  {
+  init(
+    meta: Category.Meta, ext: String, count: Int, isActive: Bool,
+    onSelect: @escaping (_ additive: Bool) -> Void
+  ) {
     self.onSelect = onSelect
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
@@ -638,10 +783,13 @@ private final class ExtRow: NSView {
     }
   }
 
-  override func mouseDown(with _: NSEvent) {
+  override func mouseDown(with event: NSEvent) {
+    // Modifiers come from the mouse-down (the user may release ⌘/⌃ before
+    // the button); ⌃ included because this row has no context menu.
+    let additive = !event.modifierFlags.intersection([.command, .control]).isEmpty
     let up = window?.nextEvent(matching: [.leftMouseUp])
     if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
-      onSelect()
+      onSelect(additive)
     }
   }
 
@@ -661,6 +809,7 @@ private final class ExtRow: NSView {
   }
 
   override func mouseEntered(with _: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     hovering = true
     updateBackground()
   }
@@ -671,14 +820,19 @@ private final class ExtRow: NSView {
   }
 }
 
-// MARK: - Pin row (unchanged from before)
+// MARK: - Pin row
 
 // TODO: rename to "pinned" something.
 /// A 30pt-tall pin row: SF Symbol + label, rounded `Theme.hover` background on
 /// hover, and (when active) the `accentSoft` fill + 3pt accent leading rail.
+/// Right-click shows a context menu (Remove + Folder Color).
 private final class PinRow: NSView {
   let path: String
   private let onClick: (String) -> Void
+  var contextMenuProvider: ((String) -> NSMenu?)?
+  var folderColor: NSColor? {
+    didSet { applyIconTint() }
+  }
   private static let accent = Theme.deriveAccent(base: Theme.defaultAccentBase, theme: .dark)
 
   private let icon = NSImageView()
@@ -746,8 +900,18 @@ private final class PinRow: NSView {
     active = value
     rail.isHidden = !value
     label.textColor = value ? Theme.text : Theme.textSecondary
-    icon.contentTintColor = value ? Theme.text : Theme.textSecondary
+    applyIconTint()
     updateBackground()
+  }
+
+  private func applyIconTint() {
+    if active {
+      icon.contentTintColor = Theme.text
+    } else if let c = folderColor {
+      icon.contentTintColor = c
+    } else {
+      icon.contentTintColor = Theme.textSecondary
+    }
   }
 
   private func updateBackground() {
@@ -760,10 +924,22 @@ private final class PinRow: NSView {
     }
   }
 
-  override func mouseDown(with _: NSEvent) {
+  override func mouseDown(with event: NSEvent) {
+    if event.type == .rightMouseDown {
+      if let menu = contextMenuProvider?(path) {
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+      }
+      return
+    }
     let up = window?.nextEvent(matching: [.leftMouseUp])
     if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
       onClick(path)
+    }
+  }
+
+  override func rightMouseDown(with event: NSEvent) {
+    if let menu = contextMenuProvider?(path) {
+      NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
   }
 
@@ -783,6 +959,7 @@ private final class PinRow: NSView {
   }
 
   override func mouseEntered(with _: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     hovering = true
     updateBackground()
   }

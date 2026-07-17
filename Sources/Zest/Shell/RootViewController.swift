@@ -13,6 +13,8 @@ final class RootViewController: NSViewController {
   private var sidebar: SidebarViewController!
   var browser: BrowserViewController!
   private var statusBar: StatusBarView!
+  private var savedFiltersCard: SavedFiltersCard!
+  private var savedFiltersDialog: SavedFiltersDialog!
 
   override func loadView() {
     view = NSView()
@@ -89,6 +91,32 @@ final class RootViewController: NSViewController {
       statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ]
     NSLayoutConstraint.activate(c)
+
+    // Saved-filters overlays, mounted above every band (card first, the
+    // dialog scrim last so it also covers an open card). Hidden until shown.
+    let card = SavedFiltersCard(coordinator: coordinator)
+    let dialog = SavedFiltersDialog(coordinator: coordinator)
+    savedFiltersCard = card
+    savedFiltersDialog = dialog
+    view.addSubview(card)
+    view.addSubview(dialog)
+    NSLayoutConstraint.activate([
+      // Prototype .popover: top 52, right 14, width 280 (4pt up into the toolbar).
+      card.topAnchor.constraint(equalTo: view.topAnchor, constant: 52),
+      card.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+      card.widthAnchor.constraint(equalToConstant: 280),
+      card.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -20),
+      dialog.topAnchor.constraint(equalTo: view.topAnchor),
+      dialog.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+      dialog.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      dialog.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+    ])
+    toolbar.onSavedClick = { [weak self] in self?.savedFiltersCard.toggle() }
+    card.toggleExclusionView = toolbar.savedButtonView
+    card.onManage = { [weak self] in self?.savedFiltersDialog.show() }
+    card.onSaveCurrent = { [weak self] query in
+      self?.savedFiltersDialog.show(prefillQuery: query)
+    }
 
     // The coordinator is the single source of truth. Any state change —
     // navigation, query text, scope, or sort — refreshes every observer.

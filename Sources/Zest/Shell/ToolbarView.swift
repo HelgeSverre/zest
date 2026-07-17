@@ -1,7 +1,8 @@
 import AppKit
 
 /// The real toolbar band (56pt): back / forward / up nav buttons, an editable
-/// breadcrumb, a flexible search field, and a render-only "Saved ▾" button.
+/// breadcrumb, a flexible search field, and a "Saved ▾" button that toggles
+/// the in-window saved-filters card (owned by RootViewController).
 /// Leading inset 88 clears the traffic lights; trailing inset 14.
 final class ToolbarView: NSView {
   private let coordinator: AppCoordinator
@@ -12,6 +13,11 @@ final class ToolbarView: NSView {
   private let breadcrumb: Breadcrumb
   private let searchField: SearchField
   private let savedButton: PillButton
+
+  /// Fired by the Saved button; RootViewController toggles the card.
+  var onSavedClick: (() -> Void)?
+  /// Exposed so the card's dismissal monitor can exclude the toggle button.
+  var savedButtonView: NSView { savedButton }
 
   init(coordinator: AppCoordinator) {
     self.coordinator = coordinator
@@ -31,8 +37,7 @@ final class ToolbarView: NSView {
     backButton.onClick = { [weak coordinator] in coordinator?.goBack() }
     forwardButton.onClick = { [weak coordinator] in coordinator?.goForward() }
     upButton.onClick = { [weak coordinator] in coordinator?.goUp() }
-    // Render-only stub for this phase: the saved-filters manager lands later.
-    savedButton.onClick = { /* no-op (saved-filters manager is a later phase) */  }
+    savedButton.onClick = { [weak self] in self?.onSavedClick?() }
 
     let navStack = NSStackView(views: [backButton, forwardButton, upButton])
     navStack.orientation = .horizontal
@@ -165,6 +170,7 @@ final class PillButton: NSView {
     tracking = t
   }
   override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     layer?.backgroundColor = Theme.hover.cgColor
     layer?.borderColor = PillButton.accent.accentLine.cgColor
     label.textColor = Theme.text
@@ -249,6 +255,7 @@ final class IconButton: NSView {
   }
 
   override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     guard enabled else { return }
     hovering = true
     layer?.backgroundColor = Theme.hover.cgColor

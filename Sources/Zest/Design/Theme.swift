@@ -11,12 +11,16 @@ enum Theme {
   // Ink neutrals (dark)
   static let background = srgb(0x0F, 0x11, 0x15)
   static let panel = srgb(0x16, 0x19, 0x1E)
+  static let panel2 = srgb(0x1A, 0x1E, 0x23)
   static let panelElevated = srgb(0x1F, 0x24, 0x2A)
   static let hover = srgb(0x20, 0x25, 0x2B)
   static let border = srgb(0x27, 0x2C, 0x33)
   static let text = srgb(0xE9, 0xEC, 0xEF)
   static let textSecondary = srgb(0x86, 0x8E, 0x99)
   static let textTertiary = srgb(0x56, 0x5E, 0x68)
+
+  /// Dialog backdrop (--scrim).
+  static let scrim = NSColor(srgbRed: 5 / 255, green: 7 / 255, blue: 10 / 255, alpha: 0.62)
 
   static let nearBlack = srgb(0x0C, 0x0E, 0x12)
   static let defaultAccentBase = srgb(0xB8, 0xFF, 0x3C)
@@ -25,6 +29,7 @@ enum Theme {
   // Category colors (theme-independent)
   static let catFolder = srgb(0x6E, 0x9B, 0xE0)
   static let catCode = srgb(0x46, 0xC2, 0x6A)
+  static let catVideo = srgb(0xFF, 0x7B, 0x72)  // doubles as the destructive-hover red
   // … remaining categories added in a later phase …
 
   struct Accent {

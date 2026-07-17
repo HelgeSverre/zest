@@ -139,10 +139,10 @@ final class Breadcrumb: NSView {
       color = Breadcrumb.accent.accent
     case .parent:
       font = .systemFont(ofSize: 12.5, weight: .regular)
-      color = Theme.textTertiary
+      color = coordinator.userState.folderColor(forPath: path) ?? Theme.textTertiary
     case .current:
       font = .systemFont(ofSize: 12.5, weight: .semibold)
-      color = Theme.text
+      color = coordinator.userState.folderColor(forPath: path) ?? Theme.text
     }
     return SegmentView(text: text, font: font, color: color, navPath: path) {
       [weak self] target in
@@ -259,6 +259,7 @@ final class Breadcrumb: NSView {
   }
 
   override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     guard !editing else {
       return
     }
@@ -362,6 +363,7 @@ private final class SegmentView: NSView {
   }
 
   override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
     layer?.backgroundColor = Theme.hover.cgColor
   }
 

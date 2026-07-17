@@ -25,9 +25,12 @@ final class FileItem {
   let symbolColor: NSColor
   /// "swift" / "—".
   let extText: String
+  /// Folder color tint (from folder_colors.json), nil when unset.
+  let folderColor: NSColor?
 
   lazy var sizeText: String = isDirectory ? "—" : Self.formatSize(size)
-  lazy var isoDate: String = Self.isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(mtime)))
+  lazy var isoDate: String = Self.isoFormatter.string(
+    from: Date(timeIntervalSince1970: TimeInterval(mtime)))
   lazy var agoText: String = Self.relativeText(from: mtime)
 
   init(
@@ -35,7 +38,7 @@ final class FileItem {
     size: UInt64, mtime: Int64,
     kindLabel: String, kindColor: NSColor,
     symbol: String, symbolColor: NSColor,
-    extText: String
+    extText: String, folderColor: NSColor? = nil
   ) {
     self.name = name
     self.path = path
@@ -48,6 +51,7 @@ final class FileItem {
     self.symbol = symbol
     self.symbolColor = symbolColor
     self.extText = extText
+    self.folderColor = folderColor
   }
 
   /// Hand-rolled size formatter: avoids ByteCountFormatter overhead and uses
@@ -183,10 +187,11 @@ final class BrowserViewController: NSViewController {
 
     // Capture the currently-selected item's path BEFORE we replace `items` so
     // the same-context branch can relocate it in the refreshed list.
-    let selectedPath = tableView.selectedRow >= 0 && tableView.selectedRow < items.count
+    let selectedPath =
+      tableView.selectedRow >= 0 && tableView.selectedRow < items.count
       ? items[tableView.selectedRow].path : nil
 
-    items = coordinator.results().map { Self.makeItem(from: $0) }
+    items = coordinator.results().map { makeItem(from: $0) }
     updateSortIndicator()
 
     let isEmpty = items.isEmpty
@@ -293,8 +298,39 @@ final class BrowserViewController: NSViewController {
     let item = items[row]
     let menu = NSMenu()
 
+    if item.isDirectory {
+      let isPinned = coordinator.userState.isPinned(path: item.path)
+      let pinItem = NSMenuItem(
+        title: isPinned ? "Remove from Pinned" : "Pin to Sidebar",
+        action: #selector(menuTogglePin(_:)), keyEquivalent: "")
+      pinItem.target = self
+      pinItem.representedObject = item.path
+      menu.addItem(pinItem)
+
+      let colorMenu = NSMenu()
+      let colorItem = NSMenuItem(title: "Folder Color", action: nil, keyEquivalent: "")
+      colorItem.submenu = colorMenu
+
+      let none = NSMenuItem(title: "None", action: #selector(menuSetColor(_:)), keyEquivalent: "")
+      none.target = self
+      none.representedObject = (item.path, nil as NSColor?) as (String, NSColor?)
+      none.image = Self.emptyColorSwatch()
+      colorMenu.addItem(none)
+
+      for preset in Self.folderColorPresets {
+        let mi = NSMenuItem(title: "", action: #selector(menuSetColor(_:)), keyEquivalent: "")
+        mi.target = self
+        mi.representedObject = (item.path, preset.color) as (String, NSColor)
+        mi.image = Self.colorSwatch(preset.color, label: preset.name)
+        colorMenu.addItem(mi)
+      }
+      menu.addItem(colorItem)
+
+      menu.addItem(.separator())
+    }
+
     let open = NSMenuItem(
-      title: item.isDirectory ? "Open" : "Open", action: #selector(menuOpen(_:)), keyEquivalent: "",
+      title: "Open", action: #selector(menuOpen(_:)), keyEquivalent: "",
     )
     open.target = self
     open.representedObject = item.path
@@ -320,7 +356,6 @@ final class BrowserViewController: NSViewController {
       title: "Open in Terminal", action: #selector(menuOpenTerminal(_:)), keyEquivalent: "",
     )
     term.target = self
-    // Files open Terminal at their containing folder; folders at themselves.
     term.representedObject = item.isDirectory ? item.path : item.dirPath
     menu.addItem(term)
 
@@ -374,6 +409,62 @@ final class BrowserViewController: NSViewController {
     )
   }
 
+  @objc private func menuTogglePin(_ sender: NSMenuItem) {
+    guard let path = sender.representedObject as? String else { return }
+    if coordinator.userState.isPinned(path: path) {
+      coordinator.unpinFolder(path: path)
+    } else {
+      let name = (path as NSString).lastPathComponent
+      coordinator.pinFolder(path: path, name: name)
+    }
+  }
+
+  @objc private func menuSetColor(_ sender: NSMenuItem) {
+    guard let (path, color) = sender.representedObject as? (String, NSColor?) else { return }
+    coordinator.setFolderColor(for: path, color: color)
+  }
+
+  struct Preset {
+    let name: String
+    let color: NSColor
+  }
+
+  static let folderColorPresets: [Preset] = [
+    Preset(name: "Red", color: NSColor(srgbRed: 1, green: 0.23, blue: 0.19, alpha: 1)),
+    Preset(name: "Orange", color: NSColor(srgbRed: 1, green: 0.58, blue: 0, alpha: 1)),
+    Preset(name: "Yellow", color: NSColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)),
+    Preset(name: "Green", color: NSColor(srgbRed: 0.2, green: 0.78, blue: 0.35, alpha: 1)),
+    Preset(name: "Blue", color: NSColor(srgbRed: 0, green: 0.48, blue: 1, alpha: 1)),
+    Preset(name: "Purple", color: NSColor(srgbRed: 0.69, green: 0.32, blue: 0.87, alpha: 1)),
+    Preset(name: "Pink", color: NSColor(srgbRed: 1, green: 0.18, blue: 0.33, alpha: 1)),
+    Preset(name: "Gray", color: NSColor(srgbRed: 0.56, green: 0.56, blue: 0.58, alpha: 1)),
+  ]
+
+  static func colorSwatch(_ color: NSColor, label: String) -> NSImage {
+    let size = NSSize(width: 12, height: 12)
+    let img = NSImage(size: size)
+    img.lockFocus()
+    let path = NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: 12, height: 12))
+    color.setFill()
+    path.fill()
+    img.unlockFocus()
+    img.accessibilityDescription = label
+    return img
+  }
+
+  static func emptyColorSwatch() -> NSImage {
+    let size = NSSize(width: 12, height: 12)
+    let img = NSImage(size: size)
+    img.lockFocus()
+    let path = NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: 12, height: 12))
+    NSColor.tertiaryLabelColor.setStroke()
+    path.lineWidth = 1.5
+    path.stroke()
+    img.unlockFocus()
+    img.accessibilityDescription = "None"
+    return img
+  }
+
   /// Resolve the user's preferred terminal app for the context menu. Reads
   /// `$ZEST_TERMINAL` then `$TERMINAL`; accepts a bundle id (e.g.
   /// `"com.mitchellh.ghostty"`, `"com.googlecode.iterm2"`, `"net.kovidgoyal.kitty"`)
@@ -411,7 +502,7 @@ final class BrowserViewController: NSViewController {
     return nil
   }
 
-  private static func makeItem(from r: ZestCore.Row) -> FileItem {
+  private func makeItem(from r: ZestCore.Row) -> FileItem {
     let isDir = r.kind == 1
     let meta = Category.meta(kind: r.kind, category: r.category)
 
@@ -439,6 +530,7 @@ final class BrowserViewController: NSViewController {
       symbol: meta.symbol,
       symbolColor: meta.color,
       extText: ext,
+      folderColor: isDir ? coordinator.userState.folderColor(forPath: path) : nil,
     )
   }
 
@@ -933,7 +1025,7 @@ final class NameCellView: NSTableCellView {
     let img = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.kindLabel)
     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
     icon.image = img?.withSymbolConfiguration(config)
-    icon.contentTintColor = item.symbolColor
+    icon.contentTintColor = item.folderColor ?? item.symbolColor
     label.stringValue = item.name
     rawDirPath = item.dirPath
 

@@ -105,11 +105,142 @@ final class FilterTests: XCTestCase {
       .init(text: "report"),
       .init(category: "documents", extensions: ["pdf"], text: "quarterly"),
       .init(text: "hello world"),
+      .init(extensions: ["php,html"], text: "report"),  // comma OR-list stays opaque
     ]
     for original in cases {
       let roundTripped = Filter.parse(original.encoded)
       XCTAssertEqual(original, roundTripped, "round-trip lost data for \(original.encoded)")
     }
+  }
+
+  func testCommaExtensionListStaysOneElement() {
+    // `ext:php,html` is the engine's OR syntax; Swift treats the value as
+    // opaque — one set element, no splitting — so the typed query round-trips
+    // and the engine (filters.zig) does the comma semantics.
+    let f = Filter.parse("car ext:PHP,html")
+    XCTAssertEqual(["php,html"], f.extensions)
+    XCTAssertEqual("car", f.text)
+    XCTAssertEqual("ext:php,html car", f.encoded)
+  }
+
+  func testNegatedExtensionStaysAsText() {
+    // `!ext:` is engine syntax Swift's chip model doesn't represent; it must
+    // ride through the text bucket verbatim so the engine still sees it.
+    let f = Filter.parse("!ext:php,html report")
+    XCTAssertTrue(f.extensions.isEmpty)
+    XCTAssertEqual("!ext:php,html report", f.text)
+  }
+}
+
+/// Tests for `SearchField.refreshDecision`, the guard that keeps `refresh()`
+/// from rewriting the field with canonicalized text while the user is typing
+/// (the coordinator lags the field by the 150ms debounce), while still letting
+/// external mutations (saved filter applied, navigation reset) sync a focused
+/// field.
+final class SearchFieldRefreshDecisionTests: XCTestCase {
+  func testEchoOfOwnCommitSkipsWhileTyping() {
+    // The coordinator holds exactly what we last committed (canonicalized) —
+    // refresh must not touch the field.
+    let decision = SearchField.refreshDecision(
+      focused: true, lastCommitted: "ext:wh", current: Filter.parse("ext:wh"))
+    XCTAssertEqual(SearchField.RefreshDecision.skipWhileTyping, decision)
+  }
+
+  func testEchoDetectionIsSemanticNotTextual() {
+    // The field's literal text ("Report ext:PDF") differs from the canonical
+    // form ("ext:pdf Report") — still the same Filter, still an echo.
+    let decision = SearchField.refreshDecision(
+      focused: true, lastCommitted: "Report ext:PDF", current: Filter.parse("ext:pdf Report"))
+    XCTAssertEqual(SearchField.RefreshDecision.skipWhileTyping, decision)
+  }
+
+  func testExternalChangeSyncsEvenWhileFocused() {
+    // A saved filter was applied while the field had focus: coordinator state
+    // no longer matches our last commit — the field must update.
+    let decision = SearchField.refreshDecision(
+      focused: true, lastCommitted: "ext:wh", current: Filter.parse("cat:video size:>100mb"))
+    XCTAssertEqual(SearchField.RefreshDecision.syncFromCoordinator, decision)
+  }
+
+  func testNavigationResetSyncsEvenWhileFocused() {
+    let decision = SearchField.refreshDecision(
+      focused: true, lastCommitted: "ext:wha", current: Filter.parse(""))
+    XCTAssertEqual(SearchField.RefreshDecision.syncFromCoordinator, decision)
+  }
+
+  func testUnfocusedAlwaysSyncs() {
+    let decision = SearchField.refreshDecision(
+      focused: false, lastCommitted: "ext:wh", current: Filter.parse("ext:wh"))
+    XCTAssertEqual(SearchField.RefreshDecision.syncFromCoordinator, decision)
+  }
+}
+
+/// Tests for the sidebar's extension-row click semantics: plain click
+/// replaces, ⌘/⌃-click toggles the extension in the OR-set the engine
+/// supports, and cross-category multi-select drops the category filter
+/// (keeping it would AND-exclude the other categories' files).
+final class SidebarExtClickTests: XCTestCase {
+  func testPlainClickReplacesSelection() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "images", extensions: ["png"]),
+      clickedExt: "zig", clickedCategory: "code", additive: false)
+    XCTAssertEqual("code", r.category)
+    XCTAssertEqual(["zig"], r.extensions)
+  }
+
+  func testPlainClickOnSoleActiveExtTogglesOff() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "code", extensions: ["zig"]),
+      clickedExt: "zig", clickedCategory: "code", additive: false)
+    XCTAssertEqual("code", r.category, "clearing the ext keeps the category")
+    XCTAssertTrue(r.extensions.isEmpty)
+  }
+
+  func testPlainClickWithMultiSelectionCollapsesToClicked() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "code", extensions: ["zig", "rs"]),
+      clickedExt: "zig", clickedCategory: "code", additive: false)
+    XCTAssertEqual(["zig"], r.extensions)
+  }
+
+  func testAdditiveClickAccumulatesWithinCategory() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "code", extensions: ["zig"]),
+      clickedExt: "rs", clickedCategory: "code", additive: true)
+    XCTAssertEqual("code", r.category)
+    XCTAssertEqual(["zig", "rs"], r.extensions)
+  }
+
+  func testAdditiveClickAcrossCategoriesDropsCategory() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "code", extensions: ["zig"]),
+      clickedExt: "png", clickedCategory: "images", additive: true)
+    XCTAssertNil(r.category, "cat:code AND ext:png would exclude the zig files")
+    XCTAssertEqual(["zig", "png"], r.extensions)
+  }
+
+  func testAdditiveClickOnActiveExtRemovesIt() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(category: "code", extensions: ["zig", "rs"]),
+      clickedExt: "zig", clickedCategory: "code", additive: true)
+    XCTAssertEqual("code", r.category)
+    XCTAssertEqual(["rs"], r.extensions)
+  }
+
+  func testAdditiveFirstSelectionBehavesLikePlainClick() {
+    let r = SidebarViewController.extClickResult(
+      current: Filter(),
+      clickedExt: "zig", clickedCategory: "code", additive: true)
+    XCTAssertEqual("code", r.category)
+    XCTAssertEqual(["zig"], r.extensions)
+  }
+
+  func testExtIsSelectedMatchesCommaListElements() {
+    XCTAssertTrue(SidebarViewController.extIsSelected("php", in: ["php"]))
+    XCTAssertTrue(SidebarViewController.extIsSelected("php", in: ["php,html"]))
+    XCTAssertTrue(SidebarViewController.extIsSelected("html", in: ["php,html", "zig"]))
+    XCTAssertFalse(SidebarViewController.extIsSelected("css", in: ["php,html"]))
+    XCTAssertFalse(SidebarViewController.extIsSelected("php", in: []))
   }
 }
 

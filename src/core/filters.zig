@@ -85,7 +85,13 @@ fn parseKind(negated: bool, value: []const u8) ?FilterCriterion {
 }
 
 fn parseExtension(negated: bool, value: []const u8) ?FilterCriterion {
-    if (value.len == 0 or value.len > 32) return null;
+    if (value.len == 0 or value.len > 64) return null;
+    // The value may be a comma-separated list ("php,html") and segments may be
+    // multi-part ("blade.php"). Reject values with no non-empty segment
+    // ("ext:," etc.) so the token degrades to plain text like other invalid
+    // qualifiers.
+    var segments = std.mem.tokenizeScalar(u8, value, ',');
+    if (segments.next() == null) return null;
     var f = FilterCriterion{ .extension = .{ .negated = negated } };
     for (value, 0..) |ch, i| {
         f.extension.value[i] = std.ascii.toLower(ch);
@@ -173,7 +179,7 @@ pub const CompareOp = enum {
 
 pub const FilterCriterion = union(enum) {
     kind: struct { negated: bool = false, value: types.FileKind },
-    extension: struct { negated: bool = false, value: [32]u8 = .{0} ** 32, len: u8 = 0 },
+    extension: struct { negated: bool = false, value: [64]u8 = .{0} ** 64, len: u8 = 0 },
     size: struct { op: CompareOp = .eq, value: u64 = 0, value_upper: u64 = 0 },
     date: struct { op: CompareOp = .eq, value: i64 = 0, value_upper: i64 = 0 },
     category: struct { negated: bool = false, value: types.FileCategory },
@@ -186,12 +192,7 @@ pub const FilterCriterion = union(enum) {
                 return if (f.negated) !m else m;
             },
             .extension => |f| {
-                const ext_str = f.value[0..f.len];
-                const name = result.name;
-                // Find last '.' in name
-                const dot_pos = std.mem.lastIndexOfScalar(u8, name, '.') orelse return f.negated;
-                const file_ext = name[dot_pos + 1 ..];
-                const m = std.ascii.eqlIgnoreCase(file_ext, ext_str);
+                const m = extensionMatches(result.name, f.value[0..f.len]);
                 return if (f.negated) !m else m;
             },
             .size => |f| matchNumeric(u64, f.op, result.size, f.value, f.value_upper),
@@ -219,11 +220,42 @@ pub const MatchTarget = struct {
     category: types.FileCategory = .uncategorized,
 };
 
+/// True when `name` ends with "." + any comma-separated segment of `value`
+/// (case-insensitive). Segments may be multi-part ("blade.php"), which the
+/// old last-dot extraction could never match. For dot-free segments this is
+/// exactly equivalent to comparing the last-dot suffix.
+fn extensionMatches(name: []const u8, value: []const u8) bool {
+    var segments = std.mem.tokenizeScalar(u8, value, ',');
+    while (segments.next()) |s| {
+        if (name.len > s.len and
+            std.ascii.endsWithIgnoreCase(name, s) and
+            name[name.len - s.len - 1] == '.')
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Criteria combine as AND, except non-negated extension criteria, which form
+/// one OR-group ("ext:php ext:html" ≡ "ext:php,html" — a file has a single
+/// extension, so ANDing them would be unsatisfiable). Negated extensions stay
+/// ANDed: "!ext:php !ext:html" excludes both.
 pub fn matchesAll(criteria: []const FilterCriterion, target: MatchTarget) bool {
+    var has_ext_group = false;
+    var ext_group_matched = false;
     for (criteria) |c| {
+        switch (c) {
+            .extension => |f| if (!f.negated) {
+                has_ext_group = true;
+                if (!ext_group_matched and c.matches(target)) ext_group_matched = true;
+                continue;
+            },
+            else => {},
+        }
         if (!c.matches(target)) return false;
     }
-    return true;
+    return !has_ext_group or ext_group_matched;
 }
 
 fn matchNumeric(comptime T: type, op: CompareOp, actual: T, expected: T, upper: T) bool {
@@ -720,6 +752,113 @@ test "matchesAll AND logic" {
         .{ .size = .{ .op = .gt, .value = 10 * 1024 * 1024 } }, // > 10MB — doesn't match
     };
     try std.testing.expect(!matchesAll(&filters2, target));
+}
+
+fn testExtCriterion(value: []const u8, negated: bool) FilterCriterion {
+    var f = FilterCriterion{ .extension = .{ .negated = negated } };
+    @memcpy(f.extension.value[0..value.len], value);
+    f.extension.len = @intCast(value.len);
+    return f;
+}
+
+test "parse comma extension list is one criterion" {
+    var result = try parse(std.testing.allocator, "ext:PHP,html");
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 1), result.filters_list.len);
+    const f = result.filters_list[0].extension;
+    try std.testing.expectEqualStrings("php,html", f.value[0..f.len]);
+    try std.testing.expectEqualStrings("", result.text);
+}
+
+test "comma extension matches any segment" {
+    const f = testExtCriterion("php,html", false);
+    try std.testing.expect(f.matches(.{ .name = "index.php" }));
+    try std.testing.expect(f.matches(.{ .name = "page.html" }));
+    try std.testing.expect(f.matches(.{ .name = "UPPER.PHP" })); // case-insensitive
+    try std.testing.expect(!f.matches(.{ .name = "style.css" }));
+}
+
+test "negated comma extension excludes every segment" {
+    const f = testExtCriterion("php,html", true);
+    try std.testing.expect(!f.matches(.{ .name = "index.php" }));
+    try std.testing.expect(!f.matches(.{ .name = "page.html" }));
+    try std.testing.expect(f.matches(.{ .name = "style.css" }));
+    try std.testing.expect(f.matches(.{ .name = "Makefile" })); // no dot
+}
+
+test "multi-part extension matches" {
+    const blade = testExtCriterion("blade.php", false);
+    try std.testing.expect(blade.matches(.{ .name = "car.blade.php" }));
+    try std.testing.expect(!blade.matches(.{ .name = "car.php" }));
+    // The name must have a '.' before the segment; a bare "blade.php" file's
+    // extension is "php", not "blade.php".
+    try std.testing.expect(!blade.matches(.{ .name = "blade.php" }));
+
+    // A plain ext still matches the multi-part name (its extension IS php),
+    // dotfiles keep matching, and substring suffixes don't (".aphp" ≠ "php").
+    const php = testExtCriterion("php", false);
+    try std.testing.expect(php.matches(.{ .name = "car.php" }));
+    try std.testing.expect(php.matches(.{ .name = "car.blade.php" }));
+    try std.testing.expect(php.matches(.{ .name = ".php" }));
+    try std.testing.expect(!php.matches(.{ .name = "x.aphp" }));
+    try std.testing.expect(!php.matches(.{ .name = "php" }));
+}
+
+test "extension value with no segment degrades to text" {
+    var result = try parse(std.testing.allocator, "ext:,");
+    defer result.deinit();
+    try std.testing.expectEqual(@as(usize, 0), result.filters_list.len);
+    try std.testing.expectEqualStrings("ext:,", result.text);
+
+    const long = "ext:" ++ "a" ** 65;
+    var result2 = try parse(std.testing.allocator, long);
+    defer result2.deinit();
+    try std.testing.expectEqual(@as(usize, 0), result2.filters_list.len);
+    try std.testing.expectEqualStrings(long, result2.text);
+}
+
+test "matchesAll ORs repeated extension criteria" {
+    const php = testExtCriterion("php", false);
+    const html = testExtCriterion("html", false);
+    const group = [_]FilterCriterion{ php, html };
+    try std.testing.expect(matchesAll(&group, .{ .name = "a.php" }));
+    try std.testing.expect(matchesAll(&group, .{ .name = "b.html" }));
+    try std.testing.expect(!matchesAll(&group, .{ .name = "c.css" }));
+
+    // Non-extension criteria still AND with the group.
+    const mixed = [_]FilterCriterion{
+        php,
+        html,
+        .{ .size = .{ .op = .gt, .value = 1024 } },
+    };
+    try std.testing.expect(matchesAll(&mixed, .{ .name = "a.php", .size = 2048 }));
+    try std.testing.expect(!matchesAll(&mixed, .{ .name = "a.php", .size = 10 }));
+    try std.testing.expect(!matchesAll(&mixed, .{ .name = "c.css", .size = 2048 }));
+}
+
+test "matchesAll keeps negated extensions ANDed" {
+    const not_php = testExtCriterion("php", true);
+    const html = testExtCriterion("html", false);
+    // "!ext:php ext:html" = NOT php AND html.
+    const mixed = [_]FilterCriterion{ not_php, html };
+    try std.testing.expect(matchesAll(&mixed, .{ .name = "b.html" }));
+    try std.testing.expect(!matchesAll(&mixed, .{ .name = "a.php" }));
+    try std.testing.expect(!matchesAll(&mixed, .{ .name = "c.css" }));
+
+    // All-negated stays pure AND: "!ext:php !ext:html" excludes both.
+    const not_html = testExtCriterion("html", true);
+    const negs = [_]FilterCriterion{ not_php, not_html };
+    try std.testing.expect(matchesAll(&negs, .{ .name = "c.css" }));
+    try std.testing.expect(!matchesAll(&negs, .{ .name = "a.php" }));
+    try std.testing.expect(!matchesAll(&negs, .{ .name = "b.html" }));
+}
+
+test "formatCriterion comma extension round-trip" {
+    var buf: [128]u8 = undefined;
+    const f = testExtCriterion("php,html", false);
+    try std.testing.expectEqualStrings("ext:php,html", formatCriterion(f, &buf));
+    const neg = testExtCriterion("blade.php,html", true);
+    try std.testing.expectEqualStrings("!ext:blade.php,html", formatCriterion(neg, &buf));
 }
 
 test "parseDate relative" {

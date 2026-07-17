@@ -232,6 +232,9 @@ private final class ClickToCopyLabel: NSTextField {
     trackingArea = ta
   }
 
-  override func mouseEntered(with event: NSEvent) { NSCursor.pointingHand.set() }
+  override func mouseEntered(with event: NSEvent) {
+    guard isTopmostUnderMouse else { return }
+    NSCursor.pointingHand.set()
+  }
   override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
 }

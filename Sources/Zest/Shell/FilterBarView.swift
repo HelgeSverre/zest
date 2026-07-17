@@ -234,6 +234,7 @@ private final class ScopeControl: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+      guard isTopmostUnderMouse else { return }
       guard !selected else {
         return
       }
