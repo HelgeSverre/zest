@@ -537,7 +537,6 @@ private final class CatRow: NSView {
   private let dot = NSView()
   private let label = NSTextField(labelWithString: "")
   private let countLabel = NSTextField(labelWithString: "")
-  private let rail = NSView()
 
   init(
     meta: Category.Meta, count: Int, isExpanded: Bool, hasChildren: Bool,
@@ -587,21 +586,10 @@ private final class CatRow: NSView {
     countLabel.translatesAutoresizingMaskIntoConstraints = false
     addSubview(countLabel)
 
-    // Rail
-    rail.wantsLayer = true
-    rail.layer?.backgroundColor = CatRow.accent.accent.cgColor
-    rail.layer?.cornerRadius = 1.5
-    rail.isHidden = true
-    rail.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(rail)
 
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 26),
 
-      rail.leadingAnchor.constraint(equalTo: leadingAnchor),
-      rail.centerYAnchor.constraint(equalTo: centerYAnchor),
-      rail.widthAnchor.constraint(equalToConstant: 3),
-      rail.heightAnchor.constraint(equalToConstant: 16),
 
       dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hasChildren ? 22 : 8),
       dot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -635,7 +623,6 @@ private final class CatRow: NSView {
 
   func setActive(_ value: Bool) {
     active = value
-    rail.isHidden = !value
     label.textColor = value ? Theme.text : Theme.textSecondary
     updateBackground()
   }
@@ -705,7 +692,6 @@ private final class ExtRow: NSView {
   private let dot = NSView()
   private let label = NSTextField(labelWithString: "")
   private let countLabel = NSTextField(labelWithString: "")
-  private let rail = NSView()
 
   init(
     meta: Category.Meta, ext: String, count: Int, isActive: Bool,
@@ -736,20 +722,10 @@ private final class ExtRow: NSView {
     countLabel.translatesAutoresizingMaskIntoConstraints = false
     addSubview(countLabel)
 
-    rail.wantsLayer = true
-    rail.layer?.backgroundColor = ExtRow.accent.accent.cgColor
-    rail.layer?.cornerRadius = 1.5
-    rail.isHidden = true
-    rail.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(rail)
 
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 22),
 
-      rail.leadingAnchor.constraint(equalTo: leadingAnchor),
-      rail.centerYAnchor.constraint(equalTo: centerYAnchor),
-      rail.widthAnchor.constraint(equalToConstant: 3),
-      rail.heightAnchor.constraint(equalToConstant: 12),
 
       dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
       dot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -774,7 +750,6 @@ private final class ExtRow: NSView {
 
   func setActive(_ value: Bool) {
     active = value
-    rail.isHidden = !value
     label.textColor = value ? Theme.text : Theme.textSecondary
     updateBackground()
   }
@@ -830,7 +805,7 @@ private final class ExtRow: NSView {
 
 // TODO: rename to "pinned" something.
 /// A 30pt-tall pin row: SF Symbol + label, rounded `Theme.hover` background on
-/// hover, and (when active) the `accentSoft` fill + 3pt accent leading rail.
+/// hover, and (when active) the rounded `accentSoft` fill.
 /// Right-click shows a context menu (Remove + Folder Color).
 private final class PinRow: NSView {
   let path: String
@@ -843,7 +818,6 @@ private final class PinRow: NSView {
 
   private let icon = NSImageView()
   private let label = NSTextField(labelWithString: "")
-  private let rail = NSView()
   private var active = false
   private var hovering = false
 
@@ -868,23 +842,13 @@ private final class PinRow: NSView {
     label.lineBreakMode = .byTruncatingTail
     label.translatesAutoresizingMaskIntoConstraints = false
 
-    rail.wantsLayer = true
-    rail.layer?.backgroundColor = PinRow.accent.accent.cgColor
-    rail.layer?.cornerRadius = 1.5
-    rail.isHidden = true
-    rail.translatesAutoresizingMaskIntoConstraints = false
 
-    addSubview(rail)
     addSubview(icon)
     addSubview(label)
 
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 30),
 
-      rail.leadingAnchor.constraint(equalTo: leadingAnchor),
-      rail.centerYAnchor.constraint(equalTo: centerYAnchor),
-      rail.widthAnchor.constraint(equalToConstant: 3),
-      rail.heightAnchor.constraint(equalToConstant: 18),
 
       icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
       icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -904,7 +868,6 @@ private final class PinRow: NSView {
 
   func setActive(_ value: Bool) {
     active = value
-    rail.isHidden = !value
     label.textColor = value ? Theme.text : Theme.textSecondary
     applyIconTint()
     updateBackground()
