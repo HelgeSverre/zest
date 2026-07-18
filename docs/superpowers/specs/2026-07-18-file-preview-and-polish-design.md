@@ -306,3 +306,25 @@ The release benchmark on the implementation branch measured:
 
 Each warm value is the mean of 200 highlights in the same process. The first
 value includes that format's one-time `TSQuery` construction.
+
+## Window-resize correction
+
+The preview overlay's panel initially combined required proportional constraints
+(`panel.width == overlay.width × 0.78` and the corresponding height constraint)
+with required absolute caps of 1,080 × 820 pt. Because the overlay is pinned to
+the root view even while hidden, Auto Layout derived maximum host dimensions of
+approximately 1,385 × 1,051 pt (`1080 / 0.78`, `820 / 0.78`). Live resizing
+confirmed those exact limits.
+
+The proportional constraints are preferences, while the panel's minimum and
+maximum dimensions are hard bounds. Give the two proportional equalities
+priority 999 and keep the bounds required. The panel follows the 78% sizing rule
+until it reaches a bound, then the preference yields without constraining the
+window. Constraints remain active while hidden so show/hide does not require
+layout-state mutation.
+
+An AppKit regression test hosts the overlay in an oversized window, requests a
+content size beyond the former ceiling, and verifies that the window accepts it
+while the preview panel remains within its cap. Manual verification resizes the
+window across the full available display width with the overlay both hidden and
+shown.
