@@ -9,11 +9,21 @@ final class ZestCoreTests: XCTestCase {
     return appSupport.appendingPathComponent("zest/index.zst").path
   }
 
-  func testOpenAndQueryRealIndex() throws {
+  /// These are optional integration checks against the developer's local
+  /// index, not hermetic fixtures. A format bump intentionally makes an old
+  /// index unreadable until the user chooses to rebuild it.
+  private func requireCurrentLocalIndex() throws -> ZestCore {
     guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `zest-indexer --full-scan ~` first.")
+      throw XCTSkip("No index at \(indexPath); run `just index` first.")
     }
-    let core = try XCTUnwrap(ZestCore(indexPath: indexPath))
+    guard let core = ZestCore(indexPath: indexPath) else {
+      throw XCTSkip("Local index is unreadable or from an older format; run `just index`.")
+    }
+    return core
+  }
+
+  func testOpenAndQueryRealIndex() throws {
+    let core = try requireCurrentLocalIndex()
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let rows = core.query("", scope: home, maxDepth: 1, maxResults: 5_000)
     // Skip if the home folder isn't in the index (e.g. the indexer was
@@ -88,10 +98,7 @@ final class ZestCoreTests: XCTestCase {
   // a CI environment without a real ~).
 
   func testExtBreakdownPerFolderReturnsSortedRows() throws {
-    guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `zest-indexer --full-scan ~` first.")
-    }
-    let core = try XCTUnwrap(ZestCore(indexPath: indexPath))
+    let core = try requireCurrentLocalIndex()
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     // Cat 1 = images. Home folder typically has at least one image; if not,
     // skip rather than fail.
@@ -110,10 +117,7 @@ final class ZestCoreTests: XCTestCase {
   }
 
   func testExtBreakdownSubtreeMergesAcrossFolders() throws {
-    guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `zest-indexer --full-scan ~` first.")
-    }
-    let core = try XCTUnwrap(ZestCore(indexPath: indexPath))
+    let core = try requireCurrentLocalIndex()
     // Root scope with .max depth should return at least as many exts as the
     // per-folder read for the home folder (the subtree includes the home
     // folder plus its descendants).
@@ -124,19 +128,13 @@ final class ZestCoreTests: XCTestCase {
   }
 
   func testExtBreakdownForMissingFolderReturnsEmpty() throws {
-    guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `zest-indexer --full-scan ~` first.")
-    }
-    let core = try XCTUnwrap(ZestCore(indexPath: indexPath))
+    let core = try requireCurrentLocalIndex()
     let rows = core.extBreakdown(scope: "/no/such/folder", maxDepth: 1, cat: 0, max: 8)
     XCTAssertTrue(rows.isEmpty)
   }
 
   func testExtBreakdownMaxZeroReturnsEmpty() throws {
-    guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `zest-indexer --full-scan ~` first.")
-    }
-    let core = try XCTUnwrap(ZestCore(indexPath: indexPath))
+    let core = try requireCurrentLocalIndex()
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     XCTAssertTrue(core.extBreakdown(scope: home, maxDepth: 1, cat: 0, max: 0).isEmpty)
   }

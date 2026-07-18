@@ -22,6 +22,20 @@ enum Theme {
   static let textSecondary = srgb(0x86, 0x8E, 0x99)
   static let textTertiary = srgb(0x56, 0x5E, 0x68)
 
+  // Syntax colors. Kept semantic so grammar capture names can share one
+  // hierarchy across JSON, Markdown, and Sema.
+  static let syntaxKeyword = srgb(0xFF, 0x7B, 0x72)
+  static let syntaxString = srgb(0xA5, 0xD6, 0xFF)
+  static let syntaxComment = srgb(0x76, 0x83, 0x90)
+  static let syntaxNumber = srgb(0xD2, 0xA8, 0xFF)
+  static let syntaxConstant = srgb(0x79, 0xC0, 0xFF)
+  static let syntaxFunction = srgb(0x7E, 0xE7, 0x87)
+  static let syntaxPunctuation = srgb(0x8B, 0x94, 0x9E)
+  static let syntaxOperator = srgb(0xFF, 0xA6, 0x57)
+  static let syntaxVariable = srgb(0xE9, 0xEC, 0xEF)
+  static let syntaxMarkupHeading = srgb(0xD2, 0xA8, 0xFF)
+  static let syntaxMarkupReference = srgb(0x79, 0xC0, 0xFF)
+
   /// Dialog backdrop (--scrim).
   static let scrim = NSColor(srgbRed: 5 / 255, green: 7 / 255, blue: 10 / 255, alpha: 0.62)
 

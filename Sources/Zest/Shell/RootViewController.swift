@@ -15,6 +15,7 @@ final class RootViewController: NSViewController {
   private var statusBar: StatusBarView!
   private var savedFiltersCard: SavedFiltersCard!
   private var savedFiltersDialog: SavedFiltersDialog!
+  private var filePreviewOverlay: FilePreviewOverlay!
   /// Local monitor for mouse thumb buttons (button 3 = back, 4 = forward) —
   /// a monitor rather than a responder override so it works regardless of
   /// which subview is under the cursor.
@@ -122,6 +123,20 @@ final class RootViewController: NSViewController {
       self?.savedFiltersDialog.show(prefillQuery: query)
     }
 
+    // File preview is mounted last so its scrim covers all window chrome. The
+    // browser owns state and behavior; Root only owns the overlay's lifetime.
+    let preview = FilePreviewOverlay()
+    filePreviewOverlay = preview
+    view.addSubview(preview)
+    NSLayoutConstraint.activate([
+      preview.topAnchor.constraint(equalTo: view.topAnchor),
+      preview.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+      preview.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      preview.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+    ])
+    browser.previewOverlay = preview
+    preview.onClose = { [weak browser] in browser?.closePreview() }
+
     // The coordinator is the single source of truth. Any state change —
     // navigation, query text, scope, or sort — refreshes every observer.
     coordinator.onChange = { [weak self] in
@@ -140,7 +155,7 @@ final class RootViewController: NSViewController {
     mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .leftMouseDown]) {
       [weak self] event in
       guard let self, event.window === self.view.window,
-        !self.savedFiltersDialog.isShown
+        !self.savedFiltersDialog.isShown, !self.filePreviewOverlay.isShown
       else { return event }
       if event.type == .leftMouseDown {
         // Clicking outside an editing search field blurs it; the click

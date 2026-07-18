@@ -1,4 +1,5 @@
 import AppKit
+import QuickLookUI
 
 // MARK: - Model
 
@@ -106,6 +107,13 @@ final class BrowserViewController: NSViewController {
   private let tableView = ZestTableView()
   private var emptyLabel: NSTextField?
 
+  /// RootViewController mounts the overlay above the whole window and injects
+  /// it here. Browser remains the sole owner of preview state.
+  weak var previewOverlay: FilePreviewOverlay?
+  private var previewState: PreviewState = .closed
+  private var quickLookURL: NSURL?
+  private var quickLookCloseObserver: NSObjectProtocol?
+
   // MARK: Reload key — context identity for selection/scroll policy
 
   /// Captures the three axes that define a "different context" for the file
@@ -168,6 +176,14 @@ final class BrowserViewController: NSViewController {
     tableView.onActivateSelection = {
       [weak self] in
       self?.activate(row: self?.tableView.selectedRow ?? -1)
+    }
+    tableView.onPreviewSelection = { [weak self] in
+      self?.togglePreview()
+    }
+    tableView.onCancelPreview = { [weak self] in
+      guard let self, self.previewState.isOpen else { return false }
+      self.closePreview()
+      return true
     }
     tableView.menuForRow = {
       [weak self] row in self?.buildContextMenu(forRow: row)
@@ -252,6 +268,7 @@ final class BrowserViewController: NSViewController {
     // posts a change notification when the row actually changes, so a reload
     // that lands on the same row would otherwise leave the status bar stale.
     pushSelectionSummary()
+    updatePreviewForSelectionIfOpen()
   }
 
   /// Compute + emit the status-bar summary for the current selection.
@@ -285,6 +302,119 @@ final class BrowserViewController: NSViewController {
     activate(row: tableView.selectedRow)
   }
 
+  /// Close either preview surface. Called by Space/Esc and by the overlay's
+  /// close button or scrim.
+  func closePreview() {
+    applyPreviewState(PreviewState.reduce(previewState, event: .close))
+  }
+
+  private func togglePreview() {
+    guard let request = selectedPreviewRequest() else {
+      closePreview()
+      return
+    }
+    applyPreviewState(PreviewState.reduce(previewState, event: .toggle(request)))
+  }
+
+  private func updatePreviewForSelectionIfOpen() {
+    guard previewState.isOpen else { return }
+    guard let request = selectedPreviewRequest() else {
+      closePreview()
+      return
+    }
+    applyPreviewState(PreviewState.reduce(previewState, event: .selectionChanged(request)))
+  }
+
+  private func selectedPreviewRequest() -> PreviewRequest? {
+    let row = tableView.selectedRow
+    guard row >= 0, row < items.count else { return nil }
+    let item = items[row]
+    let url = URL(fileURLWithPath: item.path)
+    let isRegularFile =
+      !item.isDirectory
+      && (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+    return PreviewRequest.route(url: url, isRegularFile: isRegularFile)
+  }
+
+  private func applyPreviewState(_ nextState: PreviewState) {
+    guard nextState != previewState else { return }
+    let previousState = previewState
+    previewState = nextState
+
+    if case .custom = previousState, case .custom = nextState {
+      // Same surface; show() below starts a generation-checked replacement.
+    } else if case .custom = previousState {
+      previewOverlay?.hide()
+    }
+
+    if case .quickLook = previousState, case .quickLook = nextState {
+      // Same panel; reload below replaces its one item.
+    } else if case .quickLook = previousState {
+      orderOutQuickLookPanel()
+    }
+
+    switch nextState {
+    case .closed:
+      previewOverlay?.hide()
+      quickLookURL = nil
+    case .custom(let url, let format):
+      quickLookURL = nil
+      previewOverlay?.show(url: url, format: format)
+    case .quickLook(let url):
+      previewOverlay?.hide()
+      showQuickLook(url: url)
+    }
+  }
+
+  private func showQuickLook(url: URL) {
+    quickLookURL = url as NSURL
+    guard let panel = QLPreviewPanel.shared() else {
+      previewState = .closed
+      quickLookURL = nil
+      return
+    }
+    observeQuickLookClose(panel)
+    panel.makeKeyAndOrderFront(nil)
+    panel.updateController()
+    panel.reloadData()
+    panel.currentPreviewItemIndex = 0
+  }
+
+  private func orderOutQuickLookPanel() {
+    guard QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() else {
+      return
+    }
+    panel.orderOut(nil)
+  }
+
+  private func observeQuickLookClose(_ panel: QLPreviewPanel) {
+    guard quickLookCloseObserver == nil else { return }
+    quickLookCloseObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.willCloseNotification,
+      object: panel,
+      queue: .main
+    ) { [weak self] _ in
+      guard let self, case .quickLook = self.previewState else { return }
+      self.previewState = .closed
+      self.quickLookURL = nil
+    }
+  }
+
+  override func acceptsPreviewPanelControl(_: QLPreviewPanel!) -> Bool {
+    if case .quickLook = previewState { return true }
+    return false
+  }
+
+  override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+    panel.dataSource = self
+    panel.delegate = self
+  }
+
+  override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+    panel.dataSource = nil
+    panel.delegate = nil
+  }
+
   /// Open a row: folders navigate the browser, files open in their default app.
   private func activate(row: Int) {
     guard row >= 0, row < items.count else {
@@ -295,6 +425,12 @@ final class BrowserViewController: NSViewController {
       if !coordinator.navigate(to: item.path) { NSSound.beep() }
     } else {
       NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
+    }
+  }
+
+  deinit {
+    if let quickLookCloseObserver {
+      NotificationCenter.default.removeObserver(quickLookCloseObserver)
     }
   }
 
@@ -356,6 +492,13 @@ final class BrowserViewController: NSViewController {
     reveal.representedObject = item.path
     menu.addItem(reveal)
 
+    let openFinder = NSMenuItem(
+      title: "Open in Finder", action: #selector(menuOpenFinder(_:)), keyEquivalent: "",
+    )
+    openFinder.target = self
+    openFinder.representedObject = item.isDirectory ? item.path : item.dirPath
+    menu.addItem(openFinder)
+
     let copy = NSMenuItem(
       title: "Copy Path", action: #selector(menuCopyPath(_:)), keyEquivalent: "",
     )
@@ -391,6 +534,13 @@ final class BrowserViewController: NSViewController {
       return
     }
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+  }
+
+  @objc private func menuOpenFinder(_ sender: NSMenuItem) {
+    guard let directoryPath = sender.representedObject as? String else {
+      return
+    }
+    NSWorkspace.shared.open(URL(fileURLWithPath: directoryPath, isDirectory: true))
   }
 
   @objc private func menuCopyPath(_ sender: NSMenuItem) {
@@ -586,7 +736,7 @@ final class BrowserViewController: NSViewController {
     tableView.allowsMultipleSelection = false
     tableView.allowsEmptySelection = false
     tableView.headerView = ZestTableHeaderView()
-    tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+    tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
 
     addColumn(Self.colName, "NAME", width: 360, min: 240, max: 100_000)
     addColumn(Self.colSize, "SIZE", width: 90, min: 90, max: 90, alignment: .right)
@@ -641,6 +791,18 @@ final class BrowserViewController: NSViewController {
       }
     }
     tableView.headerView?.needsDisplay = true
+  }
+}
+
+// MARK: - Quick Look
+
+extension BrowserViewController: QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+  func numberOfPreviewItems(in _: QLPreviewPanel!) -> Int {
+    quickLookURL == nil ? 0 : 1
+  }
+
+  func previewPanel(_: QLPreviewPanel!, previewItemAt _: Int) -> QLPreviewItem {
+    quickLookURL ?? NSURL(fileURLWithPath: "/")
   }
 }
 
@@ -808,6 +970,10 @@ private final class ZestTableView: NSTableView {
 
   /// Fired on Return/Enter for the selected row; the controller opens it.
   var onActivateSelection: (() -> Void)?
+  /// Fired on unmodified, non-repeating Space for the selected row.
+  var onPreviewSelection: (() -> Void)?
+  /// Returns true when Esc closed an active preview and consumed the event.
+  var onCancelPreview: (() -> Bool)?
   /// Builds the context menu for a right-clicked row (or nil to suppress).
   var menuForRow: ((Int) -> NSMenu?)?
 
@@ -817,6 +983,14 @@ private final class ZestTableView: NSTableView {
     // (arrow up/down selection, page keys, …) flows to AppKit.
     if event.keyCode == 36 || event.keyCode == 76 {
       onActivateSelection?()
+      return
+    }
+    let previewModifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+    if event.keyCode == 49, !event.isARepeat, previewModifiers.isEmpty {
+      onPreviewSelection?()
+      return
+    }
+    if event.keyCode == 53, onCancelPreview?() == true {
       return
     }
     if event.keyCode == 48 {

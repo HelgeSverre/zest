@@ -7,8 +7,10 @@ pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 /// v3: per-(folder × category) extension breakdown column.
 /// v4: directory entries' size = recursive subtree total (layout unchanged;
 ///     the bump forces a reindex so folders never show stale zeros).
-/// Reader's version check forces a full re-index on first launch with a new build.
-pub const VERSION: u32 = 4;
+/// v5: category semantics add `.sema` to Code (layout unchanged; restart the
+///     daemon and run `just index` so existing rows receive the new category).
+/// Reader's version check rejects old indexes; version bumps require a rebuild before use.
+pub const VERSION: u32 = 5;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;

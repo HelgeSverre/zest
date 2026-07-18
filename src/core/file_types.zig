@@ -74,6 +74,7 @@ pub const extension_map = std.StaticStringMap(FileCategory).initComptime(.{
 
     // Code
     .{ "zig", .code },
+    .{ "sema", .code },
     .{ "rs", .code },
     .{ "py", .code },
     .{ "js", .code },
@@ -192,6 +193,7 @@ test "categorize common extensions" {
     try expect(categorize("song.mp3") == .audio);
     try expect(categorize("movie.mp4") == .video);
     try expect(categorize("main.zig") == .code);
+    try expect(categorize("program.sema") == .code);
     try expect(categorize("backup.tar") == .archives);
     try expect(categorize("backup.gz") == .archives);
 }
