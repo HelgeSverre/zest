@@ -24,9 +24,19 @@ let package = Package(
             name: "TreeSitterSema",
             path: "Vendor/TreeSitterSema",
             sources: ["src/parser.c", "src/scanner.c"],
-            resources: [.copy("queries")],
             publicHeadersPath: "bindings/swift",
             cSettings: [.headerSearchPath("src")]
+        ),
+
+        .executableTarget(
+            name: "EmbedHighlightQueriesTool",
+            path: "Tools/EmbedHighlightQueriesTool"
+        ),
+
+        .plugin(
+            name: "EmbedHighlightQueriesPlugin",
+            capability: .buildTool(),
+            dependencies: ["EmbedHighlightQueriesTool"]
         ),
 
         .executableTarget(
@@ -41,7 +51,8 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags(["-L\(zigLibDir)", "-lzest-core"]),
                 .linkedLibrary("c"),
-            ]
+            ],
+            plugins: ["EmbedHighlightQueriesPlugin"]
         ),
 
         .testTarget(

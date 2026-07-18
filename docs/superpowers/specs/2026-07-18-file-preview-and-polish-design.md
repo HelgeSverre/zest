@@ -262,3 +262,47 @@ restarting the newly built daemon (which starts with a full scan) or running
 - Incremental/keystroke-level re-highlighting (not needed — this is a
   one-shot "parse the whole file once" preview, not an editor).
 - Syntax highlighting for any format beyond `.md`/`.sema`/`.json`.
+
+## Performance correction: embedded highlight queries
+
+Profiling after the first implementation found that preview startup was dominated
+by `QueryResourceLoader`, not parsing or file I/O. The loader enumerated every
+loaded bundle/framework and repeatedly compared standardized URL paths before
+reading four known, version-pinned `highlights.scm` files. On the profiled build,
+that discovery took roughly 424–496 ms per preview while the actual query read,
+parse, and execution work was measured in milliseconds.
+
+Highlight queries are therefore build inputs, not runtime resources:
+
+- Check in exact snapshots of the JSON and Markdown queries from the versions in
+  `Package.resolved`; continue using the already-vendored Sema query snapshot.
+- A SwiftPM build-tool plugin declares all four query files as inputs and emits a
+  deterministic Swift source file containing their bytes. SwiftPM compiles that
+  generated source into `Zest`, so installed and test binaries need no query-file
+  path discovery.
+- `TreeSitterHighlighter` constructs one immutable `Query` for each grammar/query
+  pair (JSON, Sema, Markdown block, Markdown inline) and reuses it. Every parse
+  still gets its own parser and query cursor; those stateful objects are not
+  shared.
+- Query initialization failures remain thrown errors. Cached initialization uses
+  `Result<Query, Error>` rather than crashing through `try!`.
+- Remove `QueryResourceLoader` and the Sema query resource declaration. External
+  grammar packages may still bring their own resource bundles, but Zest neither
+  searches nor reads those bundles at runtime.
+
+Tests assert that the generated sources contain representative captures, that
+each query kind returns the same cached `Query` identity across calls, and that
+the existing real JSON/Sema/Markdown highlighting behavior is unchanged. A
+post-change release benchmark must separately report first and warm preview
+latency so build/plugin time is not mistaken for runtime work.
+
+The release benchmark on the implementation branch measured:
+
+| Format | First highlight | Warm average |
+| --- | ---: | ---: |
+| JSON | 4.379 ms | 0.018 ms |
+| Sema | 1.382 ms | 0.036 ms |
+| Markdown | 2.677 ms | 0.065 ms |
+
+Each warm value is the mean of 200 highlights in the same process. The first
+value includes that format's one-time `TSQuery` construction.

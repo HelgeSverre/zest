@@ -17,7 +17,32 @@ enum TreeSitterHighlighterError: Error, LocalizedError {
   }
 }
 
+enum HighlightQueryKind: CaseIterable {
+  case json
+  case sema
+  case markdownBlock
+  case markdownInline
+}
+
 enum TreeSitterHighlighter {
+  private static let jsonLanguage = Language(language: tree_sitter_json())
+  private static let semaLanguage = Language(language: tree_sitter_sema())
+  private static let markdownBlockLanguage = Language(language: tree_sitter_markdown())
+  private static let markdownInlineLanguage = Language(language: tree_sitter_markdown_inline())
+
+  private static let jsonQuery: Result<Query, Error> = Result {
+    try Query(language: jsonLanguage, data: EmbeddedHighlightQueries.json)
+  }
+  private static let semaQuery: Result<Query, Error> = Result {
+    try Query(language: semaLanguage, data: EmbeddedHighlightQueries.sema)
+  }
+  private static let markdownBlockQuery: Result<Query, Error> = Result {
+    try Query(language: markdownBlockLanguage, data: EmbeddedHighlightQueries.markdownBlock)
+  }
+  private static let markdownInlineQuery: Result<Query, Error> = Result {
+    try Query(language: markdownInlineLanguage, data: EmbeddedHighlightQueries.markdownInline)
+  }
+
   private static let captureColors: [String: NSColor] = [
     "keyword": Theme.syntaxKeyword,
     "string": Theme.syntaxString,
@@ -63,15 +88,15 @@ enum TreeSitterHighlighter {
     case .json:
       highlights = try parse(
         source: source,
-        language: Language(language: tree_sitter_json()),
-        bundleName: "TreeSitterJSON_TreeSitterJSON",
+        language: jsonLanguage,
+        queryKind: .json,
         displayName: "JSON"
       )
     case .sema:
       highlights = try parse(
         source: source,
-        language: Language(language: tree_sitter_sema()),
-        bundleName: "Zest_TreeSitterSema",
+        language: semaLanguage,
+        queryKind: .sema,
         displayName: "Sema"
       )
     case .markdown:
@@ -96,7 +121,7 @@ enum TreeSitterHighlighter {
   private static func parse(
     source: String,
     language: Language,
-    bundleName: String,
+    queryKind: HighlightQueryKind,
     displayName: String
   ) throws -> [NamedRange] {
     let parser = Parser()
@@ -107,27 +132,35 @@ enum TreeSitterHighlighter {
     return try highlights(
       source: source,
       tree: tree,
-      language: language,
-      bundleName: bundleName
+      queryKind: queryKind
     )
+  }
+
+  static func query(for kind: HighlightQueryKind) throws -> Query {
+    switch kind {
+    case .json:
+      return try jsonQuery.get()
+    case .sema:
+      return try semaQuery.get()
+    case .markdownBlock:
+      return try markdownBlockQuery.get()
+    case .markdownInline:
+      return try markdownInlineQuery.get()
+    }
   }
 
   private static func highlights(
     source: String,
     tree: MutableTree,
-    language: Language,
-    bundleName: String
+    queryKind: HighlightQueryKind
   ) throws -> [NamedRange] {
-    let queryURL = try QueryResourceLoader.highlightsURL(bundleName: bundleName)
-    let query = try Query(language: language, url: queryURL)
-    let cursor = query.execute(in: tree)
+    let cursor = try query(for: queryKind).execute(in: tree)
     return cursor.resolve(with: Predicate.Context(string: source)).highlights()
   }
 
   private static func markdownHighlights(source: String) throws -> [NamedRange] {
-    let blockLanguage = Language(language: tree_sitter_markdown())
     let blockParser = Parser()
-    try blockParser.setLanguage(blockLanguage)
+    try blockParser.setLanguage(markdownBlockLanguage)
     guard let blockTree = blockParser.parse(source), let root = blockTree.rootNode else {
       throw TreeSitterHighlighterError.parseFailed("Markdown")
     }
@@ -135,16 +168,14 @@ enum TreeSitterHighlighter {
     var combined = try highlights(
       source: source,
       tree: blockTree,
-      language: blockLanguage,
-      bundleName: "TreeSitterMarkdown_TreeSitterMarkdown"
+      queryKind: .markdownBlock
     )
 
     let ranges = markdownInlineRanges(root: root)
     guard !ranges.isEmpty else { return combined }
 
-    let inlineLanguage = Language(language: tree_sitter_markdown_inline())
     let inlineParser = Parser()
-    try inlineParser.setLanguage(inlineLanguage)
+    try inlineParser.setLanguage(markdownInlineLanguage)
     inlineParser.includedRanges = ranges
     guard let inlineTree = inlineParser.parse(source) else {
       throw TreeSitterHighlighterError.parseFailed("Markdown inline")
@@ -153,8 +184,7 @@ enum TreeSitterHighlighter {
       contentsOf: try highlights(
         source: source,
         tree: inlineTree,
-        language: inlineLanguage,
-        bundleName: "TreeSitterMarkdown_TreeSitterMarkdownInline"
+        queryKind: .markdownInline
       )
     )
     return combined

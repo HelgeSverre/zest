@@ -4,6 +4,28 @@ import XCTest
 @testable import Zest
 
 final class TreeSitterHighlighterTests: XCTestCase {
+  func testHighlightQuerySourcesAreEmbedded() {
+    let sources = [
+      EmbeddedHighlightQueries.json,
+      EmbeddedHighlightQueries.markdownBlock,
+      EmbeddedHighlightQueries.markdownInline,
+      EmbeddedHighlightQueries.sema,
+    ]
+
+    for source in sources {
+      XCTAssertFalse(source.isEmpty)
+      XCTAssertTrue(String(decoding: source, as: UTF8.self).contains("@"))
+    }
+  }
+
+  func testCompiledHighlightQueriesAreCached() throws {
+    for kind in HighlightQueryKind.allCases {
+      let first = try TreeSitterHighlighter.query(for: kind)
+      let second = try TreeSitterHighlighter.query(for: kind)
+      XCTAssertTrue(first === second, "Expected cached query for \(kind)")
+    }
+  }
+
   func testCustomFormatRoutesSupportedRegularFilesCaseInsensitively() {
     XCTAssertEqual(
       PreviewFormat.customFormat(for: URL(fileURLWithPath: "/tmp/README.MD"), isDirectory: false),

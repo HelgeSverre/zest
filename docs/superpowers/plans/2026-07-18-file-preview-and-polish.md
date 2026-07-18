@@ -4,7 +4,7 @@
 
 **Goal:** Add Finder-style Space preview with custom tree-sitter highlighting for Markdown, Sema, and JSON, plus the approved Finder action, table resizing, and Sema categorization polish.
 
-**Architecture:** `BrowserViewController` owns one preview state and switches between a root-mounted `FilePreviewOverlay` and the system `QLPreviewPanel`. `PreviewContentLoader` performs bounded file reads and generation-checked background highlighting; `TreeSitterHighlighter` owns grammar parsing while `QueryResourceLoader` locates the pinned grammar query bundles in executable and XCTest layouts.
+**Architecture:** `BrowserViewController` owns one preview state and switches between a root-mounted `FilePreviewOverlay` and the system `QLPreviewPanel`. `PreviewContentLoader` performs bounded file reads and generation-checked background highlighting; `TreeSitterHighlighter` owns grammar parsing and reuses immutable queries generated into the executable from pinned source snapshots at build time.
 
 **Tech Stack:** Swift 5.9/AppKit/QuickLookUI, SwiftTreeSitter 0.25.0, tree-sitter-json 0.24.8, tree-sitter-markdown 0.5.3, vendored tree-sitter-sema commit `be9019c`, Zig 0.16.0.
 
@@ -141,3 +141,29 @@ const TSLanguage *tree_sitter_sema(void);
 - [x] Inspect `git diff HEAD` for security, correctness, races, error handling, accidental unrelated changes, and resource/version drift.
 - [x] Re-read `docs/superpowers/specs/2026-07-18-file-preview-and-polish-design.md` and check every requirement against implementation or an explicitly documented manual-only verification.
 - [x] Leave the worktree with `zig-out/lib/libzest-core.a` rebuilt in ReleaseFast and report the required `just index` migration step.
+
+### Task 7: Eliminate runtime query-resource discovery
+
+**Files:**
+- Modify: `Package.swift`
+- Create: `Plugins/EmbedHighlightQueriesPlugin/EmbedHighlightQueriesPlugin.swift`
+- Create: `Tools/EmbedHighlightQueriesTool/main.swift`
+- Create: `Vendor/HighlightQueries/README.md`
+- Create: `Vendor/HighlightQueries/json-highlights.scm`
+- Create: `Vendor/HighlightQueries/markdown-highlights.scm`
+- Create: `Vendor/HighlightQueries/markdown-inline-highlights.scm`
+- Modify: `Sources/Zest/Preview/TreeSitterHighlighter.swift`
+- Delete: `Sources/Zest/Preview/QueryResourceLoader.swift`
+- Modify: `Sources/ZestTests/TreeSitterHighlighterTests.swift`
+
+**Interfaces:**
+- `EmbeddedHighlightQueries` is deterministic generated Swift source compiled into `Zest`.
+- `TreeSitterHighlighter.query(for:)` returns one cached immutable `Query` per grammar/query pair.
+- Runtime highlighting performs no bundle enumeration and no query-file reads.
+
+- [x] Vendor the exact JSON 0.24.8 and Markdown 0.5.3 query snapshots and record their upstream revisions. Keep the Sema query at its existing vendored commit.
+- [x] Add failing tests for representative embedded query bytes and cached `Query` identity.
+- [x] Add a SwiftPM build-tool plugin with the four query files as declared inputs and one generated Swift file as its declared output. Attach it only to `Zest`.
+- [x] Replace bundle names/URLs with explicit query kinds and cached `Result<Query, Error>` values; create a fresh cursor for each execution.
+- [x] Remove `QueryResourceLoader` and stop packaging Sema's query directory as a runtime resource.
+- [x] Run the focused highlighter tests, the full test suite, changed-file formatting/lint, and a release-mode first/warm preview benchmark. Inspect the final diff and preserve unrelated files.
