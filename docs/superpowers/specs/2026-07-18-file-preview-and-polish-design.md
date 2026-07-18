@@ -317,11 +317,11 @@ approximately 1,385 × 1,051 pt (`1080 / 0.78`, `820 / 0.78`). Live resizing
 confirmed those exact limits.
 
 The proportional constraints are preferences, while the panel's minimum and
-maximum dimensions are hard bounds. Give the two proportional equalities
-priority 999 and keep the bounds required. The panel follows the 78% sizing rule
-until it reaches a bound, then the preference yields without constraining the
-window. Constraints remain active while hidden so show/hide does not require
-layout-state mutation.
+maximum dimensions are hard bounds. AppKit holds the window size at priority
+500, so give the two proportional equalities priority 499 and keep the bounds
+required. The panel follows the 78% sizing rule until it reaches a bound, then
+the preference yields without constraining the window. Constraints remain
+active while hidden so show/hide does not require layout-state mutation.
 
 An AppKit regression test hosts the overlay in an oversized window, requests a
 content size beyond the former ceiling, and verifies that the window accepts it

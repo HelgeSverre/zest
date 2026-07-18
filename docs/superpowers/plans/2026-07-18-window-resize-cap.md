@@ -4,7 +4,7 @@
 
 **Goal:** Allow the Zest window to expand across the available display while preserving the file-preview panel's proportional sizing and absolute bounds.
 
-**Architecture:** Keep the overlay and panel constraint graph active in both visibility states. Express the 78% panel width and height as priority-999 preferences, while retaining the 520×360 minimum and 1,080×820 maximum as required constraints.
+**Architecture:** Keep the overlay and panel constraint graph active in both visibility states. Express the 78% panel width and height as priority-499 preferences—below AppKit's priority-500 window-size policy—while retaining the 520×360 minimum and 1,080×820 maximum as required constraints.
 
 **Tech Stack:** Swift 5.9, AppKit Auto Layout, XCTest.
 
@@ -25,9 +25,9 @@
 
 **Interfaces:**
 - Consumes: `FilePreviewOverlay.init()` and its existing root-pinned layout.
-- Produces: an overlay whose proportional panel constraints have priority 999 and whose absolute panel bounds remain required.
+- Produces: an overlay whose proportional panel constraints have priority 499 and whose absolute panel bounds remain required.
 
-- [ ] **Step 1: Write the failing oversized-window regression test**
+- [x] **Step 1: Write the failing oversized-window regression test**
 
 Create an AppKit window with a root view controller, pin a `FilePreviewOverlay` to all four root edges, request a 1,700×1,100 pt content size, force layout, and assert that the content view accepts both requested dimensions within 0.5 pt. The current required proportional and maximum constraints must cause the width assertion to fail at approximately 1,385 pt.
 
@@ -69,21 +69,22 @@ final class FilePreviewOverlayTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `swift test --filter FilePreviewOverlayTests`
 
 Expected: FAIL because the window content width or height is clamped by the overlay's required constraint graph.
 
-- [ ] **Step 3: Make proportional sizing a preference**
+- [x] **Step 3: Make proportional sizing a preference**
 
-Create the width and height proportional constraints before activation, assign each `NSLayoutConstraint.Priority(999)`, and activate them alongside the existing required centering and bound constraints. Do not alter the 0.78 multiplier or the 520×360 and 1,080×820 constants.
+Create the width and height proportional constraints before activation, assign each `NSLayoutConstraint.Priority(499)`, and activate them alongside the existing required centering and bound constraints. Do not alter the 0.78 multiplier or the 520×360 and 1,080×820 constants.
 
 ```swift
+let panelSizingPriority = NSLayoutConstraint.Priority(499)
 let preferredWidth = panel.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.78)
-preferredWidth.priority = NSLayoutConstraint.Priority(999)
+preferredWidth.priority = panelSizingPriority
 let preferredHeight = panel.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.78)
-preferredHeight.priority = NSLayoutConstraint.Priority(999)
+preferredHeight.priority = panelSizingPriority
 
 NSLayoutConstraint.activate([
   panel.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -98,16 +99,16 @@ NSLayoutConstraint.activate([
 ])
 ```
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run: `swift test --filter FilePreviewOverlayTests && just test`
 
 Expected: the regression test passes and the complete Zig/Swift suite reports zero failures, leaving `libzest-core.a` rebuilt with `ReleaseFast`.
 
-- [ ] **Step 5: Verify the live resize behavior**
+- [x] **Step 5: Verify the live resize behavior**
 
 Launch `swift run Zest`, use Accessibility scripting to position the window at the display's leading edge and request a size wider than the former 1,385 pt cap, then read the resulting size back. Expect the accepted width to exceed 1,385 pt with no Auto Layout diagnostics.
 
-- [ ] **Step 6: Review and commit**
+- [x] **Step 6: Review and commit**
 
 Run changed-file `swift-format` lint, `git diff --check`, and diff-based self-review. Commit the implementation and test without staging `reddit-scrutiny.json`.

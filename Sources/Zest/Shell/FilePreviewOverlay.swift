@@ -171,11 +171,19 @@ final class FilePreviewOverlay: NSView {
     }
     addSubview(panel)
 
+    // AppKit holds an NSWindow's size at priority 500. Panel preferences must
+    // yield below that threshold or their absolute caps become window caps.
+    let panelSizingPriority = NSLayoutConstraint.Priority(499)
+    let preferredWidth = panel.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.78)
+    preferredWidth.priority = panelSizingPriority
+    let preferredHeight = panel.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.78)
+    preferredHeight.priority = panelSizingPriority
+
     NSLayoutConstraint.activate([
       panel.centerXAnchor.constraint(equalTo: centerXAnchor),
       panel.centerYAnchor.constraint(equalTo: centerYAnchor),
-      panel.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.78),
-      panel.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.78),
+      preferredWidth,
+      preferredHeight,
       panel.widthAnchor.constraint(greaterThanOrEqualToConstant: 520),
       panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 360),
       panel.widthAnchor.constraint(lessThanOrEqualToConstant: 1_080),
