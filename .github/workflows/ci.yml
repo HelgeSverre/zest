@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Zig and Swift tests
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Install just
+        run: brew install just
+
+      - name: Build integration fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fixture_home="$RUNNER_TEMP/zest-ci-home"
+          fixture_root="$RUNNER_TEMP/zest-ci-fixture"
+          mkdir -p "$fixture_home/Library/Application Support" \
+            "$fixture_root/src" "$fixture_root/docs" "$fixture_root/nested"
+
+          printf 'const answer: u8 = 42;\n' > "$fixture_root/main.zig"
+          printf 'pub fn nested() void {}\n' > "$fixture_root/src/nested.zig"
+          printf 'fixture image\n' > "$fixture_root/photo.png"
+          printf 'fixture document\n' > "$fixture_root/report.pdf"
+          printf 'nested document\n' > "$fixture_root/docs/notes.txt"
+          printf '# Fixture\n' > "$fixture_root/nested/readme.md"
+
+          zig build indexer -Doptimize=ReleaseFast
+          HOME="$fixture_home" ./zig-out/bin/zest-indexer --full-scan "$fixture_root"
+
+          index_path="$fixture_home/Library/Application Support/zest/index.zst"
+          test -s "$index_path"
+          {
+            echo "ZEST_TEST_INDEX_PATH=$index_path"
+            echo "ZEST_TEST_INDEX_SCOPE=$fixture_root"
+          } >> "$GITHUB_ENV"
+
+      - name: Run test suite
+        run: just test

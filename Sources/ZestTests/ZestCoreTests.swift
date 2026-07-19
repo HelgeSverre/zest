@@ -3,39 +3,58 @@ import XCTest
 @testable import Zest
 
 final class ZestCoreTests: XCTestCase {
-  private var indexPath: String {
+  private var developerIndexPath: String {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask)[0]
     return appSupport.appendingPathComponent("zest/index.zst").path
   }
 
-  /// These are optional integration checks against the developer's local
-  /// index, not hermetic fixtures. A format bump intentionally makes an old
-  /// index unreadable until the user chooses to rebuild it.
-  private func requireCurrentLocalIndex() throws -> ZestCore {
-    guard FileManager.default.fileExists(atPath: indexPath) else {
-      throw XCTSkip("No index at \(indexPath); run `just index` first.")
+  private var configuredIndexPath: String? {
+    ProcessInfo.processInfo.environment["ZEST_TEST_INDEX_PATH"]
+  }
+
+  private var integrationIndexPath: String {
+    configuredIndexPath ?? developerIndexPath
+  }
+
+  private var integrationScope: String {
+    ProcessInfo.processInfo.environment["ZEST_TEST_INDEX_SCOPE"]
+      ?? FileManager.default.homeDirectoryForCurrentUser.path
+  }
+
+  /// CI supplies a generated fixture and must fail if it is absent or stale.
+  /// Without that explicit configuration these remain optional checks against
+  /// the developer's local index.
+  private func requireIntegrationIndex() throws -> ZestCore {
+    if configuredIndexPath != nil {
+      return try XCTUnwrap(
+        ZestCore(indexPath: integrationIndexPath),
+        "Configured fixture index is missing, empty, or incompatible: \(integrationIndexPath)")
     }
-    guard let core = ZestCore(indexPath: indexPath) else {
+    guard FileManager.default.fileExists(atPath: integrationIndexPath) else {
+      throw XCTSkip("No index at \(integrationIndexPath); run `just index` first.")
+    }
+    guard let core = ZestCore(indexPath: integrationIndexPath) else {
       throw XCTSkip("Local index is unreadable or from an older format; run `just index`.")
     }
     return core
   }
 
   func testOpenAndQueryRealIndex() throws {
-    let core = try requireCurrentLocalIndex()
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let rows = core.query("", scope: home, maxDepth: 1, maxResults: 5_000)
-    // Skip if the home folder isn't in the index (e.g. the indexer was
-    // run against a different scope like /tmp). This is an environmental
-    // skip, not a failure.
+    let core = try requireIntegrationIndex()
+    let rows = core.query("", scope: integrationScope, maxDepth: 1, maxResults: 5_000)
     if rows.isEmpty {
-      throw XCTSkip("Index doesn't cover \(home); re-run `zest-indexer --full-scan ~`.")
+      if configuredIndexPath != nil {
+        XCTFail("Configured fixture index does not cover \(integrationScope)")
+        return
+      }
+      throw XCTSkip(
+        "Index doesn't cover \(integrationScope); re-run `zest-indexer --full-scan ~`.")
     }
     XCTAssertFalse(rows[0].name.isEmpty)
     // The core's stored identity must match what's currently on disk.
     XCTAssertEqual(
-      core.fileIdentity, ZestCore.currentIdentity(of: indexPath),
+      core.fileIdentity, ZestCore.currentIdentity(of: integrationIndexPath),
       "core.fileIdentity should equal the on-disk identity immediately after open"
     )
   }
@@ -94,17 +113,18 @@ final class ZestCoreTests: XCTestCase {
   // Ext breakdown sanity checks against the real on-disk index. These pin
   // the Swift veneer (String conversion, name padding) for both per-folder
   // (.folder, maxDepth=1) and subtree (.subfolders, maxDepth=.max) reads.
-  // Skipped if the index is missing or the home folder is absent (e.g. in
-  // a CI environment without a real ~).
+  // Developer-local checks may skip for missing data; configured CI fixtures
+  // are mandatory and fail if representative data is absent.
 
   func testExtBreakdownPerFolderReturnsSortedRows() throws {
-    let core = try requireCurrentLocalIndex()
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    // Cat 1 = images. Home folder typically has at least one image; if not,
-    // skip rather than fail.
-    let rows = core.extBreakdown(scope: home, maxDepth: 1, cat: 1, max: 8)
+    let core = try requireIntegrationIndex()
+    let rows = core.extBreakdown(scope: integrationScope, maxDepth: 1, cat: 1, max: 8)
     guard !rows.isEmpty else {
-      throw XCTSkip("Home folder has no images to test against.")
+      if configuredIndexPath != nil {
+        XCTFail("Configured fixture scope has no direct image files")
+        return
+      }
+      throw XCTSkip("Integration scope has no direct image files.")
     }
     // Sorted by count desc.
     for i in 1..<rows.count {
@@ -117,25 +137,32 @@ final class ZestCoreTests: XCTestCase {
   }
 
   func testExtBreakdownSubtreeMergesAcrossFolders() throws {
-    let core = try requireCurrentLocalIndex()
-    // Root scope with .max depth should return at least as many exts as the
-    // per-folder read for the home folder (the subtree includes the home
-    // folder plus its descendants).
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let subtree = core.extBreakdown(scope: "/", maxDepth: .max, cat: 2, max: 32)
-    let perFolder = core.extBreakdown(scope: home, maxDepth: 1, cat: 2, max: 32)
+    let core = try requireIntegrationIndex()
+    let subtree = core.extBreakdown(scope: integrationScope, maxDepth: .max, cat: 2, max: 32)
+    let perFolder = core.extBreakdown(scope: integrationScope, maxDepth: 1, cat: 2, max: 32)
     XCTAssertGreaterThanOrEqual(subtree.count, perFolder.count)
   }
 
   func testExtBreakdownForMissingFolderReturnsEmpty() throws {
-    let core = try requireCurrentLocalIndex()
+    let core = try requireIntegrationIndex()
     let rows = core.extBreakdown(scope: "/no/such/folder", maxDepth: 1, cat: 0, max: 8)
     XCTAssertTrue(rows.isEmpty)
   }
 
   func testExtBreakdownMaxZeroReturnsEmpty() throws {
-    let core = try requireCurrentLocalIndex()
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    XCTAssertTrue(core.extBreakdown(scope: home, maxDepth: 1, cat: 0, max: 0).isEmpty)
+    let core = try requireIntegrationIndex()
+    XCTAssertTrue(
+      core.extBreakdown(scope: integrationScope, maxDepth: 1, cat: 0, max: 0).isEmpty)
+  }
+
+  func testHistogramReturnsAllCategories() throws {
+    let core = try requireIntegrationIndex()
+    let counts = core.histogram(scope: integrationScope, maxDepth: .max)
+    XCTAssertEqual(counts.count, 9)
+    if configuredIndexPath != nil {
+      XCTAssertGreaterThan(counts[1], 0, "fixture must include an image")
+      XCTAssertGreaterThan(counts[3], 0, "fixture must include a document")
+      XCTAssertGreaterThan(counts[7], 0, "fixture must include code")
+    }
   }
 }
