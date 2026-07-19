@@ -31,7 +31,7 @@
 - Produces: strict `validateParsedCount(walked, parsed)` and `validateScanComplete(complete)` guards.
 - Consumes: existing worker-local entry counts and shared atomic failure state.
 
-- [ ] **Step 1: Make the current partial-count test require rejection**
+- [x] **Step 1: Make the current partial-count test require rejection**
 
 Change the existing validation test to require an error for `validateParsedCount(17, 12)`, and add a test requiring `validateScanComplete(false)` to fail while `true` passes.
 
@@ -41,13 +41,13 @@ try validateScanComplete(true);
 try std.testing.expectError(error.ScanIncomplete, validateScanComplete(false));
 ```
 
-- [ ] **Step 2: Run the Zig suite and verify RED**
+- [x] **Step 2: Run the Zig suite and verify RED**
 
 Run: `zig build test`
 
 Expected: FAIL because partial loss is currently accepted and `validateScanComplete` does not exist.
 
-- [ ] **Step 3: Return completeness metadata and enforce it**
+- [x] **Step 3: Return completeness metadata and enforce it**
 
 Replace the out-parameter/count-only scanner result with:
 
@@ -63,17 +63,17 @@ Return `complete = !shared.scan_failed.load(.monotonic)`. Set `scan_failed` for 
 
 In `buildIndex`, clean up `result.paths`, reject `!result.complete`, parse every shard, and require exact equality between `result.entry_count` and `parsed` before returning index bytes.
 
-- [ ] **Step 4: Make malformed TSV records fatal**
+- [x] **Step 4: Make malformed TSV records fatal**
 
 Update `parseScanReader` so nonblank records must contain exactly six fields and valid numeric/enum values. Return `error.MalformedScanRecord` instead of skipping or substituting zero. Add focused tests for a short record and invalid numeric metadata before changing the parser, verify RED, then implement strict parsing.
 
-- [ ] **Step 5: Verify Task 1**
+- [x] **Step 5: Verify Task 1**
 
 Run: `zig fmt src/index/builder.zig src/index/bulk_scan.zig && zig build test`
 
 Expected: all Zig tests pass; partial counts and malformed records fail closed.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add src/index/builder.zig src/index/bulk_scan.zig
@@ -94,17 +94,17 @@ git commit -m "fix: reject incomplete index scans"
 - Produces: `FSEventsWatcher.start() !void`, returning `error.FSEventStreamStartFailed` when the C API returns false.
 - Consumes: daemon-specific operations implementing the three startup methods.
 
-- [ ] **Step 1: Add failing startup-order tests**
+- [x] **Step 1: Add failing startup-order tests**
 
 Create `startup.zig` with tests backed by a recorder operation type. Require the recorded order to equal `"watcher,scan,loop"`; require scan not to run after watcher failure and loop not to run after scan failure. Import the new module from `test_root.zig` before adding `startup.run`.
 
-- [ ] **Step 2: Run the Zig suite and verify RED**
+- [x] **Step 2: Run the Zig suite and verify RED**
 
 Run: `zig build test`
 
 Expected: FAIL because `startup.run` is undefined.
 
-- [ ] **Step 3: Implement the pure sequencer**
+- [x] **Step 3: Implement the pure sequencer**
 
 ```zig
 pub fn run(ops: anytype) !void {
@@ -116,7 +116,7 @@ pub fn run(ops: anytype) !void {
 
 Run `zig build test`; expect the startup tests to pass.
 
-- [ ] **Step 4: Refactor daemon ownership and watcher start errors**
+- [x] **Step 4: Refactor daemon ownership and watcher start errors**
 
 Move watcher creation, exclusion setup, start, stop, and deinit into the default daemon path before `runFullScan`. Leave `runWatchLoop` responsible only for servicing/coalescing events. Route those operations through `startup.run`.
 
@@ -128,13 +128,13 @@ if (c.FSEventStreamStart(self.stream) == 0) {
 }
 ```
 
-- [ ] **Step 5: Verify Task 2**
+- [x] **Step 5: Verify Task 2**
 
 Run: `zig fmt src/index/startup.zig src/index/daemon.zig src/index/fsevents.zig src/test_root.zig && zig build test && zig build indexer`
 
 Expected: all tests pass and the daemon executable links.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add src/index/startup.zig src/index/daemon.zig src/index/fsevents.zig src/test_root.zig
@@ -151,29 +151,29 @@ git commit -m "fix: watch filesystem during initial scan"
 - Consumes: `ZEST_TEST_INDEX_PATH` and `ZEST_TEST_INDEX_SCOPE` in integration tests.
 - Produces: CI fixture index at the explicit path generated under `$RUNNER_TEMP`.
 
-- [ ] **Step 1: Make configured integration fixtures mandatory**
+- [x] **Step 1: Make configured integration fixtures mandatory**
 
 Add test-only location resolution so the environment variables override the developer-local index and home scope. When `ZEST_TEST_INDEX_PATH` is set, a missing or unreadable index fails with `XCTUnwrap`; without it, retain existing `XCTSkip` behavior. Update every real-index test to use the resolved scope.
 
-- [ ] **Step 2: Verify Swift tests locally**
+- [x] **Step 2: Verify Swift tests locally**
 
 Run: `zig build core -Doptimize=ReleaseFast && swift test --filter ZestCoreTests`
 
 Expected: existing developer-local behavior passes; an invocation with `ZEST_TEST_INDEX_PATH=/missing` fails, proving configured CI fixtures cannot silently skip.
 
-- [ ] **Step 3: Add the workflow**
+- [x] **Step 3: Add the workflow**
 
 Create `.github/workflows/ci.yml` with pull-request and `main` push triggers, `contents: read`, ref-scoped concurrency, `macos-14`, immutable action SHAs, Zig 0.16.0, and a generated fixture.
 
 The fixture step creates nested code, image, document, and text files; runs `zest-indexer --full-scan` with a temporary `HOME`; exports the resulting index path and fixture scope through `$GITHUB_ENV`; and then runs `just test`.
 
-- [ ] **Step 4: Validate workflow and fixture behavior locally**
+- [x] **Step 4: Validate workflow and fixture behavior locally**
 
 Reproduce the workflow fixture in a `mktemp -d` directory, run the indexer, then execute `ZEST_TEST_INDEX_PATH=... ZEST_TEST_INDEX_SCOPE=... just test`. Parse the YAML with Ruby and run `git diff --check`.
 
 Expected: generated-fixture integration tests and the full suite pass; YAML parses.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 ```bash
 git add .github/workflows/ci.yml Sources/ZestTests/ZestCoreTests.swift
@@ -189,17 +189,17 @@ git commit -m "ci: test against generated index fixture"
 - Consumes all earlier task outputs.
 - Produces a reviewed, buildable branch with no unrelated files staged.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run: `just test && swift build && swift-format lint --recursive Sources && git diff --check`
 
 Expected: exit code zero from every command.
 
-- [ ] **Step 2: Review the complete diff**
+- [x] **Step 2: Review the complete diff**
 
 Use the code-review workflow. Check failure cleanup/ownership, atomic publication ordering, watcher lifetime, test fixture isolation, workflow permissions, and immutable action pins.
 
-- [ ] **Step 3: Confirm repository state**
+- [x] **Step 3: Confirm repository state**
 
 Run: `git status --short --branch && git log -5 --oneline`
 
