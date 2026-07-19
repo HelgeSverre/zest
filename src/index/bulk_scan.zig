@@ -71,10 +71,9 @@ const Shared = struct {
     done: bool = false,
     alloc: std.mem.Allocator,
     total_entries: std.atomic.Value(u64) = .init(0),
-    /// Set when a worker drops an entry or subdirectory (write/flush/OOM), so
-    /// the caller can report that the published index may be incomplete instead
-    /// of silently shipping a short index with an overstated count.
-    write_failed: std.atomic.Value(bool) = .init(false),
+    /// Set when an internal scanner failure makes the shard set incomplete.
+    /// The builder must reject the result rather than publish partial data.
+    scan_failed: std.atomic.Value(bool) = .init(false),
 };
 
 const Worker = struct {
@@ -84,15 +83,21 @@ const Worker = struct {
 };
 
 /// Walk `root` in parallel and write TSV entries to `support_dir`/scan.tmp.{0..N}.
-/// Returns the list of temp-file paths (caller owns them: read, then delete).
-/// `entries_out` receives the total entry count (for progress/logging).
+pub const ScanResult = struct {
+    paths: []const []u8,
+    entry_count: u64,
+    complete: bool,
+};
+
+/// Returns the temp-file paths, successfully-written record count, and whether
+/// every internal scanner operation completed. The caller owns every path and
+/// must delete/free them even when `complete` is false.
 pub fn parallelScan(
     allocator: std.mem.Allocator,
     root: []const u8,
     support_dir: []const u8,
     n_threads: usize,
-    entries_out: *u64,
-) ![]const []u8 {
+) !ScanResult {
     const io = runtime.io;
     const n = @max(1, n_threads);
 
@@ -146,15 +151,19 @@ pub fn parallelScan(
 
     // Flush and close each worker's temp file.
     for (0..n) |i| {
-        fwriters[i].interface.flush() catch sh.write_failed.store(true, .monotonic);
+        fwriters[i].interface.flush() catch sh.scan_failed.store(true, .monotonic);
         files[i].close(io);
     }
 
-    if (sh.write_failed.load(.monotonic))
-        std.debug.print("warning: index scan dropped entries (write/queue failure); the index may be incomplete\n", .{});
+    const complete = !sh.scan_failed.load(.monotonic);
+    if (!complete)
+        std.debug.print("error: index scan incomplete; refusing to publish its shards\n", .{});
 
-    entries_out.* = sh.total_entries.load(.monotonic);
-    return paths;
+    return .{
+        .paths = paths,
+        .entry_count = sh.total_entries.load(.monotonic),
+        .complete = complete,
+    };
 }
 
 fn workerMain(w: *Worker) void {
@@ -183,7 +192,7 @@ fn workerMain(w: *Worker) void {
             if (sh.queue.append(sh.alloc, sd)) {
                 appended += 1;
             } else |_| {
-                sh.write_failed.store(true, .monotonic);
+                sh.scan_failed.store(true, .monotonic);
                 sh.alloc.free(sd);
             }
         }
@@ -205,7 +214,13 @@ fn workerMain(w: *Worker) void {
 /// and collecting non-excluded subdirectory paths into `subdirs`.
 fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc: std.mem.Allocator) void {
     const io = runtime.io;
-    var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
+        switch (err) {
+            error.AccessDenied, error.FileNotFound, error.NotDir => {},
+            else => w.shared.scan_failed.store(true, .monotonic),
+        }
+        return;
+    };
     defer dir.close(io);
     const fd: c_int = @intCast(dir.handle);
 
@@ -223,7 +238,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
     // so compute esc_path once rather than re-escaping it for every entry.
     var esc_path_buf: [4096 * 2]u8 = undefined;
     const esc_path = format.escapeTsv(&esc_path_buf, path) orelse {
-        w.shared.write_failed.store(true, .monotonic);
+        w.shared.scan_failed.store(true, .monotonic);
         return;
     };
 
@@ -233,7 +248,8 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
         if (rc < 0) {
             // APFS returns ERANGE when a call exactly fills the buffer; retry.
             if (std.posix.errno(rc) == .RANGE) continue;
-            break; // other error: stop scanning this directory
+            w.shared.scan_failed.store(true, .monotonic);
+            return;
         }
         if (rc == 0) break; // end of directory
         const count: usize = @intCast(rc);
@@ -245,11 +261,17 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // bound every read against the returned buffer and the entry's own
             // declared length — a kernel/FS layout change must stop the walk,
             // not read stack garbage into a filename.
-            if (off + 4 > buf.len) break;
+            if (off + 4 > buf.len) {
+                w.shared.scan_failed.store(true, .monotonic);
+                return;
+            }
             const entry = buf[off..];
             const entry_len = std.mem.readInt(u32, entry[0..4], .little);
             // 44 covers the fixed reads through MODTIME (entry[36..44]).
-            if (entry_len < 44 or off + entry_len > buf.len) break;
+            if (entry_len < 44 or off + entry_len > buf.len) {
+                w.shared.scan_failed.store(true, .monotonic);
+                return;
+            }
 
             // Fixed common-group layout (RETURNED_ATTRS always returns
             // NAME/OBJTYPE/MODTIME). DATALENGTH (file group) is present only when
@@ -269,9 +291,15 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // name_dataoff is relative to the attr-ref field at offset 24;
             // validate the resulting slice lies inside this entry before reading.
             const name_field_base: i64 = 24 + @as(i64, name_dataoff);
-            if (name_field_base < 0) continue;
+            if (name_field_base < 0) {
+                w.shared.scan_failed.store(true, .monotonic);
+                return;
+            }
             const name_start: usize = @intCast(name_field_base);
-            if (name_start + name_len > entry_len) continue;
+            if (name_start + name_len > entry_len) {
+                w.shared.scan_failed.store(true, .monotonic);
+                return;
+            }
             var name = entry[name_start..][0..name_len];
             if (name.len > 0 and name[name.len - 1] == 0) name = name[0 .. name.len - 1];
 
@@ -287,7 +315,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             if (kind == .directory) {
                 if (path.len + 1 + name.len <= 4096) {
                     const cp = std.fmt.allocPrint(alloc, "{s}/{s}", .{ path, name }) catch {
-                        w.shared.write_failed.store(true, .monotonic);
+                        w.shared.scan_failed.store(true, .monotonic);
                         continue;
                     };
                     if (config.shouldExcludePath(cp)) {
@@ -295,7 +323,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
                         continue;
                     }
                     subdirs.append(alloc, cp) catch {
-                        w.shared.write_failed.store(true, .monotonic);
+                        w.shared.scan_failed.store(true, .monotonic);
                         alloc.free(cp);
                     };
                 } else continue; // path too long for the buffer; record entry, don't recurse
@@ -309,7 +337,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // Name buffer is sized at 2× NAME_MAX (255 bytes).
             var esc_name_buf: [255 * 2]u8 = undefined;
             const esc_name = format.escapeTsv(&esc_name_buf, name) orelse {
-                w.shared.write_failed.store(true, .monotonic);
+                w.shared.scan_failed.store(true, .monotonic);
                 continue;
             };
 
@@ -318,7 +346,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             }) catch {
                 // Don't count an entry we failed to write — the old code bumped
                 // local_entries unconditionally, overstating the index size.
-                w.shared.write_failed.store(true, .monotonic);
+                w.shared.scan_failed.store(true, .monotonic);
                 continue;
             };
             w.local_entries += 1;

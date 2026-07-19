@@ -18,23 +18,23 @@ pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 
     // Phase 1: parallel walk → per-worker scan.tmp.N files.
     const t_start = runtime.nowNanos();
-    var entry_count: u64 = 0;
-    const scan_paths = try bulk_scan.parallelScan(allocator, root, support_dir, n_threads, &entry_count);
+    const scan = try bulk_scan.parallelScan(allocator, root, support_dir, n_threads);
     defer {
-        for (scan_paths) |p| {
+        for (scan.paths) |p| {
             std.Io.Dir.deleteFileAbsolute(runtime.io, p) catch {};
             allocator.free(p);
         }
-        allocator.free(scan_paths);
+        allocator.free(scan.paths);
     }
+    try validateScanComplete(scan.complete);
     const t_walked = runtime.nowNanos();
 
     // Phase 2: read the temp files back, build the columnar index.
     std.debug.print("  building columnar index...\n", .{});
     var parsed: usize = 0;
-    const index_data = try buildFromScanFiles(allocator, scan_paths, &parsed);
+    const index_data = try buildFromScanFiles(allocator, scan.paths, &parsed);
     errdefer allocator.free(index_data);
-    try validateParsedCount(entry_count, parsed);
+    try validateParsedCount(scan.entry_count, parsed);
     const t_built = runtime.nowNanos();
 
     var walk_buf: [16]u8 = undefined;
@@ -43,7 +43,7 @@ pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
     std.debug.print("  timing: walk={s} build={s} ({s} files, {d} threads)\n", .{
         humanize.duration(&walk_buf, @divTrunc(t_walked - t_start, std.time.ns_per_ms)),
         humanize.duration(&build_buf, @divTrunc(t_built - t_walked, std.time.ns_per_ms)),
-        humanize.count(&count_buf, entry_count),
+        humanize.count(&count_buf, scan.entry_count),
         n_threads,
     });
 
@@ -95,24 +95,22 @@ fn parseScanReader(
     while (try reader.takeDelimiter('\n')) |line| {
         if (line.len == 0) continue;
 
-        // Parse tab-separated: name \t dir_path \t size \t mtime \t kind \t category
+        // Parse exactly: name \t dir_path \t size \t mtime \t kind \t category.
+        // Scanner escaping guarantees that tabs inside names/paths appear as
+        // backslash sequences, so any missing or extra field is corruption.
         var fields: [6][]const u8 = undefined;
-        var field_idx: usize = 0;
-        var start: usize = 0;
-        for (line, 0..) |ch, i| {
-            if (ch == '\t') {
-                if (field_idx < 6) {
-                    fields[field_idx] = line[start..i];
-                    field_idx += 1;
-                }
-                start = i + 1;
-            }
+        var field_iter = std.mem.splitScalar(u8, line, '\t');
+        for (&fields) |*field| {
+            field.* = field_iter.next() orelse return error.MalformedScanRecord;
         }
-        if (field_idx < 6 and start <= line.len) {
-            fields[field_idx] = line[start..];
-            field_idx += 1;
-        }
-        if (field_idx < 6) continue; // malformed line
+        if (field_iter.next() != null) return error.MalformedScanRecord;
+
+        const size = std.fmt.parseInt(u64, fields[2], 10) catch return error.MalformedScanRecord;
+        const mtime = std.fmt.parseInt(i64, fields[3], 10) catch return error.MalformedScanRecord;
+        const kind_int = std.fmt.parseInt(u8, fields[4], 10) catch return error.MalformedScanRecord;
+        const category_int = std.fmt.parseInt(u8, fields[5], 10) catch return error.MalformedScanRecord;
+        const kind = std.enums.fromInt(types.FileKind, kind_int) orelse return error.MalformedScanRecord;
+        const category = std.enums.fromInt(types.FileCategory, category_int) orelse return error.MalformedScanRecord;
 
         // Unescape tab/newline/backslash that were escaped by the scanner.
         // unescapeTsv writes into a buffer <= s.len, so dupe-sized allocations are exact.
@@ -128,27 +126,36 @@ fn parseScanReader(
         try entries.append(allocator, .{
             .name = name,
             .dir_path = dir_path,
-            .size = std.fmt.parseInt(u64, fields[2], 10) catch 0,
-            .mtime = std.fmt.parseInt(i64, fields[3], 10) catch 0,
-            .kind = std.enums.fromInt(types.FileKind, std.fmt.parseInt(u8, fields[4], 10) catch 0) orelse .file,
-            .category = std.enums.fromInt(types.FileCategory, std.fmt.parseInt(u8, fields[5], 10) catch 0) orelse .uncategorized,
+            .size = size,
+            .mtime = mtime,
+            .kind = kind,
+            .category = category,
         });
     }
 }
 
-/// Refuse to publish an index that lost the entire scan: the walk counted
-/// entries but the parse phase read none back (unreadable/vanished shard
-/// files). Publishing would atomically replace a good index with an empty
-/// one — observed once when all 8 shard re-opens failed silently.
+/// Refuse to publish an index if the number of parsed shard records differs
+/// from the number successfully written by the scanner. Any difference means
+/// a shard vanished, became unreadable, or contained malformed/truncated data.
 fn validateParsedCount(walked: u64, parsed: usize) !void {
     if (walked > 0 and parsed == 0) return error.ScanParseLostAllEntries;
+    const parsed_u64 = std.math.cast(u64, parsed) orelse return error.ScanParseEntryCountMismatch;
+    if (walked != parsed_u64) return error.ScanParseEntryCountMismatch;
 }
 
-test "validateParsedCount rejects a zero-entry parse of a non-empty walk" {
+/// Scanner-internal failures (queueing, escaping, writing, flushing, or an
+/// unexpected directory enumeration error) make its output unpublishable.
+fn validateScanComplete(complete: bool) !void {
+    if (!complete) return error.ScanIncomplete;
+}
+
+test "scan validation rejects complete and partial record loss" {
     try std.testing.expectError(error.ScanParseLostAllEntries, validateParsedCount(4_110_431, 0));
     try validateParsedCount(0, 0); // genuinely empty tree is fine
     try validateParsedCount(17, 17);
-    try validateParsedCount(17, 12); // partial loss still publishes (warned elsewhere)
+    try std.testing.expectError(error.ScanParseEntryCountMismatch, validateParsedCount(17, 12));
+    try validateScanComplete(true);
+    try std.testing.expectError(error.ScanIncomplete, validateScanComplete(false));
 }
 
 /// Test helper: build an index from a single in-memory scan reader.
@@ -206,6 +213,22 @@ test "buildFromScanReader handles a final line without a trailing newline" {
 
     try std.testing.expectEqual(@as(u64, 1), idx_reader.numEntries());
     try std.testing.expectEqualStrings("only.txt", idx_reader.getName(0).?);
+}
+
+test "buildFromScanReader rejects malformed records" {
+    const allocator = std.testing.allocator;
+
+    var short_reader = std.Io.Reader.fixed("missing\tfields\n");
+    try std.testing.expectError(
+        error.MalformedScanRecord,
+        buildFromScanReader(allocator, &short_reader),
+    );
+
+    var invalid_number_reader = std.Io.Reader.fixed("a.txt\t/x\tnot-a-size\t100\t0\t1\n");
+    try std.testing.expectError(
+        error.MalformedScanRecord,
+        buildFromScanReader(allocator, &invalid_number_reader),
+    );
 }
 
 test "parseScanReader round-trips filenames containing tab, newline, and backslash" {
