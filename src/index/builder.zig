@@ -63,12 +63,8 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, pa
     }
 
     for (scan_paths) |scan_path| {
-        const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch |err| {
-            // Keep building from the remaining shards, but say so — a silent
-            // skip here once turned a 4.1M-entry walk into an empty index.
-            std.debug.print("warning: cannot re-open scan shard {s}: {}\n", .{ scan_path, err });
-            continue;
-        };
+        const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch
+            return error.ScanShardUnavailable;
         defer file.close(runtime.io);
         // Worst-case escaped record: name ≤ 255*2 + path ≤ 4096*2 + numeric
         // fields — just under 9KB. 16KB gives comfortable headroom so a
@@ -228,6 +224,19 @@ test "buildFromScanReader rejects malformed records" {
     try std.testing.expectError(
         error.MalformedScanRecord,
         buildFromScanReader(allocator, &invalid_number_reader),
+    );
+}
+
+test "buildFromScanFiles rejects an unavailable shard even if it held no records" {
+    const missing_path = try std.testing.allocator.dupe(
+        u8,
+        "/nonexistent/zest-test/missing-scan-shard.tsv",
+    );
+    defer std.testing.allocator.free(missing_path);
+    const paths = [_][]u8{missing_path};
+    try std.testing.expectError(
+        error.ScanShardUnavailable,
+        buildFromScanFiles(std.testing.allocator, &paths, null),
     );
 }
 
