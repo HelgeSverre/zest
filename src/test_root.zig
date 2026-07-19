@@ -15,6 +15,7 @@ comptime {
     _ = @import("index/subtree.zig");
     _ = @import("index/search.zig");
     _ = @import("index/builder.zig");
+    _ = @import("index/startup.zig");
 
     // C ABI
     _ = @import("capi/zest_core.zig");

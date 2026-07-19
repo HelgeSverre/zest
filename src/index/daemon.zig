@@ -2,6 +2,7 @@ const std = @import("std");
 const builder = @import("builder.zig");
 const config = @import("../config/config.zig");
 const fsevents = @import("fsevents.zig");
+const startup = @import("startup.zig");
 const runtime = @import("../core/runtime.zig");
 const humanize = @import("../core/humanize.zig");
 
@@ -87,10 +88,55 @@ pub fn main(init: std.process.Init) !void {
     if (full_scan) {
         try runFullScan(allocator, root);
     } else {
-        // Default: full scan then watch for changes
-        try runFullScan(allocator, root);
-        try runWatchLoop(allocator, root);
+        try runDaemon(allocator, root);
     }
+}
+
+const DaemonStartup = struct {
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    watcher: *fsevents.FSEventsWatcher,
+    watcher_started: bool = false,
+
+    pub fn startWatcher(self: *DaemonStartup) !void {
+        try self.watcher.start();
+        self.watcher_started = true;
+    }
+
+    pub fn initialScan(self: *DaemonStartup) !void {
+        try runFullScan(self.allocator, self.root);
+    }
+
+    pub fn watchLoop(self: *DaemonStartup) !void {
+        try runWatchLoop(self.allocator, self.root);
+    }
+};
+
+/// Start observing before the initial scan so changes made during that scan
+/// remain queued for the run loop instead of falling into a startup gap.
+fn runDaemon(allocator: std.mem.Allocator, root: []const u8) !void {
+    std.debug.print("Starting FSEvents watcher on {s}...\n", .{root});
+
+    const app_support = try config.appSupportDir(allocator);
+    defer allocator.free(app_support);
+
+    // The callback reads this borrowed prefix for the watcher lifetime. It is
+    // cleared only after the stream has stopped and the watcher is released.
+    exclude_prefix = app_support;
+    defer exclude_prefix = null;
+
+    var watcher: fsevents.FSEventsWatcher = undefined;
+    try watcher.init(allocator, root, &.{app_support}, onFSEvent);
+    defer watcher.deinit();
+
+    var ops = DaemonStartup{
+        .allocator = allocator,
+        .root = root,
+        .watcher = &watcher,
+    };
+    defer if (ops.watcher_started) watcher.stop();
+
+    try startup.run(&ops);
 }
 
 fn plistPath(allocator: std.mem.Allocator) ![]u8 {
@@ -196,23 +242,6 @@ fn uninstall(allocator: std.mem.Allocator) !void {
 /// Start FSEvents watcher and run an indefinite loop that rebuilds the index
 /// when enough events accumulate or enough time has passed.
 fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
-    std.debug.print("Starting FSEvents watcher on {s}...\n", .{root});
-
-    // Leaked deliberately: exclude_prefix must outlive the watcher (daemon lifetime).
-    // The daemon writes scan temps + the index into the app-support dir; without an
-    // exclusion, every rebuild emits events that schedule the next rebuild — an endless
-    // full-rescan loop. IgnoreSelf covers this process's own writes; exclusion paths
-    // also cover other writers (e.g. a manually run `just index`).
-    const app_support = try config.appSupportDir(allocator);
-    exclude_prefix = app_support;
-
-    var watcher: fsevents.FSEventsWatcher = undefined;
-    try watcher.init(allocator, root, &.{app_support}, onFSEvent);
-    defer watcher.deinit();
-
-    watcher.start();
-    defer watcher.stop();
-
     std.debug.print("Watcher active. Polling for changes (rebuild every 30s or 1000+ events).\n", .{});
 
     var last_rebuild = runtime.nowNanos();

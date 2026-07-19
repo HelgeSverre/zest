@@ -108,13 +108,16 @@ pub const FSEventsWatcher = struct {
         }
     }
 
-    pub fn start(self: *FSEventsWatcher) void {
+    pub fn start(self: *FSEventsWatcher) !void {
         c.FSEventStreamScheduleWithRunLoop(
             self.stream,
             c.CFRunLoopGetCurrent(),
             c.kCFRunLoopDefaultMode,
         );
-        _ = c.FSEventStreamStart(self.stream);
+        if (c.FSEventStreamStart(self.stream) == 0) {
+            c.FSEventStreamInvalidate(self.stream);
+            return error.FSEventStreamStartFailed;
+        }
     }
 
     pub fn stop(self: *FSEventsWatcher) void {
