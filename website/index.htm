@@ -120,6 +120,18 @@
     .side-row .label { display: flex; gap: .65em; align-items: center; }
     .side-row small { color: #626860; font: inherit; }
     .side-gap { height: 1.5em; }
+    .pin-icon { color: var(--pin, #868e99); font-size: 1.1em; }
+    .category-tree { display: flex; flex-direction: column; gap: 2px; }
+    .cat-row { width: 100%; height: 26px; display: grid; grid-template-columns: 14px 8px 1fr auto; gap: 8px; align-items: center; padding: 0 8px 0 4px; color: #868e99; background: transparent; border: 0; border-radius: 6px; cursor: pointer; text-align: left; }
+    .cat-row:hover, .ext-row:hover { color: #e9ecef; background: #20252b; }
+    .cat-caret { color: #565e68; font-size: 9px; transition: transform .15s ease; }
+    .cat-row[aria-expanded="true"] .cat-caret { transform: rotate(90deg); }
+    .cat-label { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cat-count { color: #565e68; font-size: 11.5px; }
+    .ext-list[hidden] { display: none; }
+    .ext-row { height: 22px; display: grid; grid-template-columns: 6px 1fr auto; gap: 6px; align-items: center; padding: 0 8px 0 30px; color: #868e99; border-radius: 6px; font-size: 11.5px; }
+    .ext-row .dot { opacity: .55; width: 6px; height: 6px; }
+    .ext-count { color: #565e68; font-size: 11px; }
     .dot { width: .7em; height: .7em; flex: none; border-radius: 3px; background: #6e9be0; font-size: 0; }
     .dot.green { background: #46c26a; } .dot.purple { background: #e0a3ff; } .dot.red { background: #ff7b72; }
     .mock-table { min-width: 0; }
@@ -136,10 +148,14 @@
     .search-path { display: none; color: #565e68; font: 10px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     [data-mode="search"] .file-row { height: 48px; }
     [data-mode="search"] .search-path { display: block; }
-    .folder-icon { position: relative; display: inline-block; width: 15px; height: 11px; border: 1.3px solid #6e9be0; border-radius: 2px; color: transparent; font-size: 0; flex: none; }
-    .folder-icon::before { content: ""; position: absolute; left: 1px; top: -4px; width: 6px; height: 4px; border: 1.3px solid #6e9be0; border-bottom: 0; border-radius: 2px 2px 0 0; }
+    .folder-icon { --folder: #6e9be0; position: relative; display: inline-block; width: 15px; height: 11px; border: 1.3px solid var(--folder); border-radius: 2px; color: transparent; font-size: 0; flex: none; }
+    .folder-icon::before { content: ""; position: absolute; left: 1px; top: -4px; width: 6px; height: 4px; border: 1.3px solid var(--folder); border-bottom: 0; border-radius: 2px 2px 0 0; }
+    .folder-icon.orange { --folder: #ff9400; } .folder-icon.green { --folder: #33c759; } .folder-icon.purple { --folder: #b052de; } .folder-icon.pink { --folder: #ff2e54; }
     .file-icon { position: relative; display: inline-grid; place-items: center; width: 14px; height: 17px; border: 1.2px solid #9aa4b0; border-radius: 2px; color: #9aa4b0; font-size: 7px; flex: none; }
     .file-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: #565e68; }
+    .modified { display: flex; gap: .7em; align-items: baseline; white-space: nowrap; overflow: hidden; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .modified .iso { color: #868e99; font-size: 12px; }
+    .modified .ago { color: #565e68; font-size: 11px; white-space: nowrap; }
     .status-bar { height: 6.5%; min-height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 1.2em; border-top: 1px solid #272c33; background: #16191e; color: #565e68; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .status-live { color: #828981; }
     .status-live::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .7em; border-radius: 50%; background: #39b864; box-shadow: 0 0 10px #39b864; }
@@ -275,28 +291,41 @@
               <div class="side-row"><span class="label">▣ &nbsp; Desktop</span></div>
               <div class="side-row"><span class="label">▤ &nbsp; Documents</span></div>
               <div class="side-row"><span class="label">↓ &nbsp; Downloads</span></div>
-              <div class="side-row active"><span class="label">▱ &nbsp; Projects</span><small>14</small></div>
+              <div class="side-row active"><span class="label"><b class="pin-icon" style="--pin:#33c759">▱</b>Projects</span><small>14</small></div>
+              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#ff9400">▱</b>Archive</span></div>
+              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#b052de">▱</b>Design</span></div>
               <div class="side-gap"></div>
               <div class="side-title">Categories</div>
-              <div class="side-row"><span class="label"><i class="dot green">&nbsp;</i>Code</span><small>5</small></div>
-              <div class="side-row"><span class="label"><i class="dot purple">&nbsp;</i>Images</span><small>1</small></div>
-              <div class="side-row"><span class="label"><i class="dot red">&nbsp;</i>Video</span><small>1</small></div>
+              <div class="category-tree">
+                <button class="cat-row" type="button" aria-expanded="true"><span class="cat-caret">›</span><i class="dot green">&nbsp;</i><span class="cat-label">Code</span><span class="cat-count">2184</span></button>
+                <div class="ext-list">
+                  <div class="ext-row"><i class="dot green">&nbsp;</i><span>.swift</span><span class="ext-count">842</span></div>
+                  <div class="ext-row"><i class="dot green">&nbsp;</i><span>.js</span><span class="ext-count">516</span></div>
+                  <div class="ext-row"><i class="dot green">&nbsp;</i><span>.json</span><span class="ext-count">391</span></div>
+                </div>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot purple">&nbsp;</i><span class="cat-label">Images</span><span class="cat-count">840</span></button>
+                <div class="ext-list" hidden><div class="ext-row"><i class="dot purple">&nbsp;</i><span>.png</span><span class="ext-count">518</span></div><div class="ext-row"><i class="dot purple">&nbsp;</i><span>.jpg</span><span class="ext-count">241</span></div></div>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot" style="background:#c9a2ff">&nbsp;</i><span class="cat-label">Documents</span><span class="cat-count">312</span></button>
+                <div class="ext-list" hidden><div class="ext-row"><i class="dot" style="background:#c9a2ff">&nbsp;</i><span>.pdf</span><span class="ext-count">186</span></div><div class="ext-row"><i class="dot" style="background:#c9a2ff">&nbsp;</i><span>.pages</span><span class="ext-count">42</span></div></div>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot red">&nbsp;</i><span class="cat-label">Video</span><span class="cat-count">56</span></button>
+                <div class="ext-list" hidden><div class="ext-row"><i class="dot red">&nbsp;</i><span>.mov</span><span class="ext-count">31</span></div><div class="ext-row"><i class="dot red">&nbsp;</i><span>.mp4</span><span class="ext-count">19</span></div></div>
+              </div>
             </aside>
             <div class="mock-table">
               <div class="table-head"><span>Name ▲</span><span>Size</span><span>Modified</span><span>Kind</span><span>Ext</span></div>
               <div id="mock-rows">
-                <div class="file-row selected"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>website-redesign</strong></span><span class="file-meta">128 items</span><span class="file-meta">2026-08-11 &nbsp;·&nbsp; today</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-                <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>mobile-app</strong></span><span class="file-meta">96 items</span><span class="file-meta">2026-08-09 &nbsp;·&nbsp; 2d ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-                <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>design-system</strong></span><span class="file-meta">212 items</span><span class="file-meta">2026-08-06 &nbsp;·&nbsp; 5d ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-                <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>research-notes</strong></span><span class="file-meta">54 items</span><span class="file-meta">2026-08-04 &nbsp;·&nbsp; 1w ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-                <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>design-assets</strong></span><span class="file-meta">340 items</span><span class="file-meta">2026-07-28 &nbsp;·&nbsp; 2w ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-                <div class="file-row"><span class="file-name"><b class="file-icon">S</b><strong>app.swift</strong></span><span class="file-meta">8.4 KB</span><span class="file-meta">2026-08-11 &nbsp;·&nbsp; today</span><span class="kind"><i class="dot green">&nbsp;</i>Code</span><span>swift</span></div>
-                <div class="file-row"><span class="file-name"><b class="file-icon">M</b><strong>README.md</strong></span><span class="file-meta">3.6 KB</span><span class="file-meta">2026-08-08 &nbsp;·&nbsp; 3d ago</span><span class="kind"><i class="dot purple">&nbsp;</i>Text</span><span>md</span></div>
-                <div class="file-row"><span class="file-name"><b class="file-icon">{}</b><strong>package.json</strong></span><span class="file-meta">742 B</span><span class="file-meta">2026-08-07 &nbsp;·&nbsp; 4d ago</span><span class="kind"><i class="dot green">&nbsp;</i>Code</span><span>json</span></div>
+                <div class="file-row selected"><span class="file-name"><b class="folder-icon green">&nbsp;</b><strong>website-redesign</strong></span><span class="file-meta">2.4 GB</span><span class="modified"><span class="iso">2026-08-11</span><span class="ago">· today</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon orange">&nbsp;</b><strong>mobile-app</strong></span><span class="file-meta">1.1 GB</span><span class="modified"><span class="iso">2026-08-09</span><span class="ago">· 2d ago</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon purple">&nbsp;</b><strong>design-system</strong></span><span class="file-meta">482.7 MB</span><span class="modified"><span class="iso">2026-08-06</span><span class="ago">· 5d ago</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><strong>research-notes</strong></span><span class="file-meta">18.4 MB</span><span class="modified"><span class="iso">2026-08-04</span><span class="ago">· 7d ago</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon pink">&nbsp;</b><strong>design-assets</strong></span><span class="file-meta">6.8 GB</span><span class="modified"><span class="iso">2026-07-28</span><span class="ago">· 14d ago</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="file-icon">S</b><strong>app.swift</strong></span><span class="file-meta">8.4 KB</span><span class="modified"><span class="iso">2026-08-11</span><span class="ago">· today</span></span><span class="kind"><i class="dot green">&nbsp;</i>Code</span><span>swift</span></div>
+                <div class="file-row"><span class="file-name"><b class="file-icon">M</b><strong>README.md</strong></span><span class="file-meta">3.6 KB</span><span class="modified"><span class="iso">2026-08-08</span><span class="ago">· 3d ago</span></span><span class="kind"><i class="dot" style="background:#9aa4b0">&nbsp;</i>Text</span><span>md</span></div>
+                <div class="file-row"><span class="file-name"><b class="file-icon">{}</b><strong>package.json</strong></span><span class="file-meta">742 B</span><span class="modified"><span class="iso">2026-08-07</span><span class="ago">· 4d ago</span></span><span class="kind"><i class="dot green">&nbsp;</i>Code</span><span>json</span></div>
               </div>
             </div>
           </div>
-          <div class="status-bar"><span class="status-live">1,240,118 files indexed</span><span id="mock-status">website-redesign — Folder · 128 items</span><span>updated 2m ago</span></div>
+          <div class="status-bar"><span class="status-live">1&nbsp;240&nbsp;118 files indexed</span><span id="mock-status">website-redesign — Folder</span><span>updated 2m ago</span></div>
         </div>
       </div>
     </section>
@@ -359,11 +388,11 @@
     const rows = document.querySelector("#mock-rows");
     const browseRows = rows.innerHTML;
     const searchRows = `
-      <div class="file-row selected"><span class="file-name"><b class="file-icon">P</b><span class="name-stack"><strong>invoice-august.pdf</strong><small class="search-path">~/Documents/Invoices/2026</small></span></span><span class="file-meta">248 KB</span><span class="file-meta">2026-08-11 &nbsp;·&nbsp; today</span><span class="kind"><i class="dot purple">&nbsp;</i>Document</span><span>pdf</span></div>
-      <div class="file-row"><span class="file-name"><b class="file-icon">P</b><span class="name-stack"><strong>invoice-template.pages</strong><small class="search-path">~/Documents/Templates</small></span></span><span class="file-meta">1.2 MB</span><span class="file-meta">2026-08-08 &nbsp;·&nbsp; 3d ago</span><span class="kind"><i class="dot purple">&nbsp;</i>Document</span><span>pages</span></div>
-      <div class="file-row"><span class="file-name"><b class="file-icon">M</b><span class="name-stack"><strong>invoice-notes.md</strong><small class="search-path">~/Projects/research-notes</small></span></span><span class="file-meta">12 KB</span><span class="file-meta">2026-08-04 &nbsp;·&nbsp; 1w ago</span><span class="kind"><i class="dot green">&nbsp;</i>Text</span><span>md</span></div>
-      <div class="file-row"><span class="file-name"><b class="folder-icon">&nbsp;</b><span class="name-stack"><strong>Invoices</strong><small class="search-path">~/Documents</small></span></span><span class="file-meta">27 items</span><span class="file-meta">2026-07-28 &nbsp;·&nbsp; 2w ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
-      <div class="file-row"><span class="file-name"><b class="file-icon">C</b><span class="name-stack"><strong>invoice-archive.csv</strong><small class="search-path">~/Documents/Invoices</small></span></span><span class="file-meta">87 KB</span><span class="file-meta">2026-07-11 &nbsp;·&nbsp; 1mo ago</span><span class="kind"><i class="dot green">&nbsp;</i>Spreadsheet</span><span>csv</span></div>`;
+      <div class="file-row selected"><span class="file-name"><b class="file-icon">P</b><span class="name-stack"><strong>invoice-august.pdf</strong><small class="search-path">~/Documents/Invoices/2026</small></span></span><span class="file-meta">248.0 KB</span><span class="modified"><span class="iso">2026-08-11</span><span class="ago">· today</span></span><span class="kind"><i class="dot" style="background:#c9a2ff">&nbsp;</i>Document</span><span>pdf</span></div>
+      <div class="file-row"><span class="file-name"><b class="file-icon">P</b><span class="name-stack"><strong>invoice-template.pages</strong><small class="search-path">~/Documents/Templates</small></span></span><span class="file-meta">1.2 MB</span><span class="modified"><span class="iso">2026-08-08</span><span class="ago">· 3d ago</span></span><span class="kind"><i class="dot" style="background:#c9a2ff">&nbsp;</i>Document</span><span>pages</span></div>
+      <div class="file-row"><span class="file-name"><b class="file-icon">M</b><span class="name-stack"><strong>invoice-notes.md</strong><small class="search-path">~/Projects/research-notes</small></span></span><span class="file-meta">12.0 KB</span><span class="modified"><span class="iso">2026-08-04</span><span class="ago">· 7d ago</span></span><span class="kind"><i class="dot" style="background:#9aa4b0">&nbsp;</i>Text</span><span>md</span></div>
+      <div class="file-row"><span class="file-name"><b class="folder-icon orange">&nbsp;</b><span class="name-stack"><strong>Invoices</strong><small class="search-path">~/Documents</small></span></span><span class="file-meta">84.6 MB</span><span class="modified"><span class="iso">2026-07-28</span><span class="ago">· 14d ago</span></span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+      <div class="file-row"><span class="file-name"><b class="file-icon">C</b><span class="name-stack"><strong>invoice-archive.csv</strong><small class="search-path">~/Documents/Invoices</small></span></span><span class="file-meta">87.0 KB</span><span class="modified"><span class="iso">2026-07-11</span><span class="ago">· 1mo ago</span></span><span class="kind"><i class="dot" style="background:#3fc9a0">&nbsp;</i>Spreadsheet</span><span>csv</span></div>`;
     document.querySelectorAll("[data-screen]").forEach((button) => {
       button.addEventListener("click", () => {
         document.querySelectorAll("[data-screen]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
@@ -372,7 +401,15 @@
         rows.innerHTML = searching ? searchRows : browseRows;
         document.querySelector("#mock-search").textContent = searching ? "⌕   invoice  ext:pdf  size:>100kb" : "⌕   Search — try kind:folder, ext:pdf, size:>1mb";
         document.querySelector("#mock-count").textContent = searching ? "5 results   ↕ Name" : "14 items   ↕ Name";
-        document.querySelector("#mock-status").textContent = searching ? "5 matching items" : "website-redesign — Folder · 128 items";
+        document.querySelector("#mock-status").textContent = searching ? "invoice-august.pdf — Document · 248.0 KB" : "website-redesign — Folder";
+      });
+    });
+    document.querySelectorAll(".cat-row").forEach((category) => {
+      category.addEventListener("click", () => {
+        const extensions = category.nextElementSibling;
+        const expanded = category.getAttribute("aria-expanded") === "true";
+        category.setAttribute("aria-expanded", String(!expanded));
+        extensions.hidden = expanded;
       });
     });
   </script>
