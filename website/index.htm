@@ -8,14 +8,14 @@
   <title>Zest — Find anything on your Mac, instantly.</title>
   <style>
     :root {
-      --ink: #171813;
-      --muted: #686a5d;
-      --paper: #f4f2e9;
-      --paper-2: #e9e6da;
-      --lime: #dfff38;
-      --lime-soft: #efffa5;
-      --night: #11120f;
-      --line: rgba(23, 24, 19, .14);
+      --ink: #f1f3eb;
+      --muted: #83887d;
+      --paper: #0c0e0c;
+      --paper-2: #171a17;
+      --lime: #b7ff32;
+      --lime-soft: #1b2816;
+      --night: #0a0c0a;
+      --line: rgba(255, 255, 255, .1);
       --radius: 28px;
     }
 
@@ -25,8 +25,8 @@
       margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(circle at 12% 2%, rgba(223,255,56,.28), transparent 24rem),
-        var(--paper);
+        radial-gradient(circle at 50% -8%, rgba(183,255,50,.1), transparent 34rem),
+        linear-gradient(180deg, #101310 0, var(--paper) 44rem);
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
       -webkit-font-smoothing: antialiased;
     }
@@ -46,7 +46,7 @@
       display: grid; place-items: center;
       width: 34px; height: 34px;
       border-radius: 10px;
-      color: #11120f; background: var(--lime);
+      color: #10130f; background: var(--lime);
       box-shadow: inset 0 -2px 0 rgba(0,0,0,.12), 0 5px 15px rgba(104,126,0,.16);
       font-weight: 900;
     }
@@ -56,8 +56,8 @@
     .pill {
       display: inline-flex; align-items: center; justify-content: center;
       min-height: 44px; padding: 0 20px;
-      border-radius: 999px; border: 1px solid var(--ink);
-      text-decoration: none; font-weight: 700; color: var(--paper); background: var(--ink);
+      border-radius: 999px; border: 1px solid var(--lime);
+      text-decoration: none; font-weight: 700; color: #11140e; background: var(--lime);
       transition: transform .2s ease, box-shadow .2s ease;
     }
     .pill:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.14); }
@@ -66,7 +66,7 @@
     .eyebrow {
       display: inline-flex; gap: 9px; align-items: center;
       padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px;
-      background: rgba(255,255,255,.38); color: #535548;
+      background: rgba(255,255,255,.035); color: #a0a69a;
       font: 650 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace;
       letter-spacing: .04em; text-transform: uppercase;
     }
@@ -76,7 +76,7 @@
       font-size: clamp(58px, 8.4vw, 112px); line-height: .89; letter-spacing: -.072em;
       font-weight: 770;
     }
-    .spark { position: relative; white-space: nowrap; }
+    .spark { position: relative; z-index: 0; white-space: nowrap; }
     .spark::after {
       content: ""; position: absolute; z-index: -1;
       left: -2%; right: -2%; bottom: 4%; height: 31%;
@@ -85,26 +85,65 @@
     .lede { max-width: 650px; margin: 0 auto; color: var(--muted); font-size: clamp(18px, 2vw, 22px); line-height: 1.5; }
     .hero-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 30px; }
     .hero-actions .secondary { color: var(--ink); background: transparent; border-color: var(--line); }
-    .micro { margin-top: 15px; color: #7a7c70; font-size: 12px; }
+    .micro { margin-top: 15px; color: #696f65; font-size: 12px; }
 
     .product-stage { margin: 36px auto 100px; }
     .stage-head { display: flex; justify-content: space-between; align-items: end; margin: 0 2px 14px; }
     .stage-head p { margin: 0; color: var(--muted); font-size: 13px; }
     .screen-switch { display: inline-flex; padding: 4px; border-radius: 999px; background: var(--paper-2); border: 1px solid var(--line); }
     .screen-switch button { padding: 8px 14px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 650; }
-    .screen-switch button[aria-pressed="true"] { color: var(--ink); background: white; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .screen-switch button[aria-pressed="true"] { color: #12150f; background: var(--lime); box-shadow: 0 0 18px rgba(183,255,50,.12); }
     .screen {
       overflow: hidden; aspect-ratio: 1.62;
       border: 1px solid rgba(255,255,255,.18); border-radius: var(--radius);
       background: #0d0e0c; box-shadow: 0 38px 90px rgba(27,29,21,.23), 0 2px 0 rgba(255,255,255,.7) inset;
     }
-    .screen img { width: 100%; height: 100%; object-fit: cover; object-position: center 54%; transform: scale(1.105); display: block; transition: opacity .2s ease; }
+    .zest-window { height: 100%; color: #a9aea5; background: linear-gradient(135deg, #141714, #0e100f); font-size: clamp(8px, 1.08vw, 14px); text-align: left; }
+    .window-bar { height: 12.5%; display: grid; grid-template-columns: auto auto 1fr auto; gap: 2.4em; align-items: center; padding: 0 1.8em; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.018); }
+    .traffic { display: flex; gap: .55em; }
+    .traffic i { display: block; width: .9em; height: .9em; border-radius: 50%; background: #ff6259; }
+    .traffic i:nth-child(2) { background: #ffbd2e; }
+    .traffic i:nth-child(3) { background: #28c841; }
+    .crumbs { display: flex; gap: .7em; color: #747a71; white-space: nowrap; }
+    .crumbs strong { color: #d9dcd5; }
+    .mock-search { min-width: 0; padding: .75em 1.1em; border: 1px solid #30352f; border-radius: .72em; color: #6f756c; background: #0b0d0c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .saved { padding: .7em 1.1em; border: 1px solid #30352f; border-radius: .7em; color: #8e958b; white-space: nowrap; }
+    .scope-bar { height: 9%; display: flex; justify-content: space-between; align-items: center; padding: 0 1.8em; border-bottom: 1px solid var(--line); }
+    .scope-tabs { display: flex; gap: .35em; padding: .28em; border: 1px solid #30352f; border-radius: .65em; }
+    .scope-tabs span { padding: .5em .85em; border-radius: .45em; color: #71776e; }
+    .scope-tabs .active { color: #cbd0c8; background: #252925; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
+    .item-count { color: #686e66; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .window-main { display: grid; grid-template-columns: 20% 1fr; height: 72%; }
+    .mock-sidebar { padding: 2em 1.7em; border-right: 1px solid var(--line); }
+    .side-title, .table-head { color: #5e645c; font-weight: 750; text-transform: uppercase; letter-spacing: .11em; }
+    .side-title { margin-bottom: 1em; }
+    .side-row { display: flex; align-items: center; justify-content: space-between; padding: .68em .75em; border-radius: .55em; color: #858b82; }
+    .side-row.active { position: relative; color: #e3e7df; background: rgba(183,255,50,.13); }
+    .side-row.active::before { content: ""; position: absolute; left: -.75em; top: 20%; bottom: 20%; width: 3px; border-radius: 3px; background: var(--lime); }
+    .side-row .label { display: flex; gap: .65em; align-items: center; }
+    .side-row small { color: #626860; font: inherit; }
+    .side-gap { height: 1.5em; }
+    .dot { width: .65em; height: .65em; border-radius: 3px; background: #6daaff; }
+    .dot.green { background: #4cd47f; } .dot.purple { background: #cf83f1; } .dot.red { background: #ff7470; }
+    .mock-table { min-width: 0; }
+    .table-head, .file-row { display: grid; grid-template-columns: minmax(160px, 1.8fr) .55fr .72fr .55fr .34fr; align-items: center; }
+    .table-head { height: 8%; padding: 0 1.55em; border-bottom: 1px solid var(--line); font-size: .78em; }
+    .file-row { height: 8.25%; padding: 0 1.55em; color: #8d938a; }
+    .file-row.selected { position: relative; color: #e6e9e2; background: linear-gradient(90deg, rgba(183,255,50,.18), rgba(183,255,50,.1)); border-radius: .55em; margin: 0 .6em; padding-inline: .95em; }
+    .file-row.selected::before { content: ""; position: absolute; left: 0; top: 15%; bottom: 15%; width: 3px; border-radius: 3px; background: var(--lime); }
+    .file-name, .kind { display: flex; gap: .7em; align-items: center; min-width: 0; }
+    .file-name strong { color: #d7dbd4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .folder-icon { color: #65a7ff; font-size: 1.1em; }
+    .file-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: #747a72; }
+    .status-bar { height: 6.5%; display: flex; align-items: center; justify-content: space-between; padding: 0 1.8em; border-top: 1px solid var(--line); color: #5f655e; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .status-live { color: #828981; }
+    .status-live::before { content: ""; display: inline-block; width: .55em; height: .55em; margin-right: .7em; border-radius: 50%; background: #39b864; box-shadow: 0 0 10px #39b864; }
 
     .proof {
       display: grid; grid-template-columns: 1.22fr .78fr; gap: 18px;
       margin-bottom: 100px;
     }
-    .panel { border: 1px solid var(--line); border-radius: var(--radius); padding: clamp(28px, 5vw, 56px); background: rgba(255,255,255,.36); }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); padding: clamp(28px, 5vw, 56px); background: rgba(255,255,255,.025); }
     .panel.dark { color: #f5f5ee; background: var(--night); border-color: var(--night); }
     .kicker { color: #77796d; font: 650 12px ui-monospace, "SFMono-Regular", Menlo, monospace; text-transform: uppercase; letter-spacing: .09em; }
     .dark .kicker { color: #a9ad9b; }
@@ -121,10 +160,10 @@
     .features-head p { max-width: 410px; color: var(--muted); line-height: 1.55; }
     .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
     .feature {
-      min-height: 250px; padding: 28px; border-radius: 22px; border: 1px solid var(--line); background: rgba(255,255,255,.28);
+      min-height: 250px; padding: 28px; border-radius: 22px; border: 1px solid var(--line); background: rgba(255,255,255,.025);
       display: flex; flex-direction: column; justify-content: space-between;
     }
-    .feature:nth-child(2) { background: var(--lime-soft); }
+    .feature:nth-child(2) { background: var(--lime-soft); border-color: rgba(183,255,50,.22); }
     .feature-no { font: 650 12px ui-monospace, "SFMono-Regular", Menlo, monospace; color: #77796d; }
     .feature h3 { margin: 42px 0 8px; font-size: 27px; letter-spacing: -.035em; }
     .feature p { margin: 0; color: var(--muted); line-height: 1.5; }
@@ -140,7 +179,7 @@
     .architecture h2 { margin-bottom: 16px; }
     .architecture p { color: var(--muted); line-height: 1.6; }
     .stack { display: grid; gap: 10px; }
-    .stack-row { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 14px; padding: 18px; border-radius: 15px; background: rgba(255,255,255,.45); border: 1px solid var(--line); }
+    .stack-row { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 14px; padding: 18px; border-radius: 15px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
     .stack-row strong { font: 700 12px ui-monospace, "SFMono-Regular", Menlo, monospace; text-transform: uppercase; }
     .stack-row span { color: var(--muted); font-size: 14px; }
 
@@ -157,6 +196,9 @@
       .feature { min-height: 210px; }
       .features-head { display: block; }
       .screen { border-radius: 18px; }
+      .window-main { grid-template-columns: 25% 1fr; }
+      .table-head, .file-row { grid-template-columns: minmax(105px, 1.5fr) .55fr .7fr; }
+      .table-head > :nth-child(n+4), .file-row > :nth-child(n+4) { display: none; }
     }
     @media (max-width: 520px) {
       .shell { width: min(100% - 24px, 1180px); }
@@ -165,6 +207,11 @@
       .stage-head p { display: none; }
       .product-stage { margin-bottom: 72px; }
       .panel { border-radius: 20px; }
+      .window-bar { grid-template-columns: auto 1fr auto; }
+      .crumbs { display: none; }
+      .mock-sidebar { display: none; }
+      .window-main { grid-template-columns: 1fr; }
+      .screen { aspect-ratio: 1.08; }
       footer { flex-direction: column; }
     }
     @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
@@ -204,7 +251,47 @@
         </div>
       </div>
       <div class="screen">
-        <img id="product-shot" src="../prototypes/v2c-dark-lime.png" alt="Zest showing a fast, native file browser with pinned folders and file categories">
+        <div class="zest-window" id="zest-mockup" data-mode="browse" aria-label="Interactive HTML recreation of the Zest file browser">
+          <div class="window-bar">
+            <div class="traffic" aria-hidden="true"><i>&nbsp;</i><i>&nbsp;</i><i>&nbsp;</i></div>
+            <div class="crumbs"><span>‹</span><span>↑</span><span>/</span><span>Users</span><span>/</span><span>helge</span><span>/</span><strong>code</strong></div>
+            <div class="mock-search" id="mock-search">⌕ &nbsp; Search — try kind:folder, ext:pdf, size:&gt;1mb</div>
+            <div class="saved">▽ &nbsp; Saved⌄</div>
+          </div>
+          <div class="scope-bar">
+            <div class="scope-tabs"><span class="active">▱ &nbsp; This folder</span><span>▱ &nbsp; Subfolders</span><span>◎ &nbsp; Everywhere</span></div>
+            <div class="item-count" id="mock-count">14 items &nbsp; ↕ Name</div>
+          </div>
+          <div class="window-main">
+            <aside class="mock-sidebar">
+              <div class="side-title">Pinned</div>
+              <div class="side-row"><span class="label">⌂ &nbsp; Home</span></div>
+              <div class="side-row"><span class="label">▣ &nbsp; Desktop</span></div>
+              <div class="side-row"><span class="label">▤ &nbsp; Documents</span></div>
+              <div class="side-row"><span class="label">↓ &nbsp; Downloads</span></div>
+              <div class="side-row active"><span class="label">▱ &nbsp; code</span><small>14</small></div>
+              <div class="side-gap"></div>
+              <div class="side-title">Categories</div>
+              <div class="side-row"><span class="label"><i class="dot green">&nbsp;</i>Code</span><small>5</small></div>
+              <div class="side-row"><span class="label"><i class="dot purple">&nbsp;</i>Images</span><small>1</small></div>
+              <div class="side-row"><span class="label"><i class="dot red">&nbsp;</i>Video</span><small>1</small></div>
+            </aside>
+            <div class="mock-table">
+              <div class="table-head"><span>Name ▲</span><span>Size</span><span>Modified</span><span>Kind</span><span>Ext</span></div>
+              <div id="mock-rows">
+                <div class="file-row selected"><span class="file-name"><b class="folder-icon">▱</b><strong>crescat-app</strong></span><span class="file-meta">128 items</span><span class="file-meta">1y ago</span><span class="kind"><i class="dot">&nbsp;</i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">▱</b><strong>kassalapp-android</strong></span><span class="file-meta">96 items</span><span class="file-meta">11mo ago</span><span class="kind"><i class="dot"></i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">▱</b><strong>sema-lisp</strong></span><span class="file-meta">212 items</span><span class="file-meta">1y ago</span><span class="kind"><i class="dot"></i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">▱</b><strong>harness-eval</strong></span><span class="file-meta">54 items</span><span class="file-meta">1mo ago</span><span class="kind"><i class="dot"></i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">▱</b><strong>zig-finder</strong></span><span class="file-meta">42 items</span><span class="file-meta">today</span><span class="kind"><i class="dot"></i>Folder</span><span>—</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">◇</b><strong>build.zig</strong></span><span class="file-meta">1.8 KB</span><span class="file-meta">5d ago</span><span class="kind"><i class="dot green"></i>Code</span><span>zig</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">▤</b><strong>README.md</strong></span><span class="file-meta">3.6 KB</span><span class="file-meta">8mo ago</span><span class="kind"><i class="dot purple"></i>Text</span><span>md</span></div>
+                <div class="file-row"><span class="file-name"><b class="folder-icon">◇</b><strong>justfile</strong></span><span class="file-meta">742 B</span><span class="file-meta">4d ago</span><span class="kind"><i class="dot green"></i>Code</span><span>—</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="status-bar"><span class="status-live">4,376,244 files indexed</span><span id="mock-status">crescat-app — Folder · 128 items</span><span>updated 2m ago</span></div>
+        </div>
       </div>
     </section>
 
@@ -261,17 +348,24 @@
   <footer class="shell"><span>© 2026 Zest · MIT License</span><span>Swift surface / Zig engine / macOS native</span></footer>
 
   <script>
-    const screens = {
-      browse: { src: "../prototypes/v2c-dark-lime.png", alt: "Zest browsing a folder with pinned locations and file categories" },
-      search: { src: "../prototypes/v2b-search-light.png", alt: "Zest showing instant filtered search results across indexed files" }
-    };
-    const shot = document.querySelector("#product-shot");
+    const mockup = document.querySelector("#zest-mockup");
+    const rows = document.querySelector("#mock-rows");
+    const browseRows = rows.innerHTML;
+    const searchRows = `
+      <div class="file-row selected"><span class="file-name"><b class="folder-icon">▤</b><strong>filesystem-indexing.md</strong></span><span class="file-meta">18 KB</span><span class="file-meta">today</span><span class="kind"><i class="dot green"></i>Text</span><span>md</span></div>
+      <div class="file-row"><span class="file-name"><b class="folder-icon">◇</b><strong>indexer_main.zig</strong></span><span class="file-meta">4.2 KB</span><span class="file-meta">today</span><span class="kind"><i class="dot green"></i>Code</span><span>zig</span></div>
+      <div class="file-row"><span class="file-name"><b class="folder-icon">◇</b><strong>bulk_scan.zig</strong></span><span class="file-meta">19 KB</span><span class="file-meta">today</span><span class="kind"><i class="dot green"></i>Code</span><span>zig</span></div>
+      <div class="file-row"><span class="file-name"><b class="folder-icon">▱</b><strong>SearchIndex</strong></span><span class="file-meta">27 items</span><span class="file-meta">2d ago</span><span class="kind"><i class="dot"></i>Folder</span><span>—</span></div>
+      <div class="file-row"><span class="file-name"><b class="folder-icon">▤</b><strong>index-benchmark.txt</strong></span><span class="file-meta">8.7 KB</span><span class="file-meta">4d ago</span><span class="kind"><i class="dot purple"></i>Text</span><span>txt</span></div>`;
     document.querySelectorAll("[data-screen]").forEach((button) => {
       button.addEventListener("click", () => {
         document.querySelectorAll("[data-screen]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
-        const next = screens[button.dataset.screen];
-        shot.style.opacity = "0";
-        window.setTimeout(() => { shot.src = next.src; shot.alt = next.alt; shot.style.opacity = "1"; }, 130);
+        const searching = button.dataset.screen === "search";
+        mockup.dataset.mode = searching ? "search" : "browse";
+        rows.innerHTML = searching ? searchRows : browseRows;
+        document.querySelector("#mock-search").textContent = searching ? "⌕   index  ext:zig  size:>1kb" : "⌕   Search — try kind:folder, ext:pdf, size:>1mb";
+        document.querySelector("#mock-count").textContent = searching ? "5 results   ↕ Name" : "14 items   ↕ Name";
+        document.querySelector("#mock-status").textContent = searching ? "5 matches in 3.4 ms" : "crescat-app — Folder · 128 items";
       });
     });
   </script>
