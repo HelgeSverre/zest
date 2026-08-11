@@ -97,7 +97,7 @@ block-beta
 |--------|---------|
 | **Names** | Two copies of concatenated filenames — original case for display, lowercase for search. Offsets and lengths arrays allow O(1) lookup by entry index. |
 | **Paths** | Parent directory IDs pointing into a deduplicated directory table. Most files in a directory share one entry, so path storage is compact. |
-| **Metadata** | Parallel arrays of sizes, modification times, file kinds (file/dir/symlink), and categories. |
+| **Metadata** | Parallel arrays of allocated sizes (size on disk), modification times, file kinds (file/dir/symlink), and categories. |
 | **Bitmaps** | One sorted array of entry indices per file category (images, code, documents, etc.). Used for fast intersection with search results. |
 
 ### How search works

@@ -9,8 +9,10 @@ pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 ///     the bump forces a reindex so folders never show stale zeros).
 /// v5: category semantics add `.sema` to Code (layout unchanged; restart the
 ///     daemon and run `just index` so existing rows receive the new category).
+/// v6: sizes use allocated bytes (size on disk) instead of logical data length
+///     (layout unchanged; the bump forces a reindex with the new semantics).
 /// Reader's version check rejects old indexes; version bumps require a rebuild before use.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;
@@ -368,8 +370,8 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     try writer.writeAll(dir_blob.items);
 
     // === Recursive folder sizes ===
-    // Files keep their scanned size; directory entries get their subtree
-    // total (the scanner writes 0 for dirs — DATALENGTH is absent for them).
+    // Files keep their scanned allocated size; directory entries get their
+    // subtree total (the scanner writes 0 for dirs — ALLOCSIZE is absent for them).
     // Local per-dir sums roll up child→parent in path-length-descending
     // order: a child's path is strictly longer than its parent's, so length
     // order is a valid bottom-up topological order.

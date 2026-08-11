@@ -13,7 +13,7 @@ final class FileItem {
   /// Containing directory (for the search-mode path line).
   let dirPath: String
   let isDirectory: Bool
-  /// Raw byte size; formatted lazily into `sizeText`.
+  /// Allocated bytes (size on disk); formatted lazily into `sizeText`.
   let size: UInt64
   /// Unix-seconds mtime; formatted lazily into `isoDate`/`agoText`.
   let mtime: Int64
@@ -58,7 +58,7 @@ final class FileItem {
   }
 
   /// Hand-rolled size formatter: avoids ByteCountFormatter overhead and uses
-  /// SI (1000-based) units consistent with Finder's "file size" display.
+  /// SI (1000-based) units consistent with Finder's size display.
   static func formatSize(_ bytes: UInt64) -> String {
     let units = ["B", "KB", "MB", "GB", "TB"]
     var value = Double(bytes)

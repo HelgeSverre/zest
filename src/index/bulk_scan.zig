@@ -2,7 +2,7 @@
 //!
 //! Replaces the single-threaded per-file `stat` walk. A fixed pool of worker
 //! threads pulls directories off a shared queue; each worker fetches a whole
-//! directory's metadata (name + type + size + mtime) in batched
+//! directory's metadata (name + type + allocated size + mtime) in batched
 //! `getattrlistbulk` syscalls and streams TSV entries into its OWN temp file.
 //! `buildIndex` then reads all the temp files back (order is irrelevant to the
 //! columnar builder).
@@ -21,27 +21,33 @@ const config = @import("../config/config.zig");
 const runtime = @import("../core/runtime.zig");
 const format = @import("format.zig");
 
-/// Number of scan worker threads. 8 was the measured sweet spot (x4=5.2x,
-/// x8=6.6x) on a 12-core machine; more gave diminishing returns.
+/// Number of scan worker threads. 8 remains the measured sweet spot on a
+/// 12-core M-series machine; 12 workers overloaded virtual/network filesystem
+/// providers and regressed a warm home-directory scan from 22s to 57s.
 pub const max_scan_threads: usize = 8;
 
 // --- getattrlistbulk ABI ---
 // Per-entry layout (with FSOPT_PACK_INVAL_ATTRS) verified empirically against
 // files of known size: +0 u32 entry length; +4 attribute_set_t RETURNED_ATTRS
 // (20 bytes); +24 attrreference NAME; +32 u32 OBJTYPE; +36 timespec MODTIME;
-// +52 u64 file DATALENGTH (present only when its returned-attrs bit is set).
+// +52 u64 file ALLOCSIZE (present only when its returned-attrs bit is set).
 
 const ATTR_BIT_MAP_COUNT: u16 = 5;
 const ATTR_CMN_RETURNED_ATTRS: u32 = 0x80000000;
 const ATTR_CMN_NAME: u32 = 0x00000001;
 const ATTR_CMN_OBJTYPE: u32 = 0x00000008;
 const ATTR_CMN_MODTIME: u32 = 0x00000400;
-const ATTR_FILE_DATALENGTH: u32 = 0x00000200;
+const ATTR_FILE_ALLOCSIZE: u32 = 0x00000004;
 const FSOPT_PACK_INVAL_ATTRS: u64 = 0x00000008;
 
 const VREG: u32 = 1; // regular file (fsobj_type_t)
 const VDIR: u32 = 2; // directory
 const VLNK: u32 = 5; // symlink
+
+fn allocatedSize(entry: []const u8, returned_fileattrs: u32) u64 {
+    if (returned_fileattrs & ATTR_FILE_ALLOCSIZE == 0 or entry.len < 60) return 0;
+    return std.mem.readInt(u64, entry[52..][0..8], .little);
+}
 
 const attrlist_t = extern struct {
     bitmapcount: u16,
@@ -61,6 +67,17 @@ extern "c" fn getattrlistbulk(
     options: u64,
 ) c_int;
 
+extern "c" fn ftruncate(fd: c_int, length: i64) c_int;
+extern "c" fn setiopolicy_np(policy_type: c_int, scope: c_int, policy: c_int) c_int;
+
+// Public Darwin thread policy from <sys/resource.h>. Metadata enumeration of a
+// File Provider tree may otherwise materialize an evicted file just to answer
+// getattrlistbulk. Opting out makes that entry/directory fail with EDEADLK,
+// which the live-filesystem policy below treats as temporarily unavailable.
+const IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES: c_int = 3;
+const IOPOL_SCOPE_THREAD: c_int = 1;
+const IOPOL_MATERIALIZE_DATALESS_FILES_OFF: c_int = 1;
+
 // --- shared work queue ---
 
 const Shared = struct {
@@ -79,8 +96,14 @@ const Shared = struct {
 const Worker = struct {
     shared: *Shared,
     writer: *std.Io.Writer,
+    attr_buf: []u8,
     local_entries: u64 = 0,
 };
+
+// A three-run warm-cache A/B on a 3.06M-entry APFS corpus selected 128 KiB:
+// median 10.3s versus 11.3s at 2 MiB. Keeping the buffer on the heap avoids
+// consuming worker thread stacks and makes its lifetime explicit.
+const attr_buffer_size = 128 * 1024;
 
 /// Walk `root` in parallel and write TSV entries to `support_dir`/scan.tmp.{0..N}.
 pub const ScanResult = struct {
@@ -115,19 +138,29 @@ pub fn parallelScan(
     const fwriters = try allocator.alloc(std.Io.File.Writer, n);
     defer allocator.free(fwriters);
     const wbufs = try allocator.alloc([]u8, n);
+    var wbuf_count: usize = 0;
     defer {
-        for (wbufs) |b| allocator.free(b);
+        for (wbufs[0..wbuf_count]) |b| allocator.free(b);
         allocator.free(wbufs);
     }
     const workers = try allocator.alloc(Worker, n);
     defer allocator.free(workers);
+    const attr_bufs = try allocator.alloc([]u8, n);
+    var attr_buf_count: usize = 0;
+    defer {
+        for (attr_bufs[0..attr_buf_count]) |b| allocator.free(b);
+        allocator.free(attr_bufs);
+    }
 
     for (0..n) |i| {
         paths[i] = try std.fmt.allocPrint(allocator, "{s}/scan.tmp.{d}", .{ support_dir, i });
         files[i] = try std.Io.Dir.createFileAbsolute(io, paths[i], .{});
         wbufs[i] = try allocator.alloc(u8, 64 * 1024);
+        wbuf_count += 1;
+        attr_bufs[i] = try allocator.alloc(u8, attr_buffer_size);
+        attr_buf_count += 1;
         fwriters[i] = files[i].writer(io, wbufs[i]);
-        workers[i] = .{ .shared = &sh, .writer = &fwriters[i].interface };
+        workers[i] = .{ .shared = &sh, .writer = &fwriters[i].interface, .attr_buf = attr_bufs[i] };
     }
 
     const threads = try allocator.alloc(std.Thread, n);
@@ -151,7 +184,10 @@ pub fn parallelScan(
 
     // Flush and close each worker's temp file.
     for (0..n) |i| {
-        fwriters[i].interface.flush() catch sh.scan_failed.store(true, .monotonic);
+        fwriters[i].interface.flush() catch |err| {
+            std.debug.print("error: cannot flush scan shard {s}: {}\n", .{ paths[i], err });
+            sh.scan_failed.store(true, .monotonic);
+        };
         files[i].close(io);
     }
 
@@ -169,6 +205,13 @@ pub fn parallelScan(
 fn workerMain(w: *Worker) void {
     const sh = w.shared;
     const io = runtime.io;
+    if (setiopolicy_np(
+        IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
+        IOPOL_SCOPE_THREAD,
+        IOPOL_MATERIALIZE_DATALESS_FILES_OFF,
+    ) != 0) {
+        std.debug.print("warning: could not disable dataless-file materialization for scan worker\n", .{});
+    }
     while (true) {
         sh.mutex.lockUncancelable(io);
         while (sh.queue.items.len == 0 and !sh.done) sh.cond.waitUncancelable(io, &sh.mutex);
@@ -191,7 +234,8 @@ fn workerMain(w: *Worker) void {
         for (subdirs.items) |sd| {
             if (sh.queue.append(sh.alloc, sd)) {
                 appended += 1;
-            } else |_| {
+            } else |err| {
+                std.debug.print("error: cannot queue directory {s}: {}\n", .{ sd, err });
                 sh.scan_failed.store(true, .monotonic);
                 sh.alloc.free(sd);
             }
@@ -216,8 +260,16 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
     const io = runtime.io;
     var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
         switch (err) {
-            error.AccessDenied, error.FileNotFound, error.NotDir => {},
-            else => w.shared.scan_failed.store(true, .monotonic),
+            error.AccessDenied, error.PermissionDenied, error.FileNotFound, error.NotDir => {},
+            // Network and virtual filesystems (notably OrbStack's NFS mount)
+            // can report ESTALE/ENOENT as Unexpected when an entry disappears
+            // after it was queued. A live filesystem scan is inherently racy;
+            // skip that directory just as we do FileNotFound.
+            error.Unexpected => std.debug.print("warning: directory disappeared while scanning: {s}\n", .{path}),
+            else => {
+                std.debug.print("error: cannot scan directory {s}: {}\n", .{ path, err });
+                w.shared.scan_failed.store(true, .monotonic);
+            },
         }
         return;
     };
@@ -230,7 +282,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
         .commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_OBJTYPE | ATTR_CMN_MODTIME,
         .volattr = 0,
         .dirattr = 0,
-        .fileattr = ATTR_FILE_DATALENGTH,
+        .fileattr = ATTR_FILE_ALLOCSIZE,
         .forkattr = 0,
     };
 
@@ -238,16 +290,33 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
     // so compute esc_path once rather than re-escaping it for every entry.
     var esc_path_buf: [4096 * 2]u8 = undefined;
     const esc_path = format.escapeTsv(&esc_path_buf, path) orelse {
+        std.debug.print("error: directory path is too long to encode: {s}\n", .{path});
         w.shared.scan_failed.store(true, .monotonic);
         return;
     };
 
-    var buf: [128 * 1024]u8 align(8) = undefined;
+    // Kernel time in getattrlistbulk dominates the walk, but oversized batches
+    // add cache pressure. Keep this synchronized with the measured constant.
+    const buf = w.attr_buf;
     while (true) {
-        const rc = getattrlistbulk(fd, &alist, &buf, buf.len, FSOPT_PACK_INVAL_ATTRS);
+        const rc = getattrlistbulk(fd, &alist, buf.ptr, buf.len, FSOPT_PACK_INVAL_ATTRS);
         if (rc < 0) {
-            // APFS returns ERANGE when a call exactly fills the buffer; retry.
-            if (std.posix.errno(rc) == .RANGE) continue;
+            const errno = std.posix.errno(rc);
+            // ERANGE means not even one record fit. Retrying the same buffer
+            // can loop forever; 128 KiB is already far larger than a legal
+            // Darwin directory record, so treat it as malformed/unsupported.
+            if (errno == .RANGE) {
+                std.debug.print("error: bulk record exceeds {d}-byte buffer for {s}\n", .{ buf.len, path });
+                w.shared.scan_failed.store(true, .monotonic);
+                return;
+            }
+            // Live virtual/network filesystems can disappear or time out while
+            // a scan is in progress. Keep the rest of the index usable.
+            if (errno == .NOENT or errno == .STALE or errno == .TIMEDOUT or errno == .DEADLK) {
+                std.debug.print("warning: directory became unavailable while scanning {s}: {}\n", .{ path, errno });
+                return;
+            }
+            std.debug.print("error: getattrlistbulk failed for {s}: {}\n", .{ path, errno });
             w.shared.scan_failed.store(true, .monotonic);
             return;
         }
@@ -262,6 +331,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // declared length — a kernel/FS layout change must stop the walk,
             // not read stack garbage into a filename.
             if (off + 4 > buf.len) {
+                std.debug.print("error: malformed bulk record header for {s}\n", .{path});
                 w.shared.scan_failed.store(true, .monotonic);
                 return;
             }
@@ -269,22 +339,20 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             const entry_len = std.mem.readInt(u32, entry[0..4], .little);
             // 44 covers the fixed reads through MODTIME (entry[36..44]).
             if (entry_len < 44 or off + entry_len > buf.len) {
+                std.debug.print("error: malformed bulk record length for {s}: {d}\n", .{ path, entry_len });
                 w.shared.scan_failed.store(true, .monotonic);
                 return;
             }
 
             // Fixed common-group layout (RETURNED_ATTRS always returns
-            // NAME/OBJTYPE/MODTIME). DATALENGTH (file group) is present only when
+            // NAME/OBJTYPE/MODTIME). ALLOCSIZE (file group) is present only when
             // its returned-attrs bit is set — absent for directories.
             const ret_fileattr = std.mem.readInt(u32, entry[16..][0..4], .little);
             const name_dataoff = std.mem.readInt(i32, entry[24..][0..4], .little);
             const name_len = std.mem.readInt(u32, entry[28..][0..4], .little);
             const objtype = std.mem.readInt(u32, entry[32..][0..4], .little);
             const mtime = std.mem.readInt(i64, entry[36..][0..8], .little); // timespec.tv_sec
-            const size: u64 = if (ret_fileattr & ATTR_FILE_DATALENGTH != 0 and entry_len >= 60)
-                std.mem.readInt(u64, entry[52..][0..8], .little)
-            else
-                0;
+            const size = allocatedSize(entry[0..entry_len], ret_fileattr);
 
             off += entry_len;
 
@@ -292,11 +360,13 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // validate the resulting slice lies inside this entry before reading.
             const name_field_base: i64 = 24 + @as(i64, name_dataoff);
             if (name_field_base < 0) {
+                std.debug.print("error: malformed bulk name offset for {s}\n", .{path});
                 w.shared.scan_failed.store(true, .monotonic);
                 return;
             }
             const name_start: usize = @intCast(name_field_base);
             if (name_start + name_len > entry_len) {
+                std.debug.print("error: malformed bulk name length for {s}\n", .{path});
                 w.shared.scan_failed.store(true, .monotonic);
                 return;
             }
@@ -314,7 +384,8 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
 
             if (kind == .directory) {
                 if (path.len + 1 + name.len <= 4096) {
-                    const cp = std.fmt.allocPrint(alloc, "{s}/{s}", .{ path, name }) catch {
+                    const cp = std.fmt.allocPrint(alloc, "{s}/{s}", .{ path, name }) catch |err| {
+                        std.debug.print("error: cannot allocate directory path under {s}: {}\n", .{ path, err });
                         w.shared.scan_failed.store(true, .monotonic);
                         continue;
                     };
@@ -322,7 +393,8 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
                         alloc.free(cp);
                         continue;
                     }
-                    subdirs.append(alloc, cp) catch {
+                    subdirs.append(alloc, cp) catch |err| {
+                        std.debug.print("error: cannot queue discovered directory {s}: {}\n", .{ cp, err });
                         w.shared.scan_failed.store(true, .monotonic);
                         alloc.free(cp);
                     };
@@ -337,19 +409,80 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             // Name buffer is sized at 2× NAME_MAX (255 bytes).
             var esc_name_buf: [255 * 2]u8 = undefined;
             const esc_name = format.escapeTsv(&esc_name_buf, name) orelse {
+                std.debug.print("error: filename is too long to encode under {s} ({d} bytes)\n", .{ path, name.len });
                 w.shared.scan_failed.store(true, .monotonic);
                 continue;
             };
 
             w.writer.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\n", .{
                 esc_name, esc_path, size, mtime, @intFromEnum(kind), @intFromEnum(cat),
-            }) catch {
+            }) catch |err| {
                 // Don't count an entry we failed to write — the old code bumped
                 // local_entries unconditionally, overstating the index size.
+                std.debug.print("error: cannot write scan shard while scanning {s}: {}\n", .{ path, err });
                 w.shared.scan_failed.store(true, .monotonic);
-                continue;
+                return;
             };
             w.local_entries += 1;
         }
     }
 }
+
+test "scanner reads allocated size rather than logical data length" {
+    var entry = [_]u8{0} ** 60;
+    std.mem.writeInt(u64, entry[52..60], 12_396_843_008, .little);
+
+    try std.testing.expectEqual(
+        @as(u64, 12_396_843_008),
+        allocatedSize(&entry, ATTR_FILE_ALLOCSIZE),
+    );
+    try std.testing.expectEqual(
+        @as(u64, 0),
+        allocatedSize(&entry, ATTR_FILE_DATALENGTH_FOR_TEST),
+    );
+    try std.testing.expectEqual(@as(u64, 0), allocatedSize(entry[0..59], ATTR_FILE_ALLOCSIZE));
+}
+
+test "parallel scanner reports sparse file allocation" {
+    const io = runtime.io;
+    const allocator = std.testing.allocator;
+    const logical_size: i64 = 1024 * 1024 * 1024;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var data_dir = try tmp.dir.createDirPathOpen(io, "data", .{});
+    defer data_dir.close(io);
+    var support_dir = try tmp.dir.createDirPathOpen(io, "support", .{});
+    defer support_dir.close(io);
+
+    var sparse = try data_dir.createFile(io, "sparse.img", .{});
+    const truncate_result = ftruncate(@intCast(sparse.handle), logical_size);
+    sparse.close(io);
+    try std.testing.expectEqual(@as(c_int, 0), truncate_result);
+
+    const root = try tmp.dir.realPathFileAlloc(io, "data", allocator);
+    defer allocator.free(root);
+    const support = try tmp.dir.realPathFileAlloc(io, "support", allocator);
+    defer allocator.free(support);
+
+    const scan = try parallelScan(allocator, root, support, 1);
+    defer {
+        for (scan.paths) |path| allocator.free(path);
+        allocator.free(scan.paths);
+    }
+    try std.testing.expect(scan.complete);
+    try std.testing.expectEqual(@as(u64, 1), scan.entry_count);
+
+    const shard = try runtime.readFileAlloc(allocator, scan.paths[0], .limited(4096));
+    defer allocator.free(shard);
+    var fields = std.mem.splitScalar(u8, std.mem.trimEnd(u8, shard, "\n"), '\t');
+    _ = fields.next() orelse return error.MalformedScanRecord;
+    _ = fields.next() orelse return error.MalformedScanRecord;
+    const allocated = try std.fmt.parseInt(u64, fields.next() orelse return error.MalformedScanRecord, 10);
+    try std.testing.expect(allocated < @as(u64, @intCast(logical_size)));
+}
+
+// The logical-length bit is deliberately test-only: production requests only
+// ALLOCSIZE, and the parser must not mistake a DATALENGTH-only response for it.
+const ATTR_FILE_DATALENGTH_FOR_TEST: u32 = 0x00000200;

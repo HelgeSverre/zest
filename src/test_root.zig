@@ -10,6 +10,7 @@ comptime {
 
     // Index
     _ = @import("index/format.zig");
+    _ = @import("index/bulk_scan.zig");
     _ = @import("index/bitmap.zig");
     _ = @import("index/reader.zig");
     _ = @import("index/subtree.zig");
