@@ -100,14 +100,22 @@
     }
     .zest-window { height: 100%; color: #868e99; background: #0f1115; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; font-size: clamp(8px, 1.08vw, 13px); text-align: left; }
     .window-bar { height: 7.4%; min-height: 48px; display: grid; grid-template-columns: auto auto 1fr auto; gap: 1.4em; align-items: center; padding: 0 1.2em; border-bottom: 1px solid #272c33; background: linear-gradient(#1a1e23, #16191e); box-shadow: inset 0 1px rgba(255,255,255,.045); }
-    .mock-nav { display: flex; gap: 1.2em; color: #565e68; font-size: 1.2em; }
+    .mock-nav { display: flex; gap: 12px; align-items: center; color: #565e68; }
+    .nav-icon { position: relative; display: block; width: 14px; height: 14px; }
+    .nav-icon.back::before, .nav-icon.forward::before { content: ""; position: absolute; top: 3px; width: 7px; height: 7px; border-top: 1.4px solid currentColor; border-left: 1.4px solid currentColor; }
+    .nav-icon.back::before { left: 4px; transform: rotate(-45deg); }
+    .nav-icon.forward::before { right: 4px; transform: rotate(135deg); }
+    .nav-icon.up::before { content: ""; position: absolute; left: 6px; top: 3px; width: 1.4px; height: 10px; background: currentColor; border-radius: 1px; }
+    .nav-icon.up::after { content: ""; position: absolute; left: 3px; top: 2px; width: 6px; height: 6px; border-top: 1.4px solid currentColor; border-left: 1.4px solid currentColor; transform: rotate(45deg); }
     .crumbs { display: flex; gap: .55em; color: #565e68; white-space: nowrap; }
     .crumbs strong { color: #e9ecef; }
     .mock-search { min-width: 0; height: 34px; display: flex; align-items: center; padding: 0 1em; border: 1px solid #272c33; border-radius: 8px; color: #565e68; background: #0f1115; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .saved { height: 34px; display: flex; align-items: center; padding: 0 1em; border: 1px solid #272c33; border-radius: 8px; color: #868e99; background: #16191e; white-space: nowrap; }
+    .saved { height: 34px; display: flex; align-items: center; gap: .65em; padding: 0 1em; border: 1px solid #272c33; border-radius: 8px; color: #868e99; background: #16191e; white-space: nowrap; }
+    .saved::before { content: ""; width: 8px; height: 11px; border: 1.2px solid currentColor; border-radius: 1px; clip-path: polygon(0 0,100% 0,100% 100%,50% 72%,0 100%); }
+    .saved::after { content: ""; width: 5px; height: 5px; margin-left: .15em; border-right: 1.3px solid currentColor; border-bottom: 1.3px solid currentColor; transform: rotate(45deg) translateY(-2px); }
     .scope-bar { height: 5.6%; min-height: 40px; display: flex; justify-content: space-between; align-items: center; padding: 0 1.2em; border-bottom: 1px solid #272c33; background: #16191e; }
     .scope-tabs { display: flex; gap: .2em; padding: .2em; border: 1px solid #272c33; border-radius: 6px; background: #0f1115; }
-    .scope-tabs span { padding: .5em .85em; border-radius: .45em; color: #71776e; }
+    .scope-tabs span { display: flex; align-items: center; gap: .55em; padding: .5em .85em; border-radius: .45em; color: #71776e; }
     .scope-tabs .active { color: #e9ecef; background: #1f242a; box-shadow: inset 0 0 0 1px #272c33; }
     .item-count { color: #565e68; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     .window-main { display: grid; grid-template-columns: 16.1% 1fr; height: 80.5%; }
@@ -120,12 +128,12 @@
     .side-row .label { display: flex; gap: .65em; align-items: center; }
     .side-row small { color: #626860; font: inherit; }
     .side-gap { height: 1.5em; }
-    .pin-icon { color: var(--pin, #868e99); font-size: 1.1em; }
+    .pin-icon { --folder: var(--pin, #868e99); }
     .category-tree { display: flex; flex-direction: column; gap: 2px; }
     .cat-row { width: 100%; height: 26px; display: grid; grid-template-columns: 14px 8px 1fr auto; gap: 8px; align-items: center; padding: 0 8px 0 4px; color: #868e99; background: transparent; border: 0; border-radius: 6px; cursor: pointer; text-align: left; }
     .cat-row:hover, .ext-row:hover { color: #e9ecef; background: #20252b; }
-    .cat-caret { color: #565e68; font-size: 9px; transition: transform .15s ease; }
-    .cat-row[aria-expanded="true"] .cat-caret { transform: rotate(90deg); }
+    .cat-caret { width: 7px; height: 7px; margin-left: 2px; border-right: 1.4px solid #565e68; border-bottom: 1.4px solid #565e68; transform: rotate(-45deg); transition: transform .15s ease; }
+    .cat-row[aria-expanded="true"] .cat-caret { transform: rotate(45deg) translate(-1px, -1px); }
     .cat-label { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cat-count { color: #565e68; font-size: 11.5px; }
     .ext-list[hidden] { display: none; }
@@ -148,8 +156,12 @@
     .search-path { display: none; color: #565e68; font: 10px ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     [data-mode="search"] .file-row { height: 48px; }
     [data-mode="search"] .search-path { display: block; }
-    .folder-icon { --folder: #6e9be0; position: relative; display: inline-block; width: 15px; height: 11px; border: 1.3px solid var(--folder); border-radius: 2px; color: transparent; font-size: 0; flex: none; }
-    .folder-icon::before { content: ""; position: absolute; left: 1px; top: -4px; width: 6px; height: 4px; border: 1.3px solid var(--folder); border-bottom: 0; border-radius: 2px 2px 0 0; }
+    .folder-icon, .pin-icon, .mini-folder { --folder: var(--pin, #6e9be0); position: relative; display: inline-block; width: 16px; height: 11px; margin-top: 3px; border: 1.3px solid var(--folder); border-top: 0; border-radius: 0 2.5px 2.5px 2.5px; color: transparent; font-size: 0; flex: none; }
+    .folder-icon::before, .pin-icon::before, .mini-folder::before { content: ""; position: absolute; left: -1.3px; top: -4px; width: 7px; height: 4px; border: 1.3px solid var(--folder); border-bottom: 0; border-radius: 2.5px 2.5px 0 0; }
+    .folder-icon::after, .pin-icon::after, .mini-folder::after { content: ""; position: absolute; left: 7px; right: -1.3px; top: 0; border-top: 1.3px solid var(--folder); border-radius: 0 2px 0 0; }
+    .mini-folder { --folder: currentColor; width: 12px; height: 8px; margin-top: 2px; color: inherit; }
+    .mini-folder::before { width: 5px; height: 3px; top: -3px; }
+    .mini-folder::after { left: 5px; }
     .folder-icon.orange { --folder: #ff9400; } .folder-icon.green { --folder: #33c759; } .folder-icon.purple { --folder: #b052de; } .folder-icon.pink { --folder: #ff2e54; }
     .file-icon { position: relative; display: inline-grid; place-items: center; width: 14px; height: 17px; border: 1.2px solid #9aa4b0; border-radius: 2px; color: #9aa4b0; font-size: 7px; flex: none; }
     .file-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: #565e68; }
@@ -275,13 +287,13 @@
       <div class="screen">
         <div class="zest-window" id="zest-mockup" data-mode="browse" aria-label="Interactive HTML recreation of the Zest file browser">
           <div class="window-bar">
-            <div class="mock-nav" aria-hidden="true"><span>‹</span><span>›</span><span>↑</span></div>
+            <div class="mock-nav" aria-hidden="true"><span class="nav-icon back"></span><span class="nav-icon forward"></span><span class="nav-icon up"></span></div>
             <div class="crumbs"><span>~</span><span>/</span><strong>Projects</strong></div>
             <div class="mock-search" id="mock-search">⌕ &nbsp; Search — try kind:folder, ext:pdf, size:&gt;1mb</div>
-            <div class="saved">▽ &nbsp; Saved⌄</div>
+            <div class="saved">Saved</div>
           </div>
           <div class="scope-bar">
-            <div class="scope-tabs"><span class="active">▱ &nbsp; This folder</span><span>▱ &nbsp; Subfolders</span><span>◎ &nbsp; Everywhere</span></div>
+            <div class="scope-tabs"><span class="active"><i class="mini-folder">&nbsp;</i>This folder</span><span><i class="mini-folder">&nbsp;</i>Subfolders</span><span>◎ &nbsp; Everywhere</span></div>
             <div class="item-count" id="mock-count">14 items &nbsp; ↕ Name</div>
           </div>
           <div class="window-main">
@@ -291,23 +303,23 @@
               <div class="side-row"><span class="label">▣ &nbsp; Desktop</span></div>
               <div class="side-row"><span class="label">▤ &nbsp; Documents</span></div>
               <div class="side-row"><span class="label">↓ &nbsp; Downloads</span></div>
-              <div class="side-row active"><span class="label"><b class="pin-icon" style="--pin:#33c759">▱</b>Projects</span><small>14</small></div>
-              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#ff9400">▱</b>Archive</span></div>
-              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#b052de">▱</b>Design</span></div>
+              <div class="side-row active"><span class="label"><b class="pin-icon" style="--pin:#33c759">&nbsp;</b>Projects</span><small>14</small></div>
+              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#ff9400">&nbsp;</b>Archive</span></div>
+              <div class="side-row"><span class="label"><b class="pin-icon" style="--pin:#b052de">&nbsp;</b>Design</span></div>
               <div class="side-gap"></div>
               <div class="side-title">Categories</div>
               <div class="category-tree">
-                <button class="cat-row" type="button" aria-expanded="true"><span class="cat-caret">›</span><i class="dot green">&nbsp;</i><span class="cat-label">Code</span><span class="cat-count">2184</span></button>
+                <button class="cat-row" type="button" aria-expanded="true"><span class="cat-caret" aria-hidden="true"></span><i class="dot green">&nbsp;</i><span class="cat-label">Code</span><span class="cat-count">2184</span></button>
                 <div class="ext-list">
                   <div class="ext-row"><i class="dot green">&nbsp;</i><span>.swift</span><span class="ext-count">842</span></div>
                   <div class="ext-row"><i class="dot green">&nbsp;</i><span>.js</span><span class="ext-count">516</span></div>
                   <div class="ext-row"><i class="dot green">&nbsp;</i><span>.json</span><span class="ext-count">391</span></div>
                 </div>
-                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot purple">&nbsp;</i><span class="cat-label">Images</span><span class="cat-count">840</span></button>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret" aria-hidden="true"></span><i class="dot purple">&nbsp;</i><span class="cat-label">Images</span><span class="cat-count">840</span></button>
                 <div class="ext-list" hidden><div class="ext-row"><i class="dot purple">&nbsp;</i><span>.png</span><span class="ext-count">518</span></div><div class="ext-row"><i class="dot purple">&nbsp;</i><span>.jpg</span><span class="ext-count">241</span></div></div>
-                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot" style="background:#c9a2ff">&nbsp;</i><span class="cat-label">Documents</span><span class="cat-count">312</span></button>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret" aria-hidden="true"></span><i class="dot" style="background:#c9a2ff">&nbsp;</i><span class="cat-label">Documents</span><span class="cat-count">312</span></button>
                 <div class="ext-list" hidden><div class="ext-row"><i class="dot" style="background:#c9a2ff">&nbsp;</i><span>.pdf</span><span class="ext-count">186</span></div><div class="ext-row"><i class="dot" style="background:#c9a2ff">&nbsp;</i><span>.pages</span><span class="ext-count">42</span></div></div>
-                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret">›</span><i class="dot red">&nbsp;</i><span class="cat-label">Video</span><span class="cat-count">56</span></button>
+                <button class="cat-row" type="button" aria-expanded="false"><span class="cat-caret" aria-hidden="true"></span><i class="dot red">&nbsp;</i><span class="cat-label">Video</span><span class="cat-count">56</span></button>
                 <div class="ext-list" hidden><div class="ext-row"><i class="dot red">&nbsp;</i><span>.mov</span><span class="ext-count">31</span></div><div class="ext-row"><i class="dot red">&nbsp;</i><span>.mp4</span><span class="ext-count">19</span></div></div>
               </div>
             </aside>
