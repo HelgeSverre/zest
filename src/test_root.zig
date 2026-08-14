@@ -3,6 +3,7 @@ comptime {
     // Core
     _ = @import("core/types.zig");
     _ = @import("core/file_types.zig");
+    _ = @import("core/casefold.zig");
     _ = @import("core/filters.zig");
     _ = @import("core/humanize.zig");
     _ = @import("config/config.zig");

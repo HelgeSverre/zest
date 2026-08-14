@@ -59,6 +59,27 @@ final class ZestCoreTests: XCTestCase {
     )
   }
 
+  func testCancelledTokenAbortsQuery() throws {
+    let core = try requireIntegrationIndex()
+
+    // A live token behaves exactly like the plain query.
+    let live = try XCTUnwrap(ZestCore.CancelToken())
+    XCTAssertNotNil(
+      core.query("", scope: integrationScope, maxDepth: 1, maxResults: 5_000, cancel: live))
+
+    // A cancelled token makes the engine unwind: nil, not an empty result set,
+    // so the caller can tell "superseded" from "no matches". A text query is
+    // used here because it starts scanning (and so polls the token) for any
+    // non-empty index, whatever the fixture's scope contains.
+    let cancelled = try XCTUnwrap(ZestCore.CancelToken())
+    cancelled.cancel()
+    XCTAssertNil(core.query("a", maxResults: 5_000, cancel: cancelled))
+
+    // Cancellation is per-token: the live one still works afterwards.
+    XCTAssertNotNil(
+      core.query("", scope: integrationScope, maxDepth: 1, maxResults: 5_000, cancel: live))
+  }
+
   func testOpenMissingFileReturnsNil() {
     XCTAssertNil(ZestCore(indexPath: "/nonexistent/zest/index.zst"))
   }

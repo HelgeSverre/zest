@@ -28,6 +28,16 @@ bench-capi:
     zig build-exe benchmarks/bench_capi.zig zig-out/release/lib/libzest-core.a -lc -OReleaseFast -femit-bin=zig-out/bin/bench-capi
     ./zig-out/bin/bench-capi
 
+# Benchmark the engine against a synthetic 1M-entry corpus built in memory —
+# no real index needed, so this runs anywhere (CI, a fresh checkout). Compare
+# before/after by stashing the change and re-running; the corpus seed is fixed.
+# NOTE: with explicit `-M` modules, `-OReleaseFast` must precede *each* module
+# or that module silently compiles as Debug (~10x slower, meaningless numbers).
+bench-search:
+    mkdir -p zig-out/bin
+    zig build-exe -OReleaseFast --dep zest -Mroot=benchmarks/bench_search.zig -OReleaseFast -Mzest=src/engine.zig -lc -femit-bin=zig-out/bin/bench-search
+    ./zig-out/bin/bench-search
+
 # Format all sources: `zig fmt` over src/ + `swift-format` over Sources/.
 format:
     zig fmt src

@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const runtime = @import("../core/runtime.zig");
+const casefold = @import("../core/casefold.zig");
 
 pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 /// v2: per-folder × per-category histogram column.
@@ -11,8 +12,11 @@ pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 ///     daemon and run `just index` so existing rows receive the new category).
 /// v6: sizes use allocated bytes (size on disk) instead of logical data length
 ///     (layout unchanged; the bump forces a reindex with the new semantics).
+/// v7: the lowercase name blob is UTF-8 case-folded, not ASCII-lowercased
+///     (layout unchanged — folding is length-preserving — but a v6 blob would
+///     miss non-ASCII matches against a folded query, so force a reindex).
 /// Reader's version check rejects old indexes; version bumps require a rebuild before use.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;
@@ -305,9 +309,12 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         name_offsets[i] = @intCast(name_blob.items.len);
         name_lengths[i] = @intCast(entry.name.len);
         try name_blob.appendSlice(allocator, entry.name);
-        for (entry.name) |ch| {
-            try lower_blob.append(allocator, std.ascii.toLower(ch));
-        }
+        // Case folding is length-preserving (see core/casefold.zig), so the
+        // lowercase blob stays byte-parallel with the original: one
+        // (offset, length) pair addresses a name in both.
+        const lower_start = lower_blob.items.len;
+        try lower_blob.appendNTimes(allocator, 0, entry.name.len);
+        casefold.foldInto(lower_blob.items[lower_start..], entry.name);
     }
 
     for (name_offsets) |off| try writer.writeInt(u32, off, .little);
@@ -499,8 +506,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         if (dot_idx + 1 >= entry.name.len) continue;
         const raw = entry.name[dot_idx + 1 ..];
         if (raw.len == 0 or raw.len > 15) continue;
-        for (raw, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
-        const ext_lower: []const u8 = lower_buf[0..raw.len];
+        const ext_lower = casefold.foldSlice(lower_buf[0..raw.len], raw);
 
         const dir_id = dir_table.get(entry.dir_path) orelse continue;
         const cat: u8 = @intFromEnum(entry.category);

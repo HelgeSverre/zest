@@ -18,6 +18,7 @@ just test           # zig build test + swift test
 just run            # build + swift run Zest
 just index          # build indexer (ReleaseFast) + full scan of ~
 just bench-capi     # benchmark the engine against the real index
+just bench-search   # benchmark the engine against a synthetic corpus (no index needed)
 ```
 
 **Always leave `zig-out/lib/libzest-core.a` in ReleaseFast** — Package.swift links whatever is there, and a Debug engine is ~19× slower (an 82-second one-char query). A bare `zig build` or `zig build test` installs a Debug lib; follow it with `zig build core -Doptimize=ReleaseFast` (the justfile recipes do this).
@@ -26,8 +27,8 @@ just bench-capi     # benchmark the engine against the real index
 
 See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagnosis, benchmarks, phased plan). Key points:
 
-- **Index** — custom mmap'd columnar binary at `~/Library/Application Support/zest/index.zst` (~407 MB for 4.1M entries): names (original + lowercase blobs), prefix-deduped dir table + parent ids, metadata arrays, per-category bitmaps, per-folder histogram + ext-breakdown columns. Since v4, directory entries' `size` is their recursive subtree total (rolled up at build time), so folder sizes display O(1) and folders participate in sort-by-size and `size:` filters.
-- **Search** (`src/index/search.zig`) — substring scan over the lowercase name blob (two-anchor check + memcmp); entry indices recovered by binary search are *monotonic in blob position* (the O(1) dedup relies on this). Filter-only queries scan the parent-id column; depth-1 listings resolve the scope dir id once.
+- **Index** — custom mmap'd columnar binary at `~/Library/Application Support/zest/index.zst` (~407 MB for 4.1M entries): names (original + case-folded blobs, byte-parallel — folding is length-preserving, see `core/casefold.zig`), prefix-deduped dir table + parent ids, metadata arrays, per-category bitmaps, per-folder histogram + ext-breakdown columns. Since v4, directory entries' `size` is their recursive subtree total (rolled up at build time), so folder sizes display O(1) and folders participate in sort-by-size and `size:` filters.
+- **Search** (`src/index/search.zig`) — substring scan over the case-folded name blob: a SIMD two-anchor filter (`@Vector`, width from `std.simd.suggestVectorLength`) rejects a whole register of positions per step, survivors go through `memcmp`; entry indices recovered by binary search are *monotonic in blob position* (the O(1) dedup relies on this). Queries take an optional cancel flag polled every 64 KiB, exposed to Swift as `zest_query_cancellable`. Filter-only queries scan the parent-id column; depth-1 listings resolve the scope dir id once.
 - **Swift UI flow** — `AppCoordinator` owns path/scope/filter/sort state and a per-change-tick result cache; `onChange` (single closure, assigned once in `RootViewController`) refreshes toolbar/filter bar/browser/sidebar/status bar. Queries run off-main on a serial `queryQueue`; a `queryGeneration` counter drops stale deliveries. `notifyChange` fires `onChange` twice per change: once immediately (observers render the last-delivered stale rows while `isLoading` is true) and once when the fresh result set lands.
 - **Index hot-reload** — A 5-second `Timer` in `AppCoordinator` polls the index file's inode/size/mtime (`ZestCore.FileIdentity`/`currentIdentity`). When any field differs (or `core` is nil on first tick), it opens a new `ZestCore` and swaps. Rows are copied at the FFI boundary, so dropping the old core is safe; ARC unmaps it.
 - **Daemon** — writes `.tmp` then atomic `rename()`. FSEvents stream uses `kFSEventStreamCreateFlagIgnoreSelf` plus an explicit exclusion path for the app-support dir (covers external writers) to prevent rebuild-treadmill loops.
@@ -49,11 +50,12 @@ Sources/Zest/          — Swift app: App/ (coordinator, delegate), Shell/ (tool
                          (file list), Sidebar/, Core/ (ZestCore FFI wrapper,
                          UserState pins/folder-colors), Design/
 Sources/CZestCore/     — C header module for the Zig lib
-src/capi/              — C ABI (zest_open/close/count/query/query_count/query_row/
-                         query_free/histogram/ext_breakdown)
+src/capi/              — C ABI (zest_open/close/count/query/query_cancellable/
+                         query_count/query_row/query_free/cancel_token_*/
+                         histogram/ext_breakdown)
 src/index/             — format, builder, bulk_scan, reader, search, subtree,
                          bitmap, fsevents, daemon
-src/core/              — types, file_types, filters, humanize, runtime
-benchmarks/            — bench_capi.zig (engine regression harness)
+src/core/              — types, file_types, casefold, filters, humanize, runtime
+benchmarks/            — bench_capi.zig (real-index harness), bench_search.zig (synthetic)
 docs/                  — ARCHITECTURE.md, ROADMAP.md, archive/ (superseded docs)
 ```

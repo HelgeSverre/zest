@@ -181,11 +181,16 @@ every change (destroys the clicked row mid-double-click), stale-index
 - [ ] E2. Dir→entry-range table in the index format (v4) — O(children) folder
   listings and O(log D) `findDirId` (currently a linear scan of the dir
   table per depth-1 query).
-- [ ] E3. SIMD substring scan (`@Vector`) or memchr-style skipping — the
-  full-blob scan floor is ~135 ms; this is the next search-latency win
-  after A3/A5.
-- [ ] E4. Unicode case folding (currently ASCII-only — "Übersicht" won't match
-  case-insensitively).
+- [x] E3. **SIMD substring scan (`@Vector`)** *(done 2026-08-14)* — the
+  two-anchor filter compares a whole register of head bytes and a whole
+  register of tail bytes per step (`nextCandidate` in `search.zig`), width from
+  `std.simd.suggestVectorLength`, so it is NEON on Apple Silicon and SSE2/AVX2
+  on x86 without per-arch code. The raw scan went from ~1.1 GB/s to ~17 GB/s;
+  end-to-end query numbers in the table below.
+- [x] E4. **Unicode case folding** *(done 2026-08-14)* — `core/casefold.zig`
+  folds the name blob and the query with the same length-preserving map, so
+  "Übersicht", "ΕΛΛΑΔΑ" and "Москва" match in any case. Index format v7 (the
+  bump forces a reindex; the layout is unchanged).
 - [ ] E5. Drag & drop out of the file list.
 - [ ] E6. Incremental / FSEvents-scoped partial reindex (today every rebuild
   re-walks all of `$HOME`, ~23 s + transient RAM spike).
@@ -221,7 +226,37 @@ ReleaseFast):
 All engine queries now run off the main thread in the app (generation-dropped
 staleness), so even the 65–135 ms floors never block the UI. Depth-1 sidebar
 reads dropped to ~0 ms once the daemon rebuild treadmill stopped churning the
-page cache.
+page cache. Since 2026-08-14 a superseded query is also *cancelled* rather than
+merely dropped on delivery (`zest_query_cancellable`), so the scan behind a
+keystroke stops instead of holding the serial query queue.
+
+### Synthetic harness (`just bench-search`)
+
+`bench_capi.zig` needs the developer's real `index.zst`; `bench_search.zig`
+builds a deterministic 1M-entry corpus in memory instead, so an engine change
+can be measured on any machine (CI included) and A/B'd against the previous
+build with the same seed.
+
+E3 + E4, 1M entries (68.6 MB index, ~20 MB name blob), x86_64 AVX2 @ 2.1 GHz,
+ReleaseFast, median of 7:
+
+| query | before | after | |
+|---|---|---|---|
+| `e` (1 char, 100k cap) | 12.5 ms | 10.3 ms | cap-bound, not scan-bound |
+| `re` | 15.2 ms | 10.2 ms | 1.5× |
+| `report` | 20.8 ms | 5.4 ms | 3.8× |
+| `screenshot` | 16.2 ms | 4.6 ms | 3.5× |
+| no match (pure scan) | 7.4 ms | 0.56 ms | 13× |
+| `café` | 14.7 ms → **0 rows** | 4.7 ms → **35,289 rows** | E4: previously unmatchable |
+| folder listing (depth 1) | 1.22 ms | 1.38 ms | unchanged path |
+| subtree `ext:pdf` | 28–30 ms | 32–38 ms | unchanged path; run-to-run noise on this box is ±15% |
+
+Caveats worth keeping in mind when reading these: the box is a 4-core cloud VM
+with visibly noisy timings (the `ext:pdf` filter-only path is untouched by
+these changes and still swings 28–38 ms across runs), and Apple Silicon is a
+16-byte NEON register against this machine's 32-byte AVX2, so the scan speedup
+there will be smaller. Re-run `just bench-capi` on the real index before
+quoting numbers for macOS.
 
 ## Archived docs
 

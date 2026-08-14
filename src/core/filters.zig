@@ -3,6 +3,7 @@
 // builds). "Now" is always a caller-supplied parameter.
 const std = @import("std");
 const types = @import("types.zig");
+const casefold = @import("casefold.zig");
 
 pub const ParsedQuery = struct {
     text: []const u8,
@@ -98,9 +99,8 @@ fn parseExtension(negated: bool, value: []const u8) ?FilterCriterion {
     var segments = std.mem.tokenizeScalar(u8, value, ',');
     if (segments.next() == null) return null;
     var f = FilterCriterion{ .extension = .{ .negated = negated } };
-    for (value, 0..) |ch, i| {
-        f.extension.value[i] = std.ascii.toLower(ch);
-    }
+    // Same fold as the on-disk extension column, so `ext:PÅ` matches `.på`.
+    casefold.foldInto(&f.extension.value, value);
     f.extension.len = @intCast(value.len);
     return f;
 }
@@ -235,14 +235,51 @@ pub const MatchTarget = struct {
 fn extensionMatches(name: []const u8, value: []const u8) bool {
     var segments = std.mem.tokenizeScalar(u8, value, ',');
     while (segments.next()) |s| {
+        // Compare the suffix before the dot: nearly every filename has a dot in
+        // that position (most extensions are 3 chars), so the letters are the
+        // selective test and checking the dot first measurably costs time.
         if (name.len > s.len and
-            std.ascii.endsWithIgnoreCase(name, s) and
+            foldedEql(name[name.len - s.len ..], s) and
             name[name.len - s.len - 1] == '.')
         {
             return true;
         }
     }
     return false;
+}
+
+/// Case-insensitive compare against an already-folded needle (`parseExtension`
+/// folds the criterion value). UTF-8 aware rather than `endsWithIgnoreCase`, so
+/// `ext:på` matches `Notat.PÅ`. Folding is length-preserving, so equal lengths
+/// are a precondition the caller has already established.
+///
+/// Extensions are ASCII in all but a rounding error of files, and this runs
+/// once per scanned entry for an `ext:` filter, so the ASCII bytes are folded
+/// inline and only a non-ASCII mismatch pays for the general path.
+inline fn foldedEql(suffix: []const u8, folded: []const u8) bool {
+    if (suffix.len != folded.len) return false;
+    // Branchless accumulation: `diff` is zero iff every byte matched after an
+    // ASCII fold, `high` carries the top bit of any non-ASCII byte. A pure
+    // ASCII suffix is decided by the loop alone — the same work
+    // `ascii.endsWithIgnoreCase` did, minus one fold (the needle is prefolded).
+    var diff: u8 = 0;
+    var high: u8 = 0;
+    for (suffix, folded) |a, b| {
+        diff |= std.ascii.toLower(a) ^ b;
+        high |= a;
+    }
+    if (diff == 0) return true;
+    if (high & 0x80 == 0) return false;
+    // Non-ASCII bytes are involved: redo it with the real UTF-8 fold, which
+    // needs whole sequences and so restarts from the start of the slice.
+    return foldedEqlUnicode(suffix, folded);
+}
+
+noinline fn foldedEqlUnicode(suffix: []const u8, folded: []const u8) bool {
+    var buf: [64]u8 = undefined;
+    if (suffix.len > buf.len) return false;
+    casefold.foldInto(buf[0..suffix.len], suffix);
+    return std.mem.eql(u8, buf[0..suffix.len], folded);
 }
 
 /// Criteria combine as AND, except non-negated extension criteria, which form
@@ -810,6 +847,22 @@ test "multi-part extension matches" {
     try std.testing.expect(php.matches(.{ .name = ".php" }));
     try std.testing.expect(!php.matches(.{ .name = "x.aphp" }));
     try std.testing.expect(!php.matches(.{ .name = "php" }));
+}
+
+test "extension matching is case-insensitive for ascii and utf-8 alike" {
+    // The criterion value is folded at parse time and the candidate suffix is
+    // folded at match time, so either side may be typed in any case.
+    var upper = try parse(std.testing.allocator, "ext:PDF", test_now);
+    defer upper.deinit();
+    try std.testing.expectEqual(@as(usize, 1), upper.filters_list.len);
+    try std.testing.expect(upper.filters_list[0].matches(.{ .name = "Report.PdF" }));
+
+    var nordic = try parse(std.testing.allocator, "ext:PÅ", test_now);
+    defer nordic.deinit();
+    try std.testing.expectEqual(@as(usize, 1), nordic.filters_list.len);
+    try std.testing.expect(nordic.filters_list[0].matches(.{ .name = "notat.på" }));
+    try std.testing.expect(nordic.filters_list[0].matches(.{ .name = "notat.PÅ" }));
+    try std.testing.expect(!nordic.filters_list[0].matches(.{ .name = "notat.pa" }));
 }
 
 test "extension value with no segment degrades to text" {
