@@ -217,17 +217,19 @@ releases the old mmap.
   8 worker threads for the parallel scan (`max_scan_threads = 8`, measured
   sweet spot on a 12-core machine).
 - **Search engine**: synchronous. `searchCancellable` accepts an optional
-  `std.atomic.Value(u64)` generation counter; the search checks it every
-  512 positions and returns `error.SearchCancelled` if it has changed.
+  atomic `u32` cancel flag; text scans poll it every 64 KiB of candidate
+  positions, filter-only scans every 512 entries, and cancellation returns
+  `error.SearchCancelled`.
 - **Swift UI**: the main thread drives AppKit. Engine queries run on a serial
   `queryQueue` (`DispatchQueue` with `.userInitiated` QoS) in `AppCoordinator`.
-  A `queryGeneration` counter is incremented on every state change; the queue
-  closure captures the generation and discards the delivery on main if
-  `self.queryGeneration != gen` (stale result). `notifyChange` fires `onChange`
-  twice per change: once immediately so observers can show a loading state
-  (stale rows still visible), and once when the fresh rows land. The sidebar
-  histogram also runs off-main on a `DispatchQueue.global(qos: .userInitiated)`
-  task with its own `histogramGeneration` guard in `CategorySection`.
+  Each state change cancels the previous query's token before enqueuing its own.
+  A separate `queryGeneration` counter still guards delivery: the queue closure
+  captures the generation and discards the result on main if
+  `self.queryGeneration != gen`. `notifyChange` fires `onChange` twice per
+  change: once immediately so observers can show a loading state (stale rows
+  still visible), and once when the fresh rows land. The sidebar histogram also
+  runs off-main on a `DispatchQueue.global(qos: .userInitiated)` task with its
+  own `histogramGeneration` guard in `CategorySection`.
 
 ## What lives where
 
@@ -240,6 +242,7 @@ src/
 ├── engine.zig              ← module root re-exporting the pure engine (benchmarks/tools)
 ├── core/
 │   ├── casefold.zig        ← length-preserving UTF-8 case folding (blob + query)
+│   ├── casefold_data.zig   ← generated Unicode 17 simple-fold mapping table
 │   ├── filters.zig         ← FilterCriterion union (kind/ext/size/date/cat/path)
 │   ├── types.zig           ← FileKind, FileCategory enum, FileEntry
 │   ├── runtime.zig         ← global Io handle + nowNanos / readFileAlloc helpers

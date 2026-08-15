@@ -863,6 +863,12 @@ test "extension matching is case-insensitive for ascii and utf-8 alike" {
     try std.testing.expect(nordic.filters_list[0].matches(.{ .name = "notat.på" }));
     try std.testing.expect(nordic.filters_list[0].matches(.{ .name = "notat.PÅ" }));
     try std.testing.expect(!nordic.filters_list[0].matches(.{ .name = "notat.pa" }));
+
+    // U+0182/U+0183 is an irregular same-length pair from CaseFolding.txt;
+    // unlike PÅ it was absent from the old hand-written range table.
+    var irregular = try parse(std.testing.allocator, "ext:ƃ", test_now);
+    defer irregular.deinit();
+    try std.testing.expect(irregular.filters_list[0].matches(.{ .name = "file.Ƃ" }));
 }
 
 test "extension value with no segment degrades to text" {

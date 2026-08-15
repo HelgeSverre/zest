@@ -6,11 +6,11 @@
 //! over the shared offsets (see `index/search.zig`). Folding must therefore
 //! never change a name's byte length.
 //!
-//! Every mapping here keeps the UTF-8 encoded length identical (the ranges are
-//! chosen so a codepoint never crosses the 0x80 / 0x800 / 0x10000 boundaries),
-//! and `foldInto` verifies that invariant at runtime — a mapping that would
+//! The checked-in table is generated from Unicode's simple case-fold mappings
+//! and retains only source/target pairs with identical UTF-8 encoded lengths.
+//! `foldInto` verifies that invariant at runtime too — a mapping that would
 //! change the length copies the original bytes through instead. Codepoints
-//! whose lowercase form is a different length (İ U+0130 → "i̇", ẞ U+1E9E → ß,
+//! whose fold has a different length (İ U+0130 → "i̇", ẞ U+1E9E → ß,
 //! K U+212A → k, ſ U+017F → s) are deliberately left unfolded: they stay
 //! searchable by their own bytes rather than corrupting the blob's geometry.
 //!
@@ -20,6 +20,7 @@
 //! Invalid UTF-8 (filenames are just bytes on macOS) is passed through
 //! byte-for-byte; decoding never fails.
 const std = @import("std");
+const casefold_data = @import("casefold_data.zig");
 
 /// Fold `src` into `dst`, writing exactly `src.len` bytes.
 /// `dst.len` must be >= `src.len`; only the first `src.len` bytes are touched.
@@ -57,73 +58,26 @@ pub fn foldInto(dst: []u8, src: []const u8) void {
     }
 }
 
-/// Simple case fold of a single codepoint, restricted to mappings that keep
-/// the UTF-8 encoded length. Unmapped codepoints are returned unchanged.
+/// Unicode simple case fold of a single codepoint, restricted to mappings that
+/// keep the UTF-8 encoded length. The generated table contains every matching
+/// C/S entry from Unicode's CaseFolding.txt; unmapped codepoints are returned
+/// unchanged.
 pub fn foldCodepoint(cp: u21) u21 {
     if (cp < 0x80) return if (cp >= 'A' and cp <= 'Z') cp + 32 else cp;
-    return switch (cp) {
-        // Latin-1 Supplement: À-Þ (0xD7 is ×, not a letter) -> à-þ.
-        0xC0...0xD6, 0xD8...0xDE => cp + 0x20,
-
-        // Latin Extended-A / B: blocks of (even = upper, odd = lower) pairs.
-        // U+0130 (İ) is the one hole in the first block — its lowercase is "i",
-        // not the dotless ı that the even/odd rule would produce.
-        0x100...0x12F,
-        0x131...0x137,
-        0x14A...0x177,
-        0x1DE...0x1EF,
-        0x1F8...0x21F,
-        0x222...0x233,
-        0x246...0x24F,
-        0x3D8...0x3EF,
-        0x460...0x481,
-        0x48A...0x4BF,
-        0x4D0...0x52F,
-        0x1E00...0x1E95,
-        0x1EA0...0x1EFF,
-        => cp | 1,
-
-        // ...and blocks where the pairs are offset by one (odd = upper).
-        0x139...0x148,
-        0x179...0x17E,
-        0x1CD...0x1DC,
-        0x4C1...0x4CE,
-        => if (cp & 1 == 1) cp + 1 else cp,
-
-        0x178 => 0xFF, // Ÿ -> ÿ
-
-        // Greek.
-        0x386 => 0x3AC,
-        0x388...0x38A => cp + 0x25,
-        0x38C => 0x3CC,
-        0x38E...0x38F => cp + 0x3F,
-        0x391...0x3A1, 0x3A3...0x3AB => cp + 0x20,
-        0x3C2 => 0x3C3, // final sigma folds to sigma
-
-        // Cyrillic.
-        0x400...0x40F => cp + 0x50,
-        0x410...0x42F => cp + 0x20,
-
-        // Armenian.
-        0x531...0x556 => cp + 0x30,
-
-        // Greek Extended: the regular "uppercase sits 8 above lowercase" runs.
-        0x1F08...0x1F0F,
-        0x1F18...0x1F1D,
-        0x1F28...0x1F2F,
-        0x1F38...0x1F3F,
-        0x1F48...0x1F4D,
-        0x1F68...0x1F6F,
-        0x1F88...0x1F8F,
-        0x1F98...0x1F9F,
-        0x1FA8...0x1FAF,
-        => cp - 8,
-
-        // Fullwidth Latin.
-        0xFF21...0xFF3A => cp + 0x20,
-
-        else => cp,
-    };
+    var lo: usize = 0;
+    var hi: usize = casefold_data.mappings.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const mapping = casefold_data.mappings[mid];
+        if (mapping.source < cp) {
+            lo = mid + 1;
+        } else if (mapping.source > cp) {
+            hi = mid;
+        } else {
+            return mapping.target;
+        }
+    }
+    return cp;
 }
 
 /// Fold an extension-sized ASCII-or-UTF-8 slice into a fixed buffer, returning
@@ -223,6 +177,14 @@ test "fold never changes encoded length" {
     }
 }
 
+test "generated mappings are sorted and pinned to Unicode 17" {
+    try std.testing.expectEqualStrings("17.0.0", casefold_data.unicode_version);
+    for (casefold_data.mappings, 0..) |mapping, i| {
+        try std.testing.expectEqual(encodedLength(mapping.source), encodedLength(mapping.target));
+        if (i > 0) try std.testing.expect(casefold_data.mappings[i - 1].source < mapping.source);
+    }
+}
+
 test "fold is idempotent" {
     var cp: u21 = 0;
     while (cp <= 0x10FFFF) : (cp += 1) {
@@ -269,15 +231,20 @@ test "latin-1 and latin extended fold" {
     try std.testing.expectEqualSlices(u8, "cœur", &fold("CŒUR"));
     try std.testing.expectEqualSlices(u8, "łódź", &fold("ŁÓDŹ"));
     try std.testing.expectEqualSlices(u8, "ÿ", &fold("Ÿ"));
+    // Irregular pairs do not fit the alternating ranges used by the old
+    // hand-written table; these come directly from CaseFolding.txt.
+    try std.testing.expectEqualSlices(u8, "ƃə", &fold("ƂƏ"));
+    try std.testing.expectEqualSlices(u8, "μ", &fold("µ"));
     // × (U+00D7) is multiplication, not a letter — must not shift to ÷.
     try std.testing.expectEqualSlices(u8, "×", &fold("×"));
 }
 
-test "greek cyrillic armenian fold" {
+test "greek cyrillic armenian and georgian fold" {
     try std.testing.expectEqualSlices(u8, "ελλάδα", &fold("ΕΛΛΆΔΑ"));
     try std.testing.expectEqualSlices(u8, "москва", &fold("МОСКВА"));
     try std.testing.expectEqualSlices(u8, "ёжик", &fold("ЁЖИК"));
     try std.testing.expectEqualSlices(u8, "հայերեն", &fold("ՀԱՅԵՐԵՆ"));
+    try std.testing.expectEqualSlices(u8, "ანბანი", &fold("ᲐᲜᲑᲐᲜᲘ"));
     // Final sigma folds to plain sigma, so "ΟΔΟΣ" and "οδος" (which ends in
     // ς, U+03C2) collapse to the same folded form and match one query.
     try std.testing.expectEqualSlices(u8, "οδοσ", &fold("ΟΔΟΣ"));

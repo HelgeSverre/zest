@@ -181,14 +181,14 @@
 
   <rect x="804" y="266" width="332" height="44" class="box"/>
   <text x="820" y="284" class="lbl">search.zig</text>
-  <text x="820" y="300" class="lbl-sm">SIMD substring over lower-blob · bitmap intersection · scope filter</text>
+  <text x="820" y="300" class="lbl-sm">SIMD substring over folded-name blob · bitmap intersection · scope filter</text>
 
   <rect x="804" y="318" width="332" height="44" class="box"/>
   <text x="820" y="336" class="lbl">query_parser.zig · filters.zig</text>
   <text x="820" y="352" class="lbl-sm">"cat:code ext:pdf" → ParsedQuery { text, filters[] }</text>
 
   <rect x="804" y="370" width="332" height="32" class="box"/>
-  <text x="820" y="390" class="lbl-sm">searchCancellable accepts an atomic gen counter (abort mid-scan)</text>
+  <text x="820" y="390" class="lbl-sm">atomic cancel flag · 64 KiB / 512-entry polling</text>
 
   <!-- Swift app (bottom-right) -->
   <rect x="780" y="440" width="380" height="220" class="box-sw"/>
@@ -413,7 +413,7 @@ size_t    <span class="t">zest_query_count</span>  (<span class="k">const</span>
   <tr>
     <td>Search engine</td>
     <td class="m">sync, cancellable</td>
-    <td><code>searchCancellable</code> accepts an optional <code>std.atomic.Value(u64)</code> generation counter. The search checks it every 512 positions and returns <code>error.SearchCancelled</code> if it has changed. The old Zig UI used this to abort stale searches on a new keystroke.</td>
+    <td><code>searchCancellable</code> accepts an optional atomic <code>u32</code> cancel flag. Text scans poll it every 64 KiB of candidate positions, filter-only scans every 512 entries, and cancellation returns <code>error.SearchCancelled</code>. Swift creates one token per query and cancels the previous token before enqueueing its replacement.</td>
   </tr>
   <tr>
     <td>Swift UI</td>

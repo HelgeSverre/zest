@@ -586,6 +586,8 @@ test "text search is case-insensitive across scripts" {
         .{ .name = "MÜNCHEN 2024.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
         .{ .name = "ΕΛΛΑΔΑ.md", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
         .{ .name = "Москва.jpg", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .images },
+        .{ .name = "Ƃudget.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "ᲐᲜᲑᲐᲜᲘ.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
     };
     const data = try format.writeIndex(allocator, &entries);
     defer allocator.free(data);
@@ -594,7 +596,19 @@ test "text search is case-insensitive across scripts" {
 
     // Query case must not matter in either direction: the blob is folded at
     // build time and the query with the same length-preserving fold.
-    const cases = [_][]const u8{ "résumé", "RÉSUMÉ", "Résumé", "münchen", "MÜNCHEN", "ελλαδα", "ΕΛΛΑΔΑ", "москва", "МОСКВА" };
+    const cases = [_][]const u8{
+        "résumé",
+        "RÉSUMÉ",
+        "Résumé",
+        "münchen",
+        "MÜNCHEN",
+        "ελλαδα",
+        "ΕΛΛΑΔΑ",
+        "москва",
+        "МОСКВА",
+        "ƃudget",
+        "ანბანი",
+    };
     for (cases) |q| {
         const results = try search(allocator, &reader, .{ .query = q });
         defer allocator.free(results);
