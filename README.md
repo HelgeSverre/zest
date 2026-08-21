@@ -187,29 +187,29 @@ Default pins: Home, Desktop, Documents, Downloads. User data persists under `~/L
 ```mermaid
 graph TB
     subgraph "Zest.app (Swift)"
-        SwiftUI[Sources/Zest UI<br/>AppKit windows + views] --> AC[AppCoordinator.swift<br/>query coordinator]
-        AC --> ZC[ZestCore.swift<br/>C ABI wrapper]
-        ZC --> CAPI[capi/zest_core.zig<br/>C ABI surface]
-        CAPI --> IR[reader.zig<br/>O(1) index access]
-        CAPI --> Search[search.zig<br/>Scoped queries]
-        CAPI --> ST[subtree.zig<br/>O(D) subtree walks]
-        IR --> Bitmap[bitmap.zig]
+        SwiftUI["Sources/Zest UI<br/>AppKit windows + views"] --> AC["AppCoordinator.swift<br/>query coordinator"]
+        AC --> ZC["ZestCore.swift<br/>C ABI wrapper"]
+        ZC --> CAPI["capi/zest_core.zig<br/>C ABI surface"]
+        CAPI --> IR["reader.zig<br/>O(1) index access"]
+        CAPI --> Search["search.zig<br/>Scoped queries"]
+        CAPI --> ST["subtree.zig<br/>O(D) subtree walks"]
+        IR --> Bitmap["bitmap.zig"]
     end
 
     subgraph "zest-indexer binary"
-        Daemon[daemon.zig<br/>Main loop] --> Builder[builder.zig<br/>Scan → columns]
-        Builder --> Bulk[bulk_scan.zig<br/>parallel getattrlistbulk]
-        Daemon --> FSE[fsevents.zig<br/>macOS FSEvents]
-        Builder --> Format[format.zig<br/>Binary format]
+        Daemon["daemon.zig<br/>Main loop"] --> Builder["builder.zig<br/>Scan → columns"]
+        Builder --> Bulk["bulk_scan.zig<br/>parallel getattrlistbulk"]
+        Daemon --> FSE["fsevents.zig<br/>macOS FSEvents"]
+        Builder --> Format["format.zig<br/>Binary format"]
     end
 
     subgraph "Shared"
         Index[(index.zst)]
-        Config[config.zig<br/>Paths & excludes]
-        Types[types.zig]
-        FT[file_types.zig<br/>Extension map]
-        Filters[filters.zig<br/>Query parsing + matching]
-        CF[casefold.zig<br/>Unicode folding]
+        Config["config.zig<br/>Paths and excludes"]
+        Types["types.zig"]
+        FT["file_types.zig<br/>Extension map"]
+        Filters["filters.zig<br/>Query parsing + matching"]
+        CF["casefold.zig<br/>Unicode folding"]
     end
 
     IR -.->|mmap read| Index
