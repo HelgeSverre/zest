@@ -1,0 +1,5 @@
+# Local deployment tooling
+.vercel/
+node_modules/
+package.json
+bun.lock
