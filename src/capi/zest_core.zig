@@ -7,6 +7,7 @@ const reader_mod = @import("../index/reader.zig");
 const subtree_mod = @import("../index/subtree.zig");
 const search_mod = @import("../index/search.zig");
 const filters_mod = @import("../core/filters.zig");
+const casefold = @import("../core/casefold.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -66,6 +67,15 @@ export fn zest_close(core: *Core) void {
 /// status bar's "files indexed" count. Cheap: a header field read.
 export fn zest_count(core: *Core) usize {
     return @intCast(core.reader.numEntries());
+}
+
+/// Fold a UTF-8 string with the exact length-preserving mapping used for the
+/// index's folded name/extension data. This keeps higher-level clients from
+/// applying a subtly different Unicode lowercase operation before querying.
+export fn zest_casefold_utf8(input: [*]const u8, len: usize, out: [*]u8, out_capacity: usize) usize {
+    if (out_capacity < len) return 0;
+    casefold.foldInto(out[0..len], input[0..len]);
+    return len;
 }
 
 /// Outcome of `zest_query_cancellable`, written through its `out_status`.
@@ -376,6 +386,22 @@ test "zest_query plain text still works" {
     try std.testing.expectEqual(@as(usize, 2), zest_query_count(q));
 }
 
+test "zest_casefold_utf8 matches the engine fold and checks capacity" {
+    const input = "PÅµẞ";
+    var out: [input.len]u8 = undefined;
+    const n = zest_casefold_utf8(input.ptr, input.len, &out, out.len);
+    try std.testing.expectEqual(input.len, n);
+    // PÅ lowercases, micro sign case-folds to Greek mu, and capital sharp S is
+    // retained because its simple mapping would change the UTF-8 byte length.
+    try std.testing.expectEqualStrings("påμẞ", out[0..n]);
+
+    var too_small: [input.len - 1]u8 = undefined;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        zest_casefold_utf8(input.ptr, input.len, &too_small, too_small.len),
+    );
+}
+
 test "zest_query_cancellable reports cancellation instead of a result set" {
     const data = try format.writeIndex(std.testing.allocator, &test_entries);
     defer std.testing.allocator.free(data);
@@ -398,6 +424,12 @@ test "zest_query_cancellable reports cancellation instead of a result set" {
     zest_cancel_token_cancel(token);
     status = 99;
     try std.testing.expect(zest_query_cancellable(core, "report", "/", std.math.maxInt(u32), 100, token, &status) == null);
+    try std.testing.expectEqual(ZEST_QUERY_CANCELLED, status);
+
+    // Cancellation is a query-level contract, including fast paths that would
+    // otherwise return before entering either scan loop.
+    status = 99;
+    try std.testing.expect(zest_query_cancellable(core, "", "/", std.math.maxInt(u32), 100, token, &status) == null);
     try std.testing.expectEqual(ZEST_QUERY_CANCELLED, status);
 
     // A fresh token is unaffected by the cancelled one.

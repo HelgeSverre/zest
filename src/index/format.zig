@@ -13,10 +13,12 @@ pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 /// v6: sizes use allocated bytes (size on disk) instead of logical data length
 ///     (layout unchanged; the bump forces a reindex with the new semantics).
 /// v7: the lowercase name blob is UTF-8 case-folded, not ASCII-lowercased
-///     (layout unchanged — folding is length-preserving — but a v6 blob would
-///     miss non-ASCII matches against a folded query, so force a reindex).
-/// Reader's version check rejects old indexes; version bumps require a rebuild before use.
+///     (layout unchanged — folding is length-preserving). The reader accepts
+///     v6 during rolling upgrades and uses its original ASCII query fold until
+///     the daemon publishes a v7 rebuild.
 pub const VERSION: u32 = 7;
+pub const MIN_READ_VERSION: u32 = 6;
+pub const UNICODE_CASEFOLD_VERSION: u32 = 7;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;
@@ -71,7 +73,7 @@ pub const Header = struct {
         const magic = try reader.takeInt(u64, .little);
         if (magic != MAGIC) return error.InvalidMagic;
         const version = try reader.takeInt(u32, .little);
-        if (version != VERSION) return error.UnsupportedVersion;
+        if (version < MIN_READ_VERSION or version > VERSION) return error.UnsupportedVersion;
         _ = try reader.takeInt(u32, .little); // padding
         return .{
             .magic = magic,
@@ -213,6 +215,36 @@ test "escapeTsv / unescapeTsv round-trip with tab, newline, backslash" {
     var unesc_buf: [original.len * 2]u8 = undefined;
     const roundtrip = unescapeTsv(&unesc_buf, escaped);
     try std.testing.expectEqualStrings(original, roundtrip);
+}
+
+test "header accepts only the supported version window" {
+    const base = Header{
+        .magic = MAGIC,
+        .version = VERSION,
+        .num_entries = 0,
+        .created_at = 0,
+        .names_offset = HEADER_SIZE,
+        .paths_offset = HEADER_SIZE,
+        .meta_offset = HEADER_SIZE,
+        .bitmap_offset = HEADER_SIZE,
+        .histogram_offset = HEADER_SIZE,
+        .ext_breakdown_offset = HEADER_SIZE,
+    };
+
+    for ([_]u32{ MIN_READ_VERSION - 1, MIN_READ_VERSION, VERSION, VERSION + 1 }) |version| {
+        var bytes: [HEADER_SIZE]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&bytes);
+        var header = base;
+        header.version = version;
+        try header.serialize(&writer);
+
+        var reader = std.Io.Reader.fixed(&bytes);
+        if (version >= MIN_READ_VERSION and version <= VERSION) {
+            try std.testing.expectEqual(version, (try Header.deserialize(&reader)).version);
+        } else {
+            try std.testing.expectError(error.UnsupportedVersion, Header.deserialize(&reader));
+        }
+    }
 }
 
 test "writeIndex bakes recursive folder sizes into directory entries" {

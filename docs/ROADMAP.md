@@ -190,7 +190,8 @@ every change (destroys the clicked row mid-double-click), stale-index
 - [x] E4. **Unicode case folding** *(done 2026-08-14)* — `core/casefold.zig`
   folds the name blob and the query with the same length-preserving map, so
   "Übersicht", "ΕΛΛΑΔΑ" and "Москва" match in any case. Index format v7 (the
-  bump forces a reindex; the layout is unchanged).
+  writer rebuilds in v7; the layout-compatible v6 reader fallback keeps the
+  app usable with ASCII matching until that rebuild lands).
 - [ ] E5. Drag & drop out of the file list.
 - [ ] E6. Incremental / FSEvents-scoped partial reindex (today every rebuild
   re-walks all of `$HOME`, ~23 s + transient RAM spike).

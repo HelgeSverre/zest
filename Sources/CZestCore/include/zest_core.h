@@ -78,6 +78,14 @@ typedef struct { ZestExtCount entries[32]; uint32_t len; } ZestExtBreakdown;
 uint32_t zest_ext_breakdown(Core *core, const char *scope_root, uint32_t max_depth,
                             uint8_t cat, uint32_t max, ZestExtCount *out);
 
+// Apply the engine's length-preserving UTF-8 case fold. `out` must have room
+// for at least `len` bytes. Returns `len`, or 0 when the output is too small.
+// Exposed so Swift's structured ext: filter uses exactly the same canonical
+// form as the index and query parser (including non-lowercase folds such as
+// micro sign -> Greek mu, while preserving length-changing cases).
+size_t zest_casefold_utf8(const uint8_t *input, size_t len,
+                          uint8_t *out, size_t out_capacity);
+
 #ifdef __cplusplus
 }
 #endif

@@ -47,7 +47,10 @@ struct Filter: Equatable {
         let v = String(lower.dropFirst(4))
         if !v.isEmpty { f.category = v }
       } else if lower.hasPrefix("ext:") {
-        let v = String(lower.dropFirst(4))
+        // Keep Swift's structured filter in the engine's canonical form.
+        // Foundation lowercasing differs for several Unicode code points and
+        // can even change the UTF-8 length, making an exact ext: query miss.
+        let v = ZestCore.caseFoldForQuery(token.dropFirst(4))
         if !v.isEmpty { f.extensions.insert(v) }
       } else {
         plainParts.append(String(token))

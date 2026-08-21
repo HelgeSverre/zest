@@ -23,6 +23,10 @@ just bench-search   # benchmark the engine against a synthetic corpus (no index 
 
 **Always leave `zig-out/lib/libzest-core.a` in ReleaseFast** — Package.swift links whatever is there, and a Debug engine is ~19× slower (an 82-second one-char query). A bare `zig build` or `zig build test` installs a Debug lib; follow it with `zig build core -Doptimize=ReleaseFast` (the justfile recipes do this).
 
+SwiftPM does not track the external Zig archive as an input. Use the justfile
+recipes rather than invoking `swift build/test` after Zig changes; the recipes
+touch the `CZestCore` shim so the current archive is always relinked.
+
 ## Architecture
 
 See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagnosis, benchmarks, phased plan). Key points:
@@ -52,7 +56,7 @@ Sources/Zest/          — Swift app: App/ (coordinator, delegate), Shell/ (tool
 Sources/CZestCore/     — C header module for the Zig lib
 src/capi/              — C ABI (zest_open/close/count/query/query_cancellable/
                          query_count/query_row/query_free/cancel_token_*/
-                         histogram/ext_breakdown)
+                         histogram/ext_breakdown/casefold_utf8)
 src/index/             — format, builder, bulk_scan, reader, search, subtree,
                          bitmap, fsevents, daemon
 src/core/              — types, file_types, casefold, filters, humanize, runtime

@@ -87,7 +87,9 @@ Why columnar:
 - The blob is UTF-8 case-*folded*, not ASCII-lowercased (`core/casefold.zig`),
   with the same fold applied to the query. Folding is length-preserving by
   construction, which is what lets one `(offset, length)` pair address a name
-  in both blobs.
+  in both blobs. The v7 reader also accepts layout-compatible v6 indexes and
+  uses their ASCII query fold during a rolling upgrade; Unicode matching turns
+  on when the daemon publishes the next v7 index.
 - The `u8 kind` / `u8 category` arrays plus the per-category sorted `u32` index
   lists let the search engine eliminate rows that don't match a `cat:code` /
   `ext:pdf` filter in O(1) per candidate (binary search on a sorted bitmap).
@@ -96,7 +98,7 @@ Why columnar:
 
 ## The C ABI surface
 
-`libzest-core.a` exports thirteen functions (`src/capi/zest_core.zig`):
+`libzest-core.a` exports fourteen functions (`src/capi/zest_core.zig`):
 
 ```c
 Core*     zest_open          (const uint8_t* bytes, size_t len);   // borrow bytes
@@ -116,6 +118,8 @@ void      zest_cancel_token_cancel     (CancelToken*);             // any thread
 ZestHistogram zest_histogram (Core*, const char* scope, uint32_t max_depth);
 uint32_t  zest_ext_breakdown (Core*, const char* scope, uint32_t max_depth,
                               uint8_t cat, uint32_t max, ZestExtCount* out);
+size_t    zest_casefold_utf8 (const uint8_t* input, size_t len,
+                              uint8_t* out, size_t out_capacity);
 ```
 
 `ZestRow` is a fixed-layout `extern struct` (name, dir_path, size, mtime, kind,
@@ -124,7 +128,9 @@ layout cannot drift. Strings borrow into the index mmap; Swift copies them to
 `String` immediately on receipt. `zest_histogram` returns a 9-element
 per-category count array for the sidebar histogram. `zest_ext_breakdown`
 returns the top-N extensions for a (scope, category) pair, sorted by count
-descending, for the sidebar's drill-down rows.
+descending, for the sidebar's drill-down rows. `zest_casefold_utf8` lets the
+Swift filter model canonicalize `ext:` values with the same mapping as the
+engine instead of Foundation's observably different Unicode lowercasing.
 
 `zest_query_cancellable` is `zest_query` plus a cancel token. The token is one
 atomic word; the engine polls it every 64 KiB of blob (or every 512 entries on
@@ -238,7 +244,7 @@ src/
 ├── indexer_main.zig        ← daemon entry; delegates to index/daemon.zig
 ├── zest_core_lib.zig       ← library entry; pulls in capi/zest_core.zig
 ├── capi/
-│   └── zest_core.zig       ← C ABI surface (13 functions + ZestRow/ZestHistogram/ZestExtBreakdown)
+│   └── zest_core.zig       ← C ABI surface (14 functions + ZestRow/ZestHistogram/ZestExtBreakdown)
 ├── engine.zig              ← module root re-exporting the pure engine (benchmarks/tools)
 ├── core/
 │   ├── casefold.zig        ← length-preserving UTF-8 case folding (blob + query)

@@ -34,6 +34,24 @@ final class ZestCore {
     let category: UInt8
   }
 
+  /// Canonicalize a query fragment with the engine's exact UTF-8 case fold.
+  /// Foundation's `lowercased()` is not interchangeable here: it leaves some
+  /// simple folds unchanged (µ), while shrinking mappings such as ẞ -> ß that
+  /// the byte-parallel index deliberately preserves.
+  static func caseFoldForQuery(_ value: Substring) -> String {
+    let input = Array(value.utf8)
+    guard !input.isEmpty else { return "" }
+    var output = [UInt8](repeating: 0, count: input.count)
+    let written = input.withUnsafeBufferPointer { inputBuffer in
+      output.withUnsafeMutableBufferPointer { outputBuffer in
+        zest_casefold_utf8(
+          inputBuffer.baseAddress, inputBuffer.count, outputBuffer.baseAddress, outputBuffer.count)
+      }
+    }
+    guard written == input.count else { return String(value) }
+    return String(decoding: output, as: UTF8.self)
+  }
+
   /// Cancellation handle for one in-flight query. `cancel()` is an atomic
   /// store on the Zig side — safe from any thread, and safe to call before,
   /// during, or after the query the token was handed to. The engine polls it

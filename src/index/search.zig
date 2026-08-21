@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
+const format = @import("format.zig");
 const reader_mod = @import("reader.zig");
 const bitmap_mod = @import("bitmap.zig");
 const casefold = @import("../core/casefold.zig");
@@ -55,6 +56,13 @@ pub fn searchCancellable(
     opts: SearchOptions,
     cancel: ?*const CancelFlag,
 ) (SearchCancelled || std.mem.Allocator.Error || error{QueryTooLong})![]SearchResult {
+    // Honour an already-cancelled token before any fast path or O(D) scope
+    // setup. Without this, an empty global query (and some missing scopes)
+    // reported success even though the C API promises cancellation per query.
+    if (cancel) |flag| {
+        if (flag.load(.acquire) != 0) return error.SearchCancelled;
+    }
+
     const has_text = opts.query.len > 0;
     const has_filters = opts.filters.len > 0;
     // A non-root scope or a finite depth is a real predicate that must scan and
@@ -92,9 +100,17 @@ pub fn searchCancellable(
         // Text search path
         var lower_query_buf: [256]u8 = undefined;
         if (opts.query.len > lower_query_buf.len) return error.QueryTooLong;
-        // The same length-preserving fold the builder applied to the lowercase
-        // blob, so "RÉSUMÉ", "Résumé" and "résumé" all reduce to one needle.
-        casefold.foldInto(&lower_query_buf, opts.query);
+        if (reader.header.version >= format.UNICODE_CASEFOLD_VERSION) {
+            // The same length-preserving fold the v7 builder applied to the
+            // lowercase blob, so "RÉSUMÉ", "Résumé" and "résumé" reduce to
+            // one needle.
+            casefold.foldInto(&lower_query_buf, opts.query);
+        } else {
+            // v6 has the identical layout but an ASCII-lowercased blob. Keep
+            // existing indexes searchable during an app/daemon rolling
+            // upgrade; Unicode matching activates after the v7 rebuild lands.
+            for (opts.query, 0..) |ch, i| lower_query_buf[i] = std.ascii.toLower(ch);
+        }
         const lower_query = lower_query_buf[0..opts.query.len];
 
         const blob_info = reader.getLowerNameBlob() orelse return try allocator.alloc(SearchResult, 0);
@@ -459,8 +475,6 @@ fn relativeDir(dir_path: []const u8, scope_in: []const u8) []const u8 {
 // Tests
 // ---------------------------------------------------------------------------
 
-const format = @import("format.zig");
-
 const test_entries = [_]format.IndexEntry{
     .{ .name = "report.pdf", .dir_path = "/home/user/docs", .size = 2 * 1024 * 1024, .mtime = 1700000000, .kind = .file, .category = .documents },
     .{ .name = "photo.jpg", .dir_path = "/home/user/pics", .size = 500 * 1024, .mtime = 1700100000, .kind = .file, .category = .images },
@@ -616,6 +630,38 @@ test "text search is case-insensitive across scripts" {
     }
 }
 
+test "v6 index remains searchable with its ASCII fold during upgrade" {
+    const allocator = std.testing.allocator;
+    const entries = [_]format.IndexEntry{
+        .{ .name = "MÜNCHEN.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+    };
+    var data = try format.writeIndex(allocator, &entries);
+    defer allocator.free(data);
+
+    // Recreate the only semantic difference in a v6 index: its lower-name
+    // blob used ASCII lowercasing, leaving the non-ASCII Ü bytes untouched.
+    var v7_reader = try reader_mod.IndexReader.init(allocator, data);
+    const lower_blob = @constCast(v7_reader.getLowerNameBlob().?.blob);
+    for (entries[0].name, 0..) |ch, i| lower_blob[i] = std.ascii.toLower(ch);
+    v7_reader.deinit();
+    std.mem.writeInt(u32, data[8..12], format.MIN_READ_VERSION, .little);
+
+    var reader = try reader_mod.IndexReader.init(allocator, data);
+    defer reader.deinit();
+    try std.testing.expectEqual(format.MIN_READ_VERSION, reader.header.version);
+
+    const exact_case = try search(allocator, &reader, .{ .query = "MÜNCHEN" });
+    defer allocator.free(exact_case);
+    try std.testing.expectEqual(@as(usize, 1), exact_case.len);
+
+    // This was not supported by v6 and must not be falsely advertised until a
+    // v7 index is published; using the v7-folded query against the v6 blob
+    // would also break the exact-case query above.
+    const unicode_case = try search(allocator, &reader, .{ .query = "münchen" });
+    defer allocator.free(unicode_case);
+    try std.testing.expectEqual(@as(usize, 0), unicode_case.len);
+}
+
 test "vector scan finds matches at every alignment and at the blob tail" {
     // The candidate scan steps a vector at a time and finishes with a scalar
     // tail; a match must be found wherever it lands relative to those bounds.
@@ -667,6 +713,16 @@ test "cancelled search returns SearchCancelled instead of results" {
     try std.testing.expectError(
         error.SearchCancelled,
         searchCancellable(allocator, &idx.reader, .{ .query = "", .scope = "/home/user", .max_depth = 1 }, &flag),
+    );
+    // Fast paths must not turn an already-cancelled query into a successful
+    // empty result set.
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "" }, &flag),
+    );
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "", .scope = "/missing", .max_depth = 1 }, &flag),
     );
 
     // A live flag lets the search finish normally.

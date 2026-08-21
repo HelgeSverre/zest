@@ -74,6 +74,19 @@ final class FilterTests: XCTestCase {
     XCTAssertEqual(["pdf"], f.extensions)
   }
 
+  func testExtensionUsesEngineCompatibleUnicodeCaseFold() {
+    XCTAssertEqual(["på"], Filter.parse("ext:PÅ").extensions)
+    XCTAssertEqual(["μ"], Filter.parse("ext:µ").extensions)
+    XCTAssertEqual(["ƃ"], Filter.parse("ext:Ƃ").extensions)
+
+    // These mappings change UTF-8 length, so the index deliberately leaves
+    // them untouched. Swift must not lowercase them into a different query.
+    XCTAssertEqual(["ẞ"], Filter.parse("ext:ẞ").extensions)
+    XCTAssertEqual(["İ"], Filter.parse("ext:İ").extensions)
+    XCTAssertEqual(["K"], Filter.parse("ext:K").extensions)
+    XCTAssertEqual(["ſ"], Filter.parse("ext:ſ").extensions)
+  }
+
   func testExtensionWithEmptyValueIsIgnored() {
     let f = Filter.parse("ext:")
     XCTAssertTrue(f.extensions.isEmpty)

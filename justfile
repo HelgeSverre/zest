@@ -1,38 +1,30 @@
-# Zest — unified commands.
-# Every recipe runs against both Zig and Swift at once; no language split.
+# Unified Zig and Swift commands.
 
 _default:
     @just --list
 
-# Build everything: Zig binaries (zest, zest-indexer) + static lib (libzest-core.a) + Swift app.
-# The core lib is rebuilt ReleaseFast last — the Swift app links zig-out/lib, and a
-# Debug engine is ~19x slower on real queries (82.8s vs 4.5s for a 1-char search).
+# Build all binaries and relink the Swift app with the ReleaseFast core.
 build:
     zig build
     zig build core -Doptimize=ReleaseFast
+    touch Sources/CZestCore/empty.c
     swift build
 
-# Run all tests: Zig unit tests + Swift unit tests.
-# (`zig build test` installs a Debug lib as a side effect; restore ReleaseFast
-# before swift test so the Swift suite — and the next `swift run` — use it.)
+# Run Zig and Swift tests with the ReleaseFast core.
 test:
     zig build test
     zig build core -Doptimize=ReleaseFast
+    touch Sources/CZestCore/empty.c
     swift test
 
-# Benchmark the C-ABI engine (zest_query/histogram/ext_breakdown) against the
-# real index. Median over 7 samples; see benchmarks/bench_capi.zig.
+# Benchmark the C ABI against the real index.
 bench-capi:
     zig build core -Doptimize=ReleaseFast --prefix zig-out/release
     mkdir -p zig-out/bin
     zig build-exe benchmarks/bench_capi.zig zig-out/release/lib/libzest-core.a -lc -OReleaseFast -femit-bin=zig-out/bin/bench-capi
     ./zig-out/bin/bench-capi
 
-# Benchmark the engine against a synthetic 1M-entry corpus built in memory —
-# no real index needed, so this runs anywhere (CI, a fresh checkout). Compare
-# before/after by stashing the change and re-running; the corpus seed is fixed.
-# NOTE: with explicit `-M` modules, `-OReleaseFast` must precede *each* module
-# or that module silently compiles as Debug (~10x slower, meaningless numbers).
+# Benchmark search against a deterministic in-memory corpus.
 bench-search:
     mkdir -p zig-out/bin
     zig build-exe -OReleaseFast --dep zest -Mroot=benchmarks/bench_search.zig -OReleaseFast -Mzest=src/engine.zig -lc -femit-bin=zig-out/bin/bench-search
@@ -43,11 +35,12 @@ format:
     zig fmt src
     swift-format format --in-place --recursive Sources
 
-# Lint all sources (zig compile-check + swift compile-check + swift-format + swiftlint).
-# Steps: zig build, swift build, swift-format lint --recursive Sources, swiftlint lint.
+# Compile-check and lint Zig and Swift sources.
 lint:
     @echo "→ zig build (compile check)"
     zig build
+    zig build core -Doptimize=ReleaseFast
+    touch Sources/CZestCore/empty.c
     @echo "→ swift build (compile check)"
     swift build
     @echo "→ swift-format lint"
@@ -81,8 +74,7 @@ uninstall-daemon:
 open-index:
     open ~/Library/Application\ Support/zest/
 
-# Wipe the generated search index (index.zst). Leaves user data
-# (pins.json, folder_colors.json, filters.json) untouched. Rebuild with `just index`.
+# Wipe the generated index while preserving user data.
 wipe-index:
     rm -f ~/Library/Application\ Support/zest/index.zst
 
