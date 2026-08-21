@@ -198,13 +198,13 @@ pub fn main() !void {
     };
 
     // The keystroke ladder mirrors typing "invoice" in the app's search field
-    // (scope=.subfolders → root=$HOME, depth=max), at the app's current cap
-    // (100k) and a UI-sane cap (1k). Folder-listing mirrors navigation
-    // (browse mode: empty query, depth=1).
+    // (scope=.subfolders → root=$HOME, depth=max), at an intentionally large
+    // engine cap (100k) and the app's current UI cap (2k). Folder-listing
+    // mirrors navigation (browse mode: empty query, depth=1).
     var configs: std.ArrayList(QueryCfg) = .empty;
     defer configs.deinit(alloc);
 
-    const caps = [_]u32{ 100_000, 1_000 };
+    const caps = [_]u32{ 100_000, 2_000 };
     const ladder = [_][:0]const u8{ "i", "in", "inv", "invo", "invoice" };
     for (caps) |cap| {
         for (ladder) |q| {
@@ -219,11 +219,11 @@ pub fn main() !void {
     for (configs.items) |cfg| {
         const r = try benchQuery(core, cfg.query, cfg.scope, cfg.depth, cfg.max, max_samples);
         std.debug.print("| {s} | `{s}` | {d} | {d} | {d:.1} | {d:.1} | {d:.1} | {d} | {d:.1} |\n", .{
-            cfg.label, cfg.query, cfg.max, r.count,
+            cfg.label,                cfg.query,             cfg.max,               r.count,
             fmtMs(r.stats.median_ns), fmtMs(r.stats.min_ns), fmtMs(r.stats.max_ns), r.stats.n,
             fmtMs(r.drain_ns),
         });
-            }
+    }
 
     // Sidebar path: histogram + 9 ext breakdowns, depth 1 and subtree.
     const depths = [_]struct { label: []const u8, d: u32 }{
@@ -244,7 +244,7 @@ pub fn main() !void {
         }
         const st = summarize(samples.items);
         std.debug.print("| histogram {s} | $HOME | {d:.1} | {d:.1} | {d:.1} | {d} |\n", .{ dd.label, fmtMs(st.median_ns), fmtMs(st.min_ns), fmtMs(st.max_ns), st.n });
-        
+
         samples.clearRetainingCapacity();
         s = 0;
         while (s < max_samples) : (s += 1) {
@@ -261,7 +261,7 @@ pub fn main() !void {
         }
         const st2 = summarize(samples.items);
         std.debug.print("| ext_breakdown x9 {s} | $HOME | {d:.1} | {d:.1} | {d:.1} | {d} |\n", .{ dd.label, fmtMs(st2.median_ns), fmtMs(st2.min_ns), fmtMs(st2.max_ns), st2.n });
-            }
+    }
 
     std.debug.print("\npeak rss: {d:.0} MB\n", .{maxRssMb()});
-    }
+}
