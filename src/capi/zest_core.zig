@@ -7,6 +7,7 @@ const reader_mod = @import("../index/reader.zig");
 const subtree_mod = @import("../index/subtree.zig");
 const search_mod = @import("../index/search.zig");
 const filters_mod = @import("../core/filters.zig");
+const casefold = @import("../core/casefold.zig");
 
 const alloc = std.heap.c_allocator;
 
@@ -68,6 +69,45 @@ export fn zest_count(core: *Core) usize {
     return @intCast(core.reader.numEntries());
 }
 
+/// Fold a UTF-8 string with the exact length-preserving mapping used for the
+/// index's folded name/extension data. This keeps higher-level clients from
+/// applying a subtly different Unicode lowercase operation before querying.
+export fn zest_casefold_utf8(input: [*]const u8, len: usize, out: [*]u8, out_capacity: usize) usize {
+    if (out_capacity < len) return 0;
+    casefold.foldInto(out[0..len], input[0..len]);
+    return len;
+}
+
+/// Outcome of `zest_query_cancellable`, written through its `out_status`.
+pub const ZEST_QUERY_OK: u32 = 0;
+pub const ZEST_QUERY_ERROR: u32 = 1;
+pub const ZEST_QUERY_CANCELLED: u32 = 2;
+
+/// One in-flight query's cancellation flag. Created on the UI thread, read by
+/// the engine on the query thread — an atomic word, no lock and no allocation
+/// on the cancelling side. Outliving the query it was passed to is the caller's
+/// job (Swift keeps it captured by the dispatched closure).
+const CancelToken = struct {
+    flag: search_mod.CancelFlag,
+};
+
+export fn zest_cancel_token_create() ?*CancelToken {
+    const token = alloc.create(CancelToken) catch return null;
+    token.* = .{ .flag = search_mod.CancelFlag.init(0) };
+    return token;
+}
+
+export fn zest_cancel_token_destroy(token: *CancelToken) void {
+    alloc.destroy(token);
+}
+
+/// Ask the query using this token to stop. Safe to call from any thread, and
+/// safe to call before, during, or after the query — a token that is cancelled
+/// before use simply makes the next query return immediately.
+export fn zest_cancel_token_cancel(token: *CancelToken) void {
+    token.flag.store(1, .release);
+}
+
 /// Run one query. `scope_root` "" or "/" means the whole index. `max_depth` 1 =
 /// direct children (folder listing), large = subtree. Returns null on error.
 /// The query string is parsed for `cat:`/`ext:`/`kind:`/`size:`/etc qualifiers —
@@ -80,38 +120,62 @@ export fn zest_query(
     max_depth: u32,
     max_results: u32,
 ) ?*Query {
+    return zest_query_cancellable(core, query_utf8, scope_root, max_depth, max_results, null, null);
+}
+
+/// `zest_query` plus cooperative cancellation. When `token` is non-null the
+/// engine polls it while scanning and unwinds as soon as it is cancelled, so a
+/// keystroke that supersedes an in-flight query gets the CPU immediately
+/// instead of queueing behind a full scan of the index.
+///
+/// `out_status` (optional) distinguishes the null returns: `ZEST_QUERY_CANCELLED`
+/// means a newer query asked this one to stop and the caller should drop the
+/// result, `ZEST_QUERY_ERROR` means the query genuinely failed.
+export fn zest_query_cancellable(
+    core: *Core,
+    query_utf8: [*:0]const u8,
+    scope_root: [*:0]const u8,
+    max_depth: u32,
+    max_results: u32,
+    token: ?*CancelToken,
+    out_status: ?*u32,
+) ?*Query {
+    var status: u32 = ZEST_QUERY_OK;
+    defer if (out_status) |s| {
+        s.* = status;
+    };
+
     const scope_in = std.mem.span(scope_root);
     const scope = if (scope_in.len == 0) "/" else scope_in;
     const raw_query = std.mem.span(query_utf8);
+    const cancel: ?*const search_mod.CancelFlag = if (token) |t| &t.flag else null;
 
     // Parse qualifiers out of the raw string. On parse failure (e.g. the
     // qualifier value is malformed), fall back to a plain text search so a
     // typo never blackholes the result set.
-    var parsed = filters_mod.parse(alloc, raw_query, time(null)) catch {
-        const results = search_mod.search(alloc, &core.reader, .{
-            .query = raw_query,
-            .scope = scope,
-            .max_depth = max_depth,
-            .max_results = max_results,
-        }) catch return null;
-        const q = alloc.create(Query) catch {
-            alloc.free(results);
-            return null;
-        };
-        q.* = .{ .results = results };
-        return q;
-    };
-    defer parsed.deinit();
+    var parsed: ?filters_mod.ParsedQuery = filters_mod.parse(alloc, raw_query, time(null)) catch null;
+    defer if (parsed) |*p| p.deinit();
 
-    const results = search_mod.search(alloc, &core.reader, .{
-        .query = parsed.text,
-        .filters = parsed.filters_list,
+    const opts: search_mod.SearchOptions = if (parsed) |p| .{
+        .query = p.text,
+        .filters = p.filters_list,
         .scope = scope,
         .max_depth = max_depth,
         .max_results = max_results,
-    }) catch return null;
+    } else .{
+        .query = raw_query,
+        .scope = scope,
+        .max_depth = max_depth,
+        .max_results = max_results,
+    };
+
+    const results = search_mod.searchCancellable(alloc, &core.reader, opts, cancel) catch |err| {
+        status = if (err == error.SearchCancelled) ZEST_QUERY_CANCELLED else ZEST_QUERY_ERROR;
+        return null;
+    };
     const q = alloc.create(Query) catch {
         alloc.free(results);
+        status = ZEST_QUERY_ERROR;
         return null;
     };
     q.* = .{ .results = results };
@@ -320,6 +384,61 @@ test "zest_query plain text still works" {
     defer zest_query_free(q);
 
     try std.testing.expectEqual(@as(usize, 2), zest_query_count(q));
+}
+
+test "zest_casefold_utf8 matches the engine fold and checks capacity" {
+    const input = "PÅµẞ";
+    var out: [input.len]u8 = undefined;
+    const n = zest_casefold_utf8(input.ptr, input.len, &out, out.len);
+    try std.testing.expectEqual(input.len, n);
+    // PÅ lowercases, micro sign case-folds to Greek mu, and capital sharp S is
+    // retained because its simple mapping would change the UTF-8 byte length.
+    try std.testing.expectEqualStrings("påμẞ", out[0..n]);
+
+    var too_small: [input.len - 1]u8 = undefined;
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        zest_casefold_utf8(input.ptr, input.len, &too_small, too_small.len),
+    );
+}
+
+test "zest_query_cancellable reports cancellation instead of a result set" {
+    const data = try format.writeIndex(std.testing.allocator, &test_entries);
+    defer std.testing.allocator.free(data);
+    const core = zest_open(data.ptr, data.len) orelse return error.MalformedIndex;
+    defer zest_close(core);
+
+    const token = zest_cancel_token_create() orelse return error.TokenFailed;
+    defer zest_cancel_token_destroy(token);
+
+    // A live token behaves exactly like the plain entry point.
+    var status: u32 = 99;
+    const q = zest_query_cancellable(core, "report", "/", std.math.maxInt(u32), 100, token, &status) orelse
+        return error.QueryFailed;
+    try std.testing.expectEqual(ZEST_QUERY_OK, status);
+    try std.testing.expectEqual(@as(usize, 2), zest_query_count(q));
+    zest_query_free(q);
+
+    // Once cancelled, the token aborts every query it is handed — the UI drops
+    // the null and keeps showing the rows from the query that superseded it.
+    zest_cancel_token_cancel(token);
+    status = 99;
+    try std.testing.expect(zest_query_cancellable(core, "report", "/", std.math.maxInt(u32), 100, token, &status) == null);
+    try std.testing.expectEqual(ZEST_QUERY_CANCELLED, status);
+
+    // Cancellation is a query-level contract, including fast paths that would
+    // otherwise return before entering either scan loop.
+    status = 99;
+    try std.testing.expect(zest_query_cancellable(core, "", "/", std.math.maxInt(u32), 100, token, &status) == null);
+    try std.testing.expectEqual(ZEST_QUERY_CANCELLED, status);
+
+    // A fresh token is unaffected by the cancelled one.
+    const token2 = zest_cancel_token_create() orelse return error.TokenFailed;
+    defer zest_cancel_token_destroy(token2);
+    const q2 = zest_query_cancellable(core, "report", "/", std.math.maxInt(u32), 100, token2, null) orelse
+        return error.QueryFailed;
+    defer zest_query_free(q2);
+    try std.testing.expectEqual(@as(usize, 2), zest_query_count(q2));
 }
 
 test "zest_query empty query with no scope returns nothing" {

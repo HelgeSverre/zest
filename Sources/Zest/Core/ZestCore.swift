@@ -34,6 +34,46 @@ final class ZestCore {
     let category: UInt8
   }
 
+  /// Canonicalize a query fragment with the engine's exact UTF-8 case fold.
+  /// Foundation's `lowercased()` is not interchangeable here: it leaves some
+  /// simple folds unchanged (µ), while shrinking mappings such as ẞ -> ß that
+  /// the byte-parallel index deliberately preserves.
+  static func caseFoldForQuery(_ value: Substring) -> String {
+    let input = Array(value.utf8)
+    guard !input.isEmpty else { return "" }
+    var output = [UInt8](repeating: 0, count: input.count)
+    let written = input.withUnsafeBufferPointer { inputBuffer in
+      output.withUnsafeMutableBufferPointer { outputBuffer in
+        zest_casefold_utf8(
+          inputBuffer.baseAddress, inputBuffer.count, outputBuffer.baseAddress, outputBuffer.count)
+      }
+    }
+    guard written == input.count else { return String(value) }
+    return String(decoding: output, as: UTF8.self)
+  }
+
+  /// Cancellation handle for one in-flight query. `cancel()` is an atomic
+  /// store on the Zig side — safe from any thread, and safe to call before,
+  /// during, or after the query the token was handed to. The engine polls it
+  /// while scanning, so a superseded query stops instead of running to
+  /// completion and starving the keystroke behind it on the query queue.
+  final class CancelToken {
+    fileprivate let handle: OpaquePointer
+
+    init?() {
+      guard let h = zest_cancel_token_create() else { return nil }
+      self.handle = h
+    }
+
+    deinit {
+      zest_cancel_token_destroy(handle)
+    }
+
+    func cancel() {
+      zest_cancel_token_cancel(handle)
+    }
+  }
+
   init?(indexPath: String) {
     let fd = open(indexPath, O_RDONLY)
     guard fd >= 0 else {
@@ -78,11 +118,27 @@ final class ZestCore {
   }
 
   /// Synchronous (runs in Zig); callers dispatch off-main in later phases.
+  /// Engine failures read as an empty result set.
   func query(
     _ q: String, scope: String = "/", maxDepth: UInt32 = .max, maxResults: UInt32 = 100_000
   ) -> [Row] {
-    guard let qp = zest_query(handle, q, scope, maxDepth, maxResults) else {
-      return []
+    query(q, scope: scope, maxDepth: maxDepth, maxResults: maxResults, cancel: nil) ?? []
+  }
+
+  /// Cancellable query. Returns nil **only** when `cancel` was cancelled while
+  /// the engine was scanning — the caller should drop the delivery, because the
+  /// query that cancelled it owns the state now. An engine failure still reads
+  /// as an empty result set, matching the non-cancellable call.
+  func query(
+    _ q: String, scope: String = "/", maxDepth: UInt32 = .max, maxResults: UInt32 = 100_000,
+    cancel: CancelToken?
+  ) -> [Row]? {
+    var status = UInt32(ZEST_QUERY_OK)
+    guard
+      let qp = zest_query_cancellable(
+        handle, q, scope, maxDepth, maxResults, cancel?.handle, &status)
+    else {
+      return status == UInt32(ZEST_QUERY_CANCELLED) ? nil : []
     }
     defer {
       zest_query_free(qp)

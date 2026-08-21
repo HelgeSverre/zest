@@ -47,7 +47,10 @@ struct Filter: Equatable {
         let v = String(lower.dropFirst(4))
         if !v.isEmpty { f.category = v }
       } else if lower.hasPrefix("ext:") {
-        let v = String(lower.dropFirst(4))
+        // Keep Swift's structured filter in the engine's canonical form.
+        // Foundation lowercasing differs for several Unicode code points and
+        // can even change the UTF-8 length, making an exact ext: query miss.
+        let v = ZestCore.caseFoldForQuery(token.dropFirst(4))
         if !v.isEmpty { f.extensions.insert(v) }
       } else {
         plainParts.append(String(token))
@@ -388,6 +391,12 @@ final class AppCoordinator {
   private let queryQueue = DispatchQueue(label: "zest.query", qos: .userInitiated)
   private var queryGeneration = 0
 
+  /// Cancel handle for the query the previous change-tick dispatched. The
+  /// generation counter alone only drops a stale *delivery*; the engine still
+  /// burned a full scan first, and because the queue is serial the next
+  /// keystroke waited behind it. Cancelling makes that scan unwind instead.
+  private var inFlightCancel: ZestCore.CancelToken?
+
   /// True while a query is in flight for the current state (drives the
   /// filter bar's transient "…" count).
   var isLoading: Bool { loading }
@@ -409,6 +418,11 @@ final class AppCoordinator {
   private func startQuery() {
     queryGeneration += 1
     let gen = queryGeneration
+    // Whatever the previous tick started is stale as of this line: stop it so
+    // the serial queue reaches this query without finishing a scan whose rows
+    // the generation check would have thrown away anyway.
+    inFlightCancel?.cancel()
+    inFlightCancel = nil
     guard let core else {
       // Nothing will deliver — results must read empty, not stale.
       loading = false
@@ -422,13 +436,25 @@ final class AppCoordinator {
     let sortCol = sortColumn
     let sortAsc = sortAscending
     let foldersTop = foldersOnTop
+    // The token is captured by the closure, so it stays alive for the whole
+    // engine call even if a newer tick has already replaced `inFlightCancel`.
+    let token = ZestCore.CancelToken()
+    inFlightCancel = token
     queryQueue.async { [weak self] in
-      var rows = core.query(q, scope: root, maxDepth: depth, maxResults: UInt32(Self.maxResults))
+      guard
+        var rows = core.query(
+          q, scope: root, maxDepth: depth, maxResults: UInt32(Self.maxResults), cancel: token)
+      else {
+        // Cancelled: the newer query that cancelled us owns `loading` and
+        // `cachedResults` now, so deliver nothing.
+        return
+      }
       Self.applySort(to: &rows, column: sortCol, ascending: sortAsc, foldersOnTop: foldersTop)
       DispatchQueue.main.async {
         guard let self, self.queryGeneration == gen else { return }
         self.cachedResults = rows
         self.loading = false
+        self.inFlightCancel = nil
         self.onChange?()  // second pass: observers render fresh rows
       }
     }

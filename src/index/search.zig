@@ -1,7 +1,9 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
+const format = @import("format.zig");
 const reader_mod = @import("reader.zig");
 const bitmap_mod = @import("bitmap.zig");
+const casefold = @import("../core/casefold.zig");
 const filters_mod = @import("../core/filters.zig");
 const subtree_mod = @import("subtree.zig");
 
@@ -28,21 +30,39 @@ pub const SearchResult = struct {
 
 pub const SearchCancelled = error{SearchCancelled};
 
+/// Cooperative cancellation flag: 0 = keep going, anything else = abort.
+/// Owned by the caller (the C ABI hands out one per in-flight query) and read
+/// with acquire ordering from the search thread.
+pub const CancelFlag = std.atomic.Value(u32);
+
+/// How much blob/how many entries the scan covers between cancellation checks.
+/// The vector scan skips a whole register at a time, so a per-position counter
+/// would fire only on candidate hits; a byte budget keeps the response time
+/// bounded (~10µs of scanning at typical memory bandwidth) either way.
+const cancel_check_stride: usize = 64 * 1024;
+
 /// Synchronous search (for CLI/tests). Delegates to the cancellable variant with no cancellation.
 pub fn search(allocator: std.mem.Allocator, reader: *reader_mod.IndexReader, opts: SearchOptions) ![]SearchResult {
-    return searchCancellable(allocator, reader, opts, null, 0);
+    return searchCancellable(allocator, reader, opts, null);
 }
 
 /// Cancellable search for use from background threads.
-/// If `generation` is non-null, the search periodically checks whether
-/// `generation.load(.acquire) != my_generation` and returns `SearchCancelled` if so.
+/// If `cancel` is non-null, the search polls it periodically and returns
+/// `SearchCancelled` as soon as it reads non-zero — the caller's next query
+/// then gets the CPU instead of waiting out a superseded scan.
 pub fn searchCancellable(
     allocator: std.mem.Allocator,
     reader: *reader_mod.IndexReader,
     opts: SearchOptions,
-    generation: ?*std.atomic.Value(u64),
-    my_generation: u64,
+    cancel: ?*const CancelFlag,
 ) (SearchCancelled || std.mem.Allocator.Error || error{QueryTooLong})![]SearchResult {
+    // Honour an already-cancelled token before any fast path or O(D) scope
+    // setup. Without this, an empty global query (and some missing scopes)
+    // reported success even though the C API promises cancellation per query.
+    if (cancel) |flag| {
+        if (flag.load(.acquire) != 0) return error.SearchCancelled;
+    }
+
     const has_text = opts.query.len > 0;
     const has_filters = opts.filters.len > 0;
     // A non-root scope or a finite depth is a real predicate that must scan and
@@ -80,8 +100,16 @@ pub fn searchCancellable(
         // Text search path
         var lower_query_buf: [256]u8 = undefined;
         if (opts.query.len > lower_query_buf.len) return error.QueryTooLong;
-        for (opts.query, 0..) |ch, i| {
-            lower_query_buf[i] = std.ascii.toLower(ch);
+        if (reader.header.version >= format.UNICODE_CASEFOLD_VERSION) {
+            // The same length-preserving fold the v7 builder applied to the
+            // lowercase blob, so "RÉSUMÉ", "Résumé" and "résumé" reduce to
+            // one needle.
+            casefold.foldInto(&lower_query_buf, opts.query);
+        } else {
+            // v6 has the identical layout but an ASCII-lowercased blob. Keep
+            // existing indexes searchable during an app/daemon rolling
+            // upgrade; Unicode matching activates after the v7 rebuild lands.
+            for (opts.query, 0..) |ch, i| lower_query_buf[i] = std.ascii.toLower(ch);
         }
         const lower_query = lower_query_buf[0..opts.query.len];
 
@@ -92,6 +120,8 @@ pub fn searchCancellable(
             const first_char = lower_query[0];
             const last_char = lower_query[lower_query.len - 1];
             const qlen = lower_query.len;
+            // Last position a match can start at (exclusive bound).
+            const scan_limit = blob.len + 1 - qlen;
 
             var pos: usize = 0;
             // Blob positions are scanned in ascending order and names are laid
@@ -101,37 +131,40 @@ pub fn searchCancellable(
             // one compare replaces the old O(results) duplicate scan that made
             // short queries quadratic (4.5s for "i" over a 5.5M-entry index).
             var last_seen_entry: u32 = std.math.maxInt(u32);
-            while (pos + qlen <= blob.len and results.items.len < opts.max_results) {
-                // Cancellation check every 512 positions (~0.2ms overhead for 100MB blob)
-                if (generation) |gen| {
-                    if (pos & 0x1FF == 0 and gen.load(.acquire) != my_generation) {
-                        return error.SearchCancelled;
+            var check_at: usize = 0;
+            while (pos < scan_limit and results.items.len < opts.max_results) {
+                // Cancellation is polled per `cancel_check_stride` bytes of
+                // blob, and the vector scan is capped at the same boundary so a
+                // long candidate-free stretch can't outrun the check.
+                var chunk_end = scan_limit;
+                if (cancel) |flag| {
+                    if (pos >= check_at) {
+                        if (flag.load(.acquire) != 0) return error.SearchCancelled;
+                        check_at = pos + cancel_check_stride;
                     }
+                    chunk_end = @min(scan_limit, check_at);
                 }
 
-                if (blob[pos] == first_char and blob[pos + qlen - 1] == last_char) {
-                    if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
-                        if (findEntryForBlobPos(reader, @intCast(pos), @intCast(qlen), num_entries)) |entry_idx| {
-                            const duplicate = entry_idx == last_seen_entry;
-                            last_seen_entry = entry_idx;
+                // SIMD two-anchor filter: 16/32 positions rejected per
+                // instruction. Only survivors reach the full memcmp.
+                const candidate = nextCandidate(blob, pos, chunk_end, first_char, last_char, qlen) orelse {
+                    pos = chunk_end;
+                    continue;
+                };
+                pos = candidate;
 
-                            if (!duplicate) {
-                                if (cat_bitmap) |bm| {
-                                    if (!bm.contains(entry_idx)) {
-                                        pos += 1;
-                                        continue;
-                                    }
-                                }
+                if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
+                    if (findEntryForBlobPos(reader, @intCast(pos), @intCast(qlen), num_entries)) |entry_idx| {
+                        const duplicate = entry_idx == last_seen_entry;
+                        last_seen_entry = entry_idx;
 
-                                if (buildResult(reader, entry_idx)) |result| {
-                                    if (!matchesScope(result.dir_path, opts.scope, opts.max_depth)) {
-                                        pos += 1;
-                                        continue;
-                                    }
-                                    if (has_filters and !matchFilters(opts.filters, result)) {
-                                        pos += 1;
-                                        continue;
-                                    }
+                        const in_category = !duplicate and
+                            (if (cat_bitmap) |bm| bm.contains(entry_idx) else true);
+                        if (in_category) {
+                            if (buildResult(reader, entry_idx)) |result| {
+                                if (matchesScope(result.dir_path, opts.scope, opts.max_depth) and
+                                    (!has_filters or matchFilters(opts.filters, result)))
+                                {
                                     try results.append(allocator, result);
                                 }
                             }
@@ -180,9 +213,9 @@ pub fn searchCancellable(
 
         var idx: u32 = 0;
         while (idx < num_entries and results.items.len < opts.max_results) : (idx += 1) {
-            // Cancellation check every 512 entries
-            if (generation) |gen| {
-                if (idx & 0x1FF == 0 and gen.load(.acquire) != my_generation) {
+            // Cancellation check every 512 entries.
+            if (cancel) |flag| {
+                if (idx & 0x1FF == 0 and flag.load(.acquire) != 0) {
                     return error.SearchCancelled;
                 }
             }
@@ -242,6 +275,55 @@ fn matchFilters(filter_criteria: []const filters_mod.FilterCriterion, result: Se
         .category = result.category,
     };
     return filters_mod.matchesAll(filter_criteria, target);
+}
+
+// ---------------------------------------------------------------------------
+// Vectorized candidate scan
+// ---------------------------------------------------------------------------
+
+/// Bytes compared per vector step: 16 on Apple Silicon (one NEON q-register),
+/// 16/32 on x86 depending on the SSE2/AVX2 baseline the lib is built for.
+/// `suggestVectorLength` picks the widest register the target actually has, so
+/// no intrinsics or per-arch code paths are needed.
+const scan_width: usize = std.simd.suggestVectorLength(u8) orelse 16;
+const ScanVec = @Vector(scan_width, u8);
+const ScanMask = std.meta.Int(.unsigned, scan_width);
+
+/// First position `p` in `[start, end)` where `blob[p] == first` and
+/// `blob[p + qlen - 1] == last`, or null when the window holds no candidate.
+///
+/// This is the hot loop of every text query: the old scalar version tested one
+/// position per iteration, so a 400 MB blob cost 400M compare-and-branch pairs
+/// with a mispredict on every hit. Comparing two shifted vectors and ANDing the
+/// masks rejects `scan_width` positions per instruction and branches once per
+/// register instead — only surviving positions pay for the memcmp.
+///
+/// Caller guarantees `end + qlen - 1 <= blob.len` (i.e. `end <= blob.len + 1 -
+/// qlen`), so the trailing-anchor load stays in bounds.
+fn nextCandidate(
+    blob: []const u8,
+    start: usize,
+    end: usize,
+    first: u8,
+    last: u8,
+    qlen: usize,
+) ?usize {
+    var pos = start;
+    if (scan_width > 1) {
+        const first_vec: ScanVec = @splat(first);
+        const last_vec: ScanVec = @splat(last);
+        const tail_off = qlen - 1;
+        while (pos + scan_width <= end) : (pos += scan_width) {
+            const head: ScanVec = blob[pos..][0..scan_width].*;
+            const tail: ScanVec = blob[pos + tail_off ..][0..scan_width].*;
+            const hits: ScanMask = @bitCast((head == first_vec) & (tail == last_vec));
+            if (hits != 0) return pos + @ctz(hits);
+        }
+    }
+    while (pos < end) : (pos += 1) {
+        if (blob[pos] == first and blob[pos + qlen - 1] == last) return pos;
+    }
+    return null;
 }
 
 fn findEntryForBlobPos(reader: *reader_mod.IndexReader, blob_pos: u32, match_len: u32, num_entries: u32) ?u32 {
@@ -393,8 +475,6 @@ fn relativeDir(dir_path: []const u8, scope_in: []const u8) []const u8 {
 // Tests
 // ---------------------------------------------------------------------------
 
-const format = @import("format.zig");
-
 const test_entries = [_]format.IndexEntry{
     .{ .name = "report.pdf", .dir_path = "/home/user/docs", .size = 2 * 1024 * 1024, .mtime = 1700000000, .kind = .file, .category = .documents },
     .{ .name = "photo.jpg", .dir_path = "/home/user/pics", .size = 500 * 1024, .mtime = 1700100000, .kind = .file, .category = .images },
@@ -511,6 +591,145 @@ test "query spanning two adjacent blob names matches neither" {
     const inside = try search(allocator, &reader, .{ .query = "note" });
     defer allocator.free(inside);
     try std.testing.expectEqual(@as(usize, 1), inside.len);
+}
+
+test "text search is case-insensitive across scripts" {
+    const allocator = std.testing.allocator;
+    const entries = [_]format.IndexEntry{
+        .{ .name = "Résumé Final.PDF", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .documents },
+        .{ .name = "MÜNCHEN 2024.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "ΕΛΛΑΔΑ.md", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "Москва.jpg", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .images },
+        .{ .name = "Ƃudget.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+        .{ .name = "ᲐᲜᲑᲐᲜᲘ.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+    };
+    const data = try format.writeIndex(allocator, &entries);
+    defer allocator.free(data);
+    var reader = try reader_mod.IndexReader.init(allocator, data);
+    defer reader.deinit();
+
+    // Query case must not matter in either direction: the blob is folded at
+    // build time and the query with the same length-preserving fold.
+    const cases = [_][]const u8{
+        "résumé",
+        "RÉSUMÉ",
+        "Résumé",
+        "münchen",
+        "MÜNCHEN",
+        "ελλαδα",
+        "ΕΛΛΑΔΑ",
+        "москва",
+        "МОСКВА",
+        "ƃudget",
+        "ანბანი",
+    };
+    for (cases) |q| {
+        const results = try search(allocator, &reader, .{ .query = q });
+        defer allocator.free(results);
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+    }
+}
+
+test "v6 index remains searchable with its ASCII fold during upgrade" {
+    const allocator = std.testing.allocator;
+    const entries = [_]format.IndexEntry{
+        .{ .name = "MÜNCHEN.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text },
+    };
+    var data = try format.writeIndex(allocator, &entries);
+    defer allocator.free(data);
+
+    // Recreate the only semantic difference in a v6 index: its lower-name
+    // blob used ASCII lowercasing, leaving the non-ASCII Ü bytes untouched.
+    var v7_reader = try reader_mod.IndexReader.init(allocator, data);
+    const lower_blob = @constCast(v7_reader.getLowerNameBlob().?.blob);
+    for (entries[0].name, 0..) |ch, i| lower_blob[i] = std.ascii.toLower(ch);
+    v7_reader.deinit();
+    std.mem.writeInt(u32, data[8..12], format.MIN_READ_VERSION, .little);
+
+    var reader = try reader_mod.IndexReader.init(allocator, data);
+    defer reader.deinit();
+    try std.testing.expectEqual(format.MIN_READ_VERSION, reader.header.version);
+
+    const exact_case = try search(allocator, &reader, .{ .query = "MÜNCHEN" });
+    defer allocator.free(exact_case);
+    try std.testing.expectEqual(@as(usize, 1), exact_case.len);
+
+    // This was not supported by v6 and must not be falsely advertised until a
+    // v7 index is published; using the v7-folded query against the v6 blob
+    // would also break the exact-case query above.
+    const unicode_case = try search(allocator, &reader, .{ .query = "münchen" });
+    defer allocator.free(unicode_case);
+    try std.testing.expectEqual(@as(usize, 0), unicode_case.len);
+}
+
+test "vector scan finds matches at every alignment and at the blob tail" {
+    // The candidate scan steps a vector at a time and finishes with a scalar
+    // tail; a match must be found wherever it lands relative to those bounds.
+    const allocator = std.testing.allocator;
+    var offset: usize = 0;
+    while (offset < 80) : (offset += 1) {
+        var names: std.ArrayList([]u8) = .empty;
+        defer {
+            for (names.items) |n| allocator.free(n);
+            names.deinit(allocator);
+        }
+        var entries: std.ArrayList(format.IndexEntry) = .empty;
+        defer entries.deinit(allocator);
+
+        // `offset` filler entries push the needle to a different blob position
+        // on every iteration, sweeping it across the vector boundary.
+        var i: usize = 0;
+        while (i < offset) : (i += 1) {
+            const n = try allocator.dupe(u8, "x");
+            try names.append(allocator, n);
+            try entries.append(allocator, .{ .name = n, .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text });
+        }
+        try entries.append(allocator, .{ .name = "needle.txt", .dir_path = "/d", .size = 1, .mtime = 1, .kind = .file, .category = .text });
+
+        const data = try format.writeIndex(allocator, entries.items);
+        defer allocator.free(data);
+        var reader = try reader_mod.IndexReader.init(allocator, data);
+        defer reader.deinit();
+
+        const results = try search(allocator, &reader, .{ .query = "needle" });
+        defer allocator.free(results);
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+        try std.testing.expectEqualStrings("needle.txt", results[0].name);
+    }
+}
+
+test "cancelled search returns SearchCancelled instead of results" {
+    const allocator = std.testing.allocator;
+    var idx = try buildTestIndex(allocator);
+    defer allocator.free(idx.data);
+    defer idx.reader.deinit();
+
+    var flag = CancelFlag.init(1);
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "report" }, &flag),
+    );
+    // Filter-only path honours the same flag.
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "", .scope = "/home/user", .max_depth = 1 }, &flag),
+    );
+    // Fast paths must not turn an already-cancelled query into a successful
+    // empty result set.
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "" }, &flag),
+    );
+    try std.testing.expectError(
+        error.SearchCancelled,
+        searchCancellable(allocator, &idx.reader, .{ .query = "", .scope = "/missing", .max_depth = 1 }, &flag),
+    );
+
+    // A live flag lets the search finish normally.
+    var live = CancelFlag.init(0);
+    const results = try searchCancellable(allocator, &idx.reader, .{ .query = "report" }, &live);
+    defer allocator.free(results);
+    try std.testing.expectEqual(@as(usize, 2), results.len);
 }
 
 test "size filter matches folders by their baked subtree size" {

@@ -78,7 +78,18 @@ Why columnar:
 
 - The lowercased-name blob is one contiguous `[]u8` that SIMD substring search
   can scan in a single pass. The row index is recovered by binary search
-  through the `u32` offsets array.
+  through the `u32` offsets array. The scan compares two `@Vector(N, u8)`
+  registers per step — the bytes at the candidate position against the query's
+  first character, and the bytes `qlen - 1` further on against its last — and
+  ANDs the masks, so one instruction rejects 16 positions on Apple Silicon (32
+  under AVX2) and only survivors reach the full `memcmp`. `N` comes from
+  `std.simd.suggestVectorLength`, so there are no per-architecture code paths.
+- The blob is UTF-8 case-*folded*, not ASCII-lowercased (`core/casefold.zig`),
+  with the same fold applied to the query. Folding is length-preserving by
+  construction, which is what lets one `(offset, length)` pair address a name
+  in both blobs. The v7 reader also accepts layout-compatible v6 indexes and
+  uses their ASCII query fold during a rolling upgrade; Unicode matching turns
+  on when the daemon publishes the next v7 index.
 - The `u8 kind` / `u8 category` arrays plus the per-category sorted `u32` index
   lists let the search engine eliminate rows that don't match a `cat:code` /
   `ext:pdf` filter in O(1) per candidate (binary search on a sorted bitmap).
@@ -87,7 +98,7 @@ Why columnar:
 
 ## The C ABI surface
 
-`libzest-core.a` exports nine functions (`src/capi/zest_core.zig`):
+`libzest-core.a` exports fourteen functions (`src/capi/zest_core.zig`):
 
 ```c
 Core*     zest_open          (const uint8_t* bytes, size_t len);   // borrow bytes
@@ -95,12 +106,20 @@ void      zest_close         (Core*);
 size_t    zest_count         (Core*);                              // num_entries
 Query*    zest_query         (Core*, const char* q, const char* scope,
                               uint32_t max_depth, uint32_t max_results);
+Query*    zest_query_cancellable (Core*, const char* q, const char* scope,
+                              uint32_t max_depth, uint32_t max_results,
+                              CancelToken*, uint32_t* out_status);
 size_t    zest_query_count   (const Query*);
 ZestRow   zest_query_row     (const Query*, size_t i);             // borrows into mmap
 void      zest_query_free    (Query*);
+CancelToken* zest_cancel_token_create  (void);
+void      zest_cancel_token_destroy    (CancelToken*);
+void      zest_cancel_token_cancel     (CancelToken*);             // any thread
 ZestHistogram zest_histogram (Core*, const char* scope, uint32_t max_depth);
 uint32_t  zest_ext_breakdown (Core*, const char* scope, uint32_t max_depth,
                               uint8_t cat, uint32_t max, ZestExtCount* out);
+size_t    zest_casefold_utf8 (const uint8_t* input, size_t len,
+                              uint8_t* out, size_t out_capacity);
 ```
 
 `ZestRow` is a fixed-layout `extern struct` (name, dir_path, size, mtime, kind,
@@ -109,7 +128,17 @@ layout cannot drift. Strings borrow into the index mmap; Swift copies them to
 `String` immediately on receipt. `zest_histogram` returns a 9-element
 per-category count array for the sidebar histogram. `zest_ext_breakdown`
 returns the top-N extensions for a (scope, category) pair, sorted by count
-descending, for the sidebar's drill-down rows.
+descending, for the sidebar's drill-down rows. `zest_casefold_utf8` lets the
+Swift filter model canonicalize `ext:` values with the same mapping as the
+engine instead of Foundation's observably different Unicode lowercasing.
+
+`zest_query_cancellable` is `zest_query` plus a cancel token. The token is one
+atomic word; the engine polls it every 64 KiB of blob (or every 512 entries on
+the filter path) and unwinds with `ZEST_QUERY_CANCELLED` when it is set. The
+Swift coordinator creates one token per change-tick and cancels the previous
+tick's token before dispatching the next query — so a keystroke that supersedes
+an in-flight scan stops it instead of queueing behind it on the serial query
+queue. `zest_query` is the same call with a null token.
 
 ## End-to-end data flow
 
@@ -194,17 +223,19 @@ releases the old mmap.
   8 worker threads for the parallel scan (`max_scan_threads = 8`, measured
   sweet spot on a 12-core machine).
 - **Search engine**: synchronous. `searchCancellable` accepts an optional
-  `std.atomic.Value(u64)` generation counter; the search checks it every
-  512 positions and returns `error.SearchCancelled` if it has changed.
+  atomic `u32` cancel flag; text scans poll it every 64 KiB of candidate
+  positions, filter-only scans every 512 entries, and cancellation returns
+  `error.SearchCancelled`.
 - **Swift UI**: the main thread drives AppKit. Engine queries run on a serial
   `queryQueue` (`DispatchQueue` with `.userInitiated` QoS) in `AppCoordinator`.
-  A `queryGeneration` counter is incremented on every state change; the queue
-  closure captures the generation and discards the delivery on main if
-  `self.queryGeneration != gen` (stale result). `notifyChange` fires `onChange`
-  twice per change: once immediately so observers can show a loading state
-  (stale rows still visible), and once when the fresh rows land. The sidebar
-  histogram also runs off-main on a `DispatchQueue.global(qos: .userInitiated)`
-  task with its own `histogramGeneration` guard in `CategorySection`.
+  Each state change cancels the previous query's token before enqueuing its own.
+  A separate `queryGeneration` counter still guards delivery: the queue closure
+  captures the generation and discards the result on main if
+  `self.queryGeneration != gen`. `notifyChange` fires `onChange` twice per
+  change: once immediately so observers can show a loading state (stale rows
+  still visible), and once when the fresh rows land. The sidebar histogram also
+  runs off-main on a `DispatchQueue.global(qos: .userInitiated)` task with its
+  own `histogramGeneration` guard in `CategorySection`.
 
 ## What lives where
 
@@ -213,8 +244,11 @@ src/
 ├── indexer_main.zig        ← daemon entry; delegates to index/daemon.zig
 ├── zest_core_lib.zig       ← library entry; pulls in capi/zest_core.zig
 ├── capi/
-│   └── zest_core.zig       ← C ABI surface (9 functions + ZestRow/ZestHistogram/ZestExtBreakdown)
+│   └── zest_core.zig       ← C ABI surface (14 functions + ZestRow/ZestHistogram/ZestExtBreakdown)
+├── engine.zig              ← module root re-exporting the pure engine (benchmarks/tools)
 ├── core/
+│   ├── casefold.zig        ← length-preserving UTF-8 case folding (blob + query)
+│   ├── casefold_data.zig   ← generated Unicode 17 simple-fold mapping table
 │   ├── filters.zig         ← FilterCriterion union (kind/ext/size/date/cat/path)
 │   ├── types.zig           ← FileKind, FileCategory enum, FileEntry
 │   ├── runtime.zig         ← global Io handle + nowNanos / readFileAlloc helpers
@@ -223,7 +257,7 @@ src/
 ├── index/
 │   ├── format.zig          ← binary on-disk layout (writer)
 │   ├── reader.zig          ← reader over the mmap'd bytes
-│   ├── search.zig          ← SIMD substring + bitmap intersection
+│   ├── search.zig          ← SIMD substring + bitmap intersection + cancellation
 │   ├── subtree.zig         ← subtree histogram + ext-breakdown merge
 │   ├── builder.zig         ← scan files → columnar index
 │   ├── bulk_scan.zig       ← parallel getattrlistbulk walker
@@ -289,15 +323,18 @@ Sources/Zest/
   index; callers have no way to distinguish "corrupt header" from "truncated
   file" from "wrong magic". A `zest_last_error()` string or an out-param error
   code would let the UI show a useful message.
-- **No engine-level query cancellation through the ABI.** The Zig
-  `searchCancellable` generation counter exists in `search.zig` but is not
-  exposed through the C ABI. The Swift side drops stale deliveries via
-  `queryGeneration`, but the engine still runs to completion on the old query
-  before the result is discarded. Wiring a cancel token through
-  `zest_query_cancel` would save CPU on rapid keystrokes.
-- **ASCII-only case folding.** The lowercased-name blob and the query are
-  folded with `std.ascii.toLower`. Non-ASCII filenames (e.g. `Ångström.txt`)
-  are findable only by exact case or by partial ASCII match.
+- **Case folding is length-preserving, not full Unicode.** `core/casefold.zig`
+  folds only mappings that keep the UTF-8 byte length, because the lowercase
+  blob is addressed by the same `(offset, length)` pairs as the original blob.
+  Codepoints whose lowercase form is a different length (`İ` → `i`, `ẞ` → `ß`,
+  `K` U+212A → `k`, `ſ` → `s`) are left unfolded, and there is no Unicode
+  normalization — a decomposed `e` + combining acute does not match a
+  precomposed `é`. Fixing either means storing a separate folded blob with its
+  own offset table.
+- **Cancellation is cooperative, not preemptive.** A cancelled query unwinds at
+  the next poll boundary (64 KiB of blob, or 512 entries), not instantly, and
+  the sidebar histogram/ext-breakdown calls have no cancel token at all — they
+  are O(1)/O(D) rather than O(n), so nothing has needed one yet.
 
 ## See also
 

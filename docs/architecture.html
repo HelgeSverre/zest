@@ -181,14 +181,14 @@
 
   <rect x="804" y="266" width="332" height="44" class="box"/>
   <text x="820" y="284" class="lbl">search.zig</text>
-  <text x="820" y="300" class="lbl-sm">SIMD substring over lower-blob · bitmap intersection · scope filter</text>
+  <text x="820" y="300" class="lbl-sm">SIMD substring over folded-name blob · bitmap intersection · scope filter</text>
 
   <rect x="804" y="318" width="332" height="44" class="box"/>
   <text x="820" y="336" class="lbl">query_parser.zig · filters.zig</text>
   <text x="820" y="352" class="lbl-sm">"cat:code ext:pdf" → ParsedQuery { text, filters[] }</text>
 
   <rect x="804" y="370" width="332" height="32" class="box"/>
-  <text x="820" y="390" class="lbl-sm">searchCancellable accepts an atomic gen counter (abort mid-scan)</text>
+  <text x="820" y="390" class="lbl-sm">atomic cancel flag · 64 KiB / 512-entry polling</text>
 
   <!-- Swift app (bottom-right) -->
   <rect x="780" y="440" width="380" height="220" class="box-sw"/>
@@ -291,7 +291,7 @@
     <div class="label">Zig · static lib</div>
     <div class="title">libzest-core.a</div>
     <div class="meta"><code>src/zest_core_lib.zig</code> · C ABI</div>
-    <p>Pure-CPU search engine. No <code>main</code>, no <code>Io</code> handle — it borrows caller-provided bytes (a Swift mmap) for the lifetime of the Core. Five exported functions, one <code>extern struct</code>.</p>
+    <p>Pure-CPU search engine. No <code>main</code>, no <code>Io</code> handle — it borrows caller-provided bytes (a Swift mmap) for the lifetime of the Core. Fourteen exported functions expose queries, cancellation, sidebar aggregates, and query-compatible case folding.</p>
   </div>
   <div class="card">
     <div class="label">Swift · GUI</div>
@@ -318,9 +318,9 @@
 
 <!-- ============================================================ INDEX FORMAT -->
 <h2 id="index-format">Index file format  <span class="meta" style="font-weight:400">— <code>index.zst</code>, ~80–200 MB on a 5 M-file home, custom binary</span></h2>
-<pre><span class="c">┌────────────────────── HEADER (64 bytes) ──────────────────────┐</span>
-│ magic  │ version │ num_entries │ created_at │ 4 × section_off  │
-│"ZESTIN"│   u32   │     u64     │     u64    │ u64 each          │
+<pre><span class="c">┌────────────────────── HEADER (80 bytes) ──────────────────────┐</span>
+│ magic  │ version │ padding │ 8 × u64 fields / section offsets  │
+│"ZESTIN"│   u32   │   u32   │ entries · created_at · 6 offsets  │
 <span class="c">├──────────────────── NAMES column ─────────────────────────────┤</span>
 │ u32 offsets[num]  ·  u16 lengths[num]                           │
 │ u32 blob_len  ·  original blob   ·  u32 lower_len  ·  lower blob│
@@ -333,9 +333,13 @@
 <span class="c">├──────────────────── BITMAPS ───────────────────────────────────┤</span>
 │ u32 num_bitmaps                                                 │
 │ for each: u8 cat · u32 count · u32 indices[count]   (sorted)   │
+<span class="c">├──────────────────── HISTOGRAM ─────────────────────────────────┤</span>
+│ u32 counts[dir_count][category_count]                            │
+<span class="c">├──────────────────── EXTENSION BREAKDOWN ───────────────────────┤</span>
+│ per directory × category: top extension names and u32 counts    │
 <span class="c">└──────────────────────────────────────────────────────────────┘</span></pre>
 
-<p><b>Why columnar.</b> The lowercased-name blob is one contiguous <code>[]u8</code> that SIMD substring search can scan in a single pass — the row index is recovered by binary search through the <code>u32</code> offsets array. The <code>u8 kind</code> / <code>u8 category</code> arrays plus the per-category sorted <code>u32</code> index lists let the search engine eliminate rows that don't match a <code>cat:code</code> / <code>ext:pdf</code> filter in O(1) per candidate. Directory paths are stored once in a prefix-deduped table; each entry holds just a 4-byte <code>parent_id</code>.</p>
+<p><b>Why columnar.</b> The folded-name blob is one contiguous <code>[]u8</code> that SIMD substring search can scan in a single pass — the row index is recovered by binary search through the <code>u32</code> offsets array. Folding is length-preserving, so offsets also address the original UTF-8 blob. The v7 reader accepts layout-compatible v6 indexes and uses their ASCII query fold until the daemon publishes a v7 rebuild. The <code>u8 kind</code> / <code>u8 category</code> arrays plus the per-category sorted <code>u32</code> index lists let the search engine eliminate rows that don't match a <code>cat:code</code> / <code>ext:pdf</code> filter in O(1) per candidate. Directory paths are stored once in a deduped table; each entry holds just a 4-byte <code>parent_id</code>.</p>
 
 <!-- ============================================================ C ABI -->
 <h2 id="c-abi">C ABI surface  <span class="meta" style="font-weight:400">— <code>src/capi/zest_core.zig</code></span></h2>
@@ -344,11 +348,22 @@
 size_t    <span class="t">zest_count</span>  (<span class="k">Core</span>*);                              <span class="c">// header.num_entries</span>
 <span class="k">Query</span>*  <span class="t">zest_query</span>  (<span class="k">Core</span>*, <span class="k">const</span> <span class="k">char</span>* q, <span class="k">const</span> <span class="k">char</span>* scope,
                        uint32_t max_depth, uint32_t max_results);
+<span class="k">Query</span>*  <span class="t">zest_query_cancellable</span> (<span class="k">Core</span>*, <span class="k">const</span> <span class="k">char</span>* q, <span class="k">const</span> <span class="k">char</span>* scope,
+                                   uint32_t max_depth, uint32_t max_results,
+                                   <span class="k">CancelToken</span>*, uint32_t* status);
 size_t    <span class="t">zest_query_count</span>  (<span class="k">const</span> <span class="k">Query</span>*);
 <span class="k">ZestRow</span> <span class="t">zest_query_row</span>   (<span class="k">const</span> <span class="k">Query</span>*, size_t i);   <span class="c">// borrows into the mmap</span>
-<span class="k">void</span>    <span class="t">zest_query_free</span>  (<span class="k">Query</span>*);</pre>
+<span class="k">void</span>    <span class="t">zest_query_free</span>  (<span class="k">Query</span>*);
+<span class="k">CancelToken</span>* <span class="t">zest_cancel_token_create</span>  (<span class="k">void</span>);
+<span class="k">void</span>         <span class="t">zest_cancel_token_destroy</span> (<span class="k">CancelToken</span>*);
+<span class="k">void</span>         <span class="t">zest_cancel_token_cancel</span>  (<span class="k">CancelToken</span>*);
+<span class="k">ZestHistogram</span> <span class="t">zest_histogram</span>    (<span class="k">Core</span>*, <span class="k">const</span> <span class="k">char</span>* scope, uint32_t max_depth);
+uint32_t      <span class="t">zest_ext_breakdown</span> (<span class="k">Core</span>*, <span class="k">const</span> <span class="k">char</span>* scope, uint32_t max_depth,
+                                    uint8_t category, uint32_t max, <span class="k">ZestExtCount</span>* out);
+size_t        <span class="t">zest_casefold_utf8</span> (<span class="k">const</span> uint8_t* input, size_t len,
+                                    uint8_t* out, size_t out_capacity);</pre>
 
-<p><code>ZestRow</code> is a fixed-layout <code>extern struct</code> that Swift consumes through a Clang-imported <code>zest_core.h</code> — the layout cannot drift. Strings borrow into the mmap; Swift copies them to <code>String</code> immediately on receipt. The query string is parsed with <code>query_parser.parse</code> inside <code>zest_query</code>, so <code>"cat:code"</code> reaches the bitmap path and not the text path.</p>
+<p><code>ZestRow</code> is a fixed-layout <code>extern struct</code> that Swift consumes through a Clang-imported <code>zest_core.h</code> — the layout cannot drift. Strings borrow into the mmap; Swift copies them to <code>String</code> immediately on receipt. The query string is parsed with <code>filters.parse</code> inside <code>zest_query</code>, so <code>"cat:code"</code> reaches the bitmap path and not the text path. Swift uses <code>zest_casefold_utf8</code> to keep structured extension filters in the engine's canonical form.</p>
 
 <!-- ============================================================ DATAFLOW -->
 <h2 id="dataflow">One search, end-to-end</h2>
@@ -413,7 +428,7 @@ size_t    <span class="t">zest_query_count</span>  (<span class="k">const</span>
   <tr>
     <td>Search engine</td>
     <td class="m">sync, cancellable</td>
-    <td><code>searchCancellable</code> accepts an optional <code>std.atomic.Value(u64)</code> generation counter. The search checks it every 512 positions and returns <code>error.SearchCancelled</code> if it has changed. The old Zig UI used this to abort stale searches on a new keystroke.</td>
+    <td><code>searchCancellable</code> accepts an optional atomic <code>u32</code> cancel flag. Text scans poll it every 64 KiB of candidate positions, filter-only scans every 512 entries, and cancellation returns <code>error.SearchCancelled</code>. Swift creates one token per query and cancels the previous token before enqueueing its replacement.</td>
   </tr>
   <tr>
     <td>Swift UI</td>

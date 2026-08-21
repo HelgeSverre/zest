@@ -18,8 +18,14 @@ typedef struct {
     uint8_t  category;// FileCategory enum
 } ZestRow;
 
-typedef struct Core  Core;   // opaque
-typedef struct Query Query;  // opaque
+typedef struct Core        Core;         // opaque
+typedef struct Query       Query;        // opaque
+typedef struct CancelToken CancelToken;  // opaque
+
+// zest_query_cancellable outcome, written through its out_status parameter.
+#define ZEST_QUERY_OK        0u
+#define ZEST_QUERY_ERROR     1u
+#define ZEST_QUERY_CANCELLED 2u
 
 // Borrows index_bytes until zest_close (caller keeps them mapped).
 Core  *zest_open(const uint8_t *index_bytes, size_t len);
@@ -32,6 +38,21 @@ Query *zest_query(Core *core, const char *query_utf8, const char *scope_root,
 size_t  zest_query_count(const Query *q);
 ZestRow zest_query_row(const Query *q, size_t i); // strings valid until zest_query_free
 void    zest_query_free(Query *q);
+
+// Cooperative cancellation. Create a token per query, pass it to
+// zest_query_cancellable, and call zest_cancel_token_cancel from any thread to
+// make the running query unwind instead of finishing a scan nobody wants. The
+// token must outlive the query call; destroy it afterwards.
+CancelToken *zest_cancel_token_create(void);
+void         zest_cancel_token_destroy(CancelToken *token);
+void         zest_cancel_token_cancel(CancelToken *token);
+
+// zest_query with cancellation. `token` and `out_status` may be NULL. On a NULL
+// return, *out_status distinguishes ZEST_QUERY_CANCELLED (a newer query asked
+// this one to stop — drop it) from ZEST_QUERY_ERROR (the query failed).
+Query *zest_query_cancellable(Core *core, const char *query_utf8, const char *scope_root,
+                              uint32_t max_depth, uint32_t max_results,
+                              CancelToken *token, uint32_t *out_status);
 
 // 9 per-category counts (matches the FileCategory enum order: 0=uncategorized,
 // 1=images, 2=text, 3=documents, 4=spreadsheets, 5=audio, 6=video, 7=code,
@@ -51,8 +72,19 @@ typedef struct { ZestExtCount entries[32]; uint32_t len; } ZestExtBreakdown;
 // Read up to `max` exts for the (scope, category) pair. Returns the number
 // of rows written. 0 on missing folder or empty category. `out` must have
 // room for at least `max` ZestExtCount rows.
-size_t zest_ext_breakdown(Core *core, const char *scope_root, uint32_t max_depth,
-                          uint8_t cat, uint32_t max, ZestExtCount *out);
+// Returns uint32_t, not size_t: the Zig export returns u32, and declaring it
+// wider here would leave the caller reading the undefined upper half of the
+// return register.
+uint32_t zest_ext_breakdown(Core *core, const char *scope_root, uint32_t max_depth,
+                            uint8_t cat, uint32_t max, ZestExtCount *out);
+
+// Apply the engine's length-preserving UTF-8 case fold. `out` must have room
+// for at least `len` bytes. Returns `len`, or 0 when the output is too small.
+// Exposed so Swift's structured ext: filter uses exactly the same canonical
+// form as the index and query parser (including non-lowercase folds such as
+// micro sign -> Greek mu, while preserving length-changing cases).
+size_t zest_casefold_utf8(const uint8_t *input, size_t len,
+                          uint8_t *out, size_t out_capacity);
 
 #ifdef __cplusplus
 }

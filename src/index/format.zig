@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const runtime = @import("../core/runtime.zig");
+const casefold = @import("../core/casefold.zig");
 
 pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 /// v2: per-folder × per-category histogram column.
@@ -11,8 +12,13 @@ pub const MAGIC: u64 = 0x5A455354494E4458; // "ZESTINDX"
 ///     daemon and run `just index` so existing rows receive the new category).
 /// v6: sizes use allocated bytes (size on disk) instead of logical data length
 ///     (layout unchanged; the bump forces a reindex with the new semantics).
-/// Reader's version check rejects old indexes; version bumps require a rebuild before use.
-pub const VERSION: u32 = 6;
+/// v7: the lowercase name blob is UTF-8 case-folded, not ASCII-lowercased
+///     (layout unchanged — folding is length-preserving). The reader accepts
+///     v6 during rolling upgrades and uses its original ASCII query fold until
+///     the daemon publishes a v7 rebuild.
+pub const VERSION: u32 = 7;
+pub const MIN_READ_VERSION: u32 = 6;
+pub const UNICODE_CASEFOLD_VERSION: u32 = 7;
 /// 8 (magic) + 4 (version) + 4 (padding) + 8 × 8 (u64 offsets: num_entries,
 /// created_at, names, paths, meta, bitmap, histogram, ext_breakdown) = 80 bytes.
 pub const HEADER_SIZE: usize = 80;
@@ -67,7 +73,7 @@ pub const Header = struct {
         const magic = try reader.takeInt(u64, .little);
         if (magic != MAGIC) return error.InvalidMagic;
         const version = try reader.takeInt(u32, .little);
-        if (version != VERSION) return error.UnsupportedVersion;
+        if (version < MIN_READ_VERSION or version > VERSION) return error.UnsupportedVersion;
         _ = try reader.takeInt(u32, .little); // padding
         return .{
             .magic = magic,
@@ -211,6 +217,36 @@ test "escapeTsv / unescapeTsv round-trip with tab, newline, backslash" {
     try std.testing.expectEqualStrings(original, roundtrip);
 }
 
+test "header accepts only the supported version window" {
+    const base = Header{
+        .magic = MAGIC,
+        .version = VERSION,
+        .num_entries = 0,
+        .created_at = 0,
+        .names_offset = HEADER_SIZE,
+        .paths_offset = HEADER_SIZE,
+        .meta_offset = HEADER_SIZE,
+        .bitmap_offset = HEADER_SIZE,
+        .histogram_offset = HEADER_SIZE,
+        .ext_breakdown_offset = HEADER_SIZE,
+    };
+
+    for ([_]u32{ MIN_READ_VERSION - 1, MIN_READ_VERSION, VERSION, VERSION + 1 }) |version| {
+        var bytes: [HEADER_SIZE]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&bytes);
+        var header = base;
+        header.version = version;
+        try header.serialize(&writer);
+
+        var reader = std.Io.Reader.fixed(&bytes);
+        if (version >= MIN_READ_VERSION and version <= VERSION) {
+            try std.testing.expectEqual(version, (try Header.deserialize(&reader)).version);
+        } else {
+            try std.testing.expectError(error.UnsupportedVersion, Header.deserialize(&reader));
+        }
+    }
+}
+
 test "writeIndex bakes recursive folder sizes into directory entries" {
     const reader_mod = @import("reader.zig");
     const entries = [_]IndexEntry{
@@ -305,9 +341,12 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         name_offsets[i] = @intCast(name_blob.items.len);
         name_lengths[i] = @intCast(entry.name.len);
         try name_blob.appendSlice(allocator, entry.name);
-        for (entry.name) |ch| {
-            try lower_blob.append(allocator, std.ascii.toLower(ch));
-        }
+        // Case folding is length-preserving (see core/casefold.zig), so the
+        // lowercase blob stays byte-parallel with the original: one
+        // (offset, length) pair addresses a name in both.
+        const lower_start = lower_blob.items.len;
+        try lower_blob.appendNTimes(allocator, 0, entry.name.len);
+        casefold.foldInto(lower_blob.items[lower_start..], entry.name);
     }
 
     for (name_offsets) |off| try writer.writeInt(u32, off, .little);
@@ -499,8 +538,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         if (dot_idx + 1 >= entry.name.len) continue;
         const raw = entry.name[dot_idx + 1 ..];
         if (raw.len == 0 or raw.len > 15) continue;
-        for (raw, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
-        const ext_lower: []const u8 = lower_buf[0..raw.len];
+        const ext_lower = casefold.foldSlice(lower_buf[0..raw.len], raw);
 
         const dir_id = dir_table.get(entry.dir_path) orelse continue;
         const cat: u8 = @intFromEnum(entry.category);
