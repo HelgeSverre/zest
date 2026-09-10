@@ -89,6 +89,12 @@ The Zest key attachment was read back and cryptographically compared with the
 local key. Keep 1Password as the durable backup; the ignored local folder is
 only a working copy.
 
+When transferring binary certificate attachments from 1Password, use
+`op read --out-file` into a private temporary directory, then base64-encode the
+file. Do not pipe binary attachments through text stdout: it can corrupt PKCS#12
+bytes. Validate the bundle/password before updating GitHub. The shared Keychain
+exports use legacy PKCS#12 encryption; OpenSSL 3 validation needs `-legacy`.
+
 For GitHub Actions, configure the same names as Sourcefour. Do not copy values
 into workflow YAML or paste secrets into chat.
 

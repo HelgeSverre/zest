@@ -13,7 +13,7 @@ process.stdout.write(`cask "zest" do
   desc "Fast native file browser with background indexing"
   homepage "https://github.com/HelgeSverre/zest"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   pkg "zest-universal-apple-darwin.pkg"
   binary "/Applications/Zest.app/Contents/Helpers/zest-query"
