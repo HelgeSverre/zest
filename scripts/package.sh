@@ -43,7 +43,7 @@ swift scripts/make-icon.swift "$stage"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 cp docs/RELEASE.md "$app/Contents/Resources/Installation and Removal.txt"
 notices="$app/Contents/Resources/ThirdPartyNotices.txt"
-for license in LICENSE Vendor/HighlightQueries/LICENSE-* \
+for license in LICENSE Vendor/HighlightQueries/LICENSE-* Vendor/TreeSitterSema/LICENSE \
   .build/release-arm64/checkouts/swift-tree-sitter/LICENSE \
   .build/release-arm64/checkouts/tree-sitter/LICENSE \
   .build/release-arm64/checkouts/tree-sitter/lib/src/unicode/LICENSE \
