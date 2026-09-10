@@ -60,6 +60,12 @@ Sourcefour's separation is retained: scripts/package.sh assembles the app;
 is needed in this Swift/Zig project. A shared verifier checks the ad-hoc and
 distribution-signed app. Previous local candidates are preserved under dist/.
 
+The PKG uses an explicit non-relocatable component and always targets
+/Applications/Zest.app. Installer must not redirect an update into a checkout or
+downloaded app with the same bundle ID. CI registers such a competing copy before
+installing, and checks the installed app at the intended path. Package metadata
+also enforces macOS 14+ and atomically replaces the app bundle on upgrade.
+
 The public artifact name is zest-universal-apple-darwin.pkg with a matching
 .sha256 file. A signed-only artifact is NOT ready for distribution. Successful
 notarization is checked explicitly, diagnostic logs are retained on failure,

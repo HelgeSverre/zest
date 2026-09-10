@@ -20,7 +20,7 @@ process.stdout.write(`cask "zest" do
 
   uninstall launchctl: "dev.zest.app.indexer",
             quit:      "dev.zest.app",
-            pkgutil:   "dev.zest.app"
+            pkgutil:   "^dev[.]zest[.]app$"
 
   caveats <<~EOS
     Open Zest and choose Index > Set Up Indexer to enable background indexing.

@@ -54,6 +54,8 @@ jobs:
           packages=(dist/installer.*/*.pkg)
           test "${#packages[@]}" = 1
           test ! -e /Applications/Zest.app
+          # Regression: Installer must ignore registered copies outside Applications.
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$PWD/dist/Zest.app"
           sudo /usr/sbin/installer -pkg "${packages[0]}" -target /
           node scripts/verify-release.mjs /Applications/Zest.app
           test ! -e "$HOME/Library/LaunchAgents/dev.zest.app.indexer.plist"

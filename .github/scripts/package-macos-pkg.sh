@@ -28,7 +28,6 @@ keychain=()
 if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]]; then keychain=(--keychain "$APPLE_SIGNING_KEYCHAIN"); fi
 if [[ "$mode" == unsigned ]]; then
   package="$output/zest-universal-apple-darwin-LOCAL-ONLY.pkg"
-  productbuild --component "$app" /Applications "$package"
 else
   for executable in "$app/Contents/Helpers/zest-indexer" "$app/Contents/Helpers/zest-query" "$app/Contents/MacOS/Zest"; do
     codesign --force --sign "$APPLE_APPLICATION_SIGNING_IDENTITY" ${keychain[@]+"${keychain[@]}"} --options runtime --timestamp "$executable"
@@ -37,9 +36,33 @@ else
   node scripts/verify-release.mjs "$app"
   details="$(codesign --display --verbose=4 "$app" 2>&1)"
   [[ "$details" == *"TeamIdentifier=$APPLE_TEAM_ID"* ]] || { echo 'Wrong signing team' >&2; exit 1; }
-  productbuild --sign "$APPLE_INSTALLER_SIGNING_IDENTITY" ${keychain[@]+"${keychain[@]}"} --timestamp --component "$app" /Applications "$package"
-  pkgutil --check-signature "$package"
 fi
+# Explicit component metadata prevents Installer from finding a development or
+# downloaded copy and "successfully" installing there instead of Applications.
+mkdir -p "$output/components/payload"
+ditto "$app" "$output/components/payload/Zest.app"
+component="$output/components/Zest.pkg"
+pkgbuild --root "$output/components/payload" --component-plist macos/components.plist \
+  --identifier dev.zest.app --version "$(jq -er .version release.json)" \
+  --install-location /Applications "$component"
+pkgutil --expand "$component" "$output/components/expanded"
+info="$output/components/expanded/PackageInfo"
+[[ "$(xmllint --xpath 'string(/pkg-info/@install-location)' "$info")" == /Applications ]]
+[[ "$(xmllint --xpath 'count(/pkg-info/relocate/bundle)' "$info")" == 0 ]]
+requirements="$output/components/requirements.plist"
+plutil -create xml1 "$requirements"
+plutil -insert os -json "$(jq -c '[.minimumSystemVersion]' release.json)" "$requirements"
+plutil -insert arch -json '["arm64","x86_64"]' "$requirements"
+distribution="$output/components/Distribution"
+productbuild --synthesize --product "$requirements" --package "$component" "$distribution"
+[[ "$(xmllint --xpath 'string(/installer-gui-script//allowed-os-versions/os-version/@min)' "$distribution")" == "$(jq -r .minimumSystemVersion release.json)" ]]
+product_args=(--distribution "$distribution" --package-path "$output/components")
+if [[ "$mode" != unsigned ]]; then
+  product_args+=(--sign "$APPLE_INSTALLER_SIGNING_IDENTITY" --timestamp)
+  if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]]; then product_args+=("${keychain[@]}"); fi
+fi
+productbuild "${product_args[@]}" "$package"
+if [[ "$mode" != unsigned ]]; then pkgutil --check-signature "$package"; fi
 if [[ "$mode" == notarized ]]; then
   notary=(--key "$APPLE_NOTARY_KEY_PATH" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID")
   result="$output/notarization-submit.json"
