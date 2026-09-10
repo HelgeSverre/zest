@@ -1,8 +1,9 @@
 import AppKit
+import ServiceManagement
 
 enum IndexerState: String {
   case notInstalled = "not_installed"
-  case stopped, running, waiting
+  case stopped, running, waiting, requiresApproval
 
   var title: String {
     switch self {
@@ -10,29 +11,33 @@ enum IndexerState: String {
     case .stopped: return "Indexer: Stopped"
     case .running: return "Indexer: Running"
     case .waiting: return "Indexer: Waiting to Start"
+    case .requiresApproval: return "Indexer: Background Permission Required"
     }
   }
 
   var actions: [IndexerAction] {
     switch self {
     case .notInstalled: return [.install]
-    case .stopped: return [.start, .permissions]
-    case .running: return [.reindex, .stop, .restart, .permissions]
-    case .waiting: return [.stop, .restart, .permissions]
+    case .stopped: return [.start, .permissions, .uninstall]
+    case .running: return [.reindex, .stop, .restart, .permissions, .uninstall]
+    case .waiting: return [.stop, .restart, .permissions, .uninstall]
+    case .requiresApproval: return [.approveBackground, .uninstall]
     }
   }
 }
 
 enum IndexerAction: String {
-  case install, start, stop, restart, reindex, permissions
+  case install, start, stop, restart, reindex, permissions, uninstall, approveBackground
   var title: String {
     switch self {
     case .install: return "Set Up Indexer…"
     case .start: return "Start Indexer"
-    case .stop: return "Stop Indexer"
+    case .stop: return ReleaseInstallation.isPackaged ? "Stop Indexer" : "Pause Until Next Login"
     case .restart: return "Restart Indexer"
     case .reindex: return "Re-index Now"
     case .permissions: return "Set Up Full Disk Access…"
+    case .uninstall: return "Disable Background Indexing…"
+    case .approveBackground: return "Allow Background Indexing in Settings…"
     }
   }
 }
@@ -48,9 +53,18 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
   private var generation = 0
   private var message: String?
   private var accessSetup: IndexerAccessSetupController?
+  private let bundledService: BundledIndexerService?
 
   init(helper: URL? = nil) {
     self.helper = helper
+    if helper == nil, ReleaseInstallation.isPackaged,
+      let bundled = ReleaseInstallation.bundledHelper(in: Bundle.main.bundleURL)
+    {
+      self.helper = bundled
+      bundledService = BundledIndexerService(helper: bundled)
+    } else {
+      bundledService = nil
+    }
     super.init()
     menu.autoenablesItems = false
     menu.delegate = self
@@ -59,11 +73,23 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
 
   func menuWillOpen(_: NSMenu) { refresh() }
 
+  /// First launch only reads state. macOS owns the bundled helper's lifetime;
+  /// never register or migrate a developer daemon without explicit setup.
+  func refreshOnLaunch() {
+    guard ReleaseInstallation.isPackaged,
+      ReleaseInstallation.isInstalled(Bundle.main.bundleURL),
+      let helper = Self.findHelper()
+    else { return }
+    self.helper = helper
+    refresh()
+  }
+
   func setUpAccess() { resolveProgressAction(setup: true) }
   func retryIndexing() { resolveProgressAction(setup: false) }
 
   private func resolveProgressAction(setup: Bool) {
     guard !busy else { return }
+    guard ReleaseInstallation.requireInstalledApp() else { return }
     helper = helper ?? Self.findHelper()
     guard let helper else {
       locateIndexer(nil)
@@ -78,6 +104,10 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       guard let self,
         let state = IndexerState(rawValue: output.trimmingCharacters(in: .whitespacesAndNewlines))
       else { return }
+      if state == .requiresApproval {
+        SMAppService.openSystemSettingsLoginItems()
+        return
+      }
       if setup || state == .notInstalled {
         self.beginAccessSetup(state == .notInstalled ? .install : .existing, helper: helper)
       } else {
@@ -103,7 +133,7 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       item.isEnabled = !busy && helper != nil && accessSetup?.window?.isVisible != true
       menu.addItem(item)
     }
-    if helper == nil && !busy {
+    if helper == nil && !busy && !ReleaseInstallation.isPackaged {
       let locate = NSMenuItem(
         title: "Locate Indexer…", action: #selector(locateIndexer(_:)), keyEquivalent: "")
       locate.target = self
@@ -132,8 +162,9 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
     generation += 1
     let requestGeneration = generation
     render()
+    let control = control(for: helper)
     queue.async { [weak self] in
-      let result = Result { try Self.readState(helper: helper) }
+      let result = Result { try control.state() }
       DispatchQueue.main.async {
         guard let self, self.generation == requestGeneration else { return }
         self.busy = false
@@ -154,6 +185,20 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
     guard !busy, let helper,
       let raw = item.representedObject as? String, let action = IndexerAction(rawValue: raw)
     else { return }
+    guard ReleaseInstallation.requireInstalledApp() else { return }
+    if action == .approveBackground {
+      SMAppService.openSystemSettingsLoginItems()
+      return
+    }
+    if action == .uninstall {
+      let alert = NSAlert()
+      alert.messageText = "Disable background indexing?"
+      alert.informativeText =
+        "This stops the indexer and removes its background registration, including at future logins. Your index, pins, and preferences are kept. You can enable indexing again from the Index menu."
+      alert.addButton(withTitle: "Cancel")
+      alert.addButton(withTitle: "Disable Indexing")
+      guard alert.runModal() == .alertSecondButtonReturn else { return }
+    }
     if action == .install || action == .permissions {
       beginAccessSetup(action == .install ? .install : .existing, helper: helper)
       return
@@ -170,9 +215,11 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       [weak self] output in
       guard let self else { return }
       let installed =
-        setup == .install
-        ? URL(fileURLWithPath: output.trimmingCharacters(in: .whitespacesAndNewlines))
-        : Self.installedHelperURL
+        self.bundledService != nil
+        ? helper
+        : setup == .install
+          ? URL(fileURLWithPath: output.trimmingCharacters(in: .whitespacesAndNewlines))
+          : Self.installedHelperURL
       self.accessSetup = IndexerAccessSetupController(helper: installed) { [weak self] in
         self?.execute(
           helper: helper, arguments: setup.completionArguments(helper: installed),
@@ -199,10 +246,13 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
     generation += 1
     let requestGeneration = generation
     render()
+    let control = control(for: helper)
     queue.async { [weak self] in
       let result = Result {
         var output = ""
-        for arguments in commands { output = try Self.run(helper, arguments: arguments) }
+        for arguments in commands {
+          output = try control.execute(arguments)
+        }
         return output
       }
       DispatchQueue.main.async {
@@ -215,13 +265,36 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
           alert.alertStyle = .warning
           alert.runModal()
         }
-        if case .success(let output) = result { onSuccess?(output) }
+        if case .success(let output) = result {
+          onSuccess?(output)
+          if self.bundledService?.requiresApproval == true,
+            commands.contains(where: { ["install", "start", "restart"].contains($0.first ?? "") })
+          {
+            let alert = NSAlert()
+            alert.messageText = "Allow Zest to run in the background"
+            alert.informativeText =
+              "macOS needs your approval in Login Items before indexing can start. Full Disk Access and background permission are separate settings."
+            alert.addButton(withTitle: "Open Login Items")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn {
+              SMAppService.openSystemSettingsLoginItems()
+            }
+          }
+        }
         self.refresh()
       }
     }
   }
 
   @objc private func locateIndexer(_: Any?) {
+    guard !ReleaseInstallation.isPackaged else {
+      let alert = NSAlert()
+      alert.messageText = "Zest’s bundled indexer is missing"
+      alert.informativeText =
+        "Reinstall Zest from its signed installer. Packaged apps cannot use an external or development indexer."
+      alert.runModal()
+      return
+    }
     let panel = NSOpenPanel()
     panel.title = "Locate zest-indexer"
     panel.message = "Choose the zest-indexer executable to manage background indexing."
@@ -234,21 +307,15 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
     refresh()
   }
 
-  static func readState(helper: URL) throws -> IndexerState {
-    let output = try run(helper, arguments: ["status"]).trimmingCharacters(
-      in: .whitespacesAndNewlines)
-    guard let state = IndexerState(rawValue: output) else {
-      throw NSError(
-        domain: "ZestIndexer", code: 1,
-        userInfo: [
-          NSLocalizedDescriptionKey:
-            "The indexer returned an unrecognized status. Rebuild or update zest-indexer."
-        ])
-    }
-    return state
+  private func control(for helper: URL) -> IndexerControl {
+    if let bundledService { return bundledService }
+    return CommandLineIndexerService(helper: helper)
   }
 
   static func findHelper() -> URL? {
+    if ReleaseInstallation.isPackaged {
+      return ReleaseInstallation.bundledHelper(in: Bundle.main.bundleURL)
+    }
     var candidates: [URL] = []
     if let resources = Bundle.main.resourceURL {
       candidates.append(resources.appendingPathComponent("zest-indexer"))
@@ -270,33 +337,4 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       .appendingPathComponent("Library/Application Support/zest/bin/zest-indexer")
   }
 
-  /// Draining output before waiting prevents a full pipe from deadlocking the
-  /// child. A timeout keeps an unresponsive launchctl from wedging controls.
-  static func run(_ executable: URL, arguments: [String], timeout timeoutSeconds: TimeInterval = 90)
-    throws -> String
-  {
-    let process = Process()
-    process.executableURL = executable
-    process.arguments = arguments
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
-    try process.run()
-    let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
-    DispatchQueue.global(qos: .utility).asyncAfter(
-      deadline: .now() + timeoutSeconds, execute: timeout)
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    timeout.cancel()
-    let output = String(decoding: data, as: UTF8.self)
-    guard process.terminationReason == .exit && process.terminationStatus == 0 else {
-      throw NSError(
-        domain: "ZestIndexer", code: Int(process.terminationStatus),
-        userInfo: [
-          NSLocalizedDescriptionKey: output.isEmpty
-            ? "Indexer command failed or timed out." : output
-        ])
-    }
-    return output
-  }
 }

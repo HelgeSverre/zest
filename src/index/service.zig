@@ -208,6 +208,11 @@ const Service = struct {
         try self.start();
         std.debug.print("zest-indexer daemon installed and loaded.\nBinary: {s}\n", .{binary});
     }
+
+    fn restart(self: Service) !void {
+        try self.stop();
+        try self.start();
+    }
 };
 
 /// Control commands have bounded process lifetimes, so their strings/results
@@ -247,14 +252,16 @@ pub fn handle(gpa: std.mem.Allocator, args: []const []const u8) !bool {
                 error.FileNotFound => {},
                 else => return err,
             };
+            const binary = try std.fs.path.join(service.allocator, &.{ service.support, "bin", "zest-indexer" });
+            std.Io.Dir.deleteFileAbsolute(runtime.io, binary) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
             std.debug.print("zest-indexer daemon uninstalled.\n", .{});
         },
         .start => try service.start(),
         .stop => try service.stop(),
-        .restart => {
-            try service.stop();
-            try service.start();
-        },
+        .restart => try service.restart(),
         .status => {
             var buffer: [128]u8 = undefined;
             var writer = std.Io.File.stdout().writerStreaming(runtime.io, &buffer);

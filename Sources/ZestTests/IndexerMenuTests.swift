@@ -78,7 +78,7 @@ final class IndexerMenuTests: XCTestCase {
       .appendingPathComponent("zig-out/bin/zest-indexer")
     XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helper.path))
     let expected: IndexerState
-    do { expected = try IndexerMenuController.readState(helper: helper) } catch {
+    do { expected = try CommandLineIndexerService(helper: helper).state() } catch {
       throw XCTSkip("No usable launchd login domain: \(error)")
     }
     let controller = IndexerMenuController(helper: helper)
@@ -95,15 +95,16 @@ final class IndexerMenuTests: XCTestCase {
 
   func testActionsReflectDaemonLifecycle() {
     XCTAssertEqual(IndexerState.notInstalled.actions, [.install])
-    XCTAssertEqual(IndexerState.stopped.actions, [.start, .permissions])
-    XCTAssertEqual(IndexerState.running.actions, [.reindex, .stop, .restart, .permissions])
-    XCTAssertEqual(IndexerState.waiting.actions, [.stop, .restart, .permissions])
+    XCTAssertEqual(IndexerState.stopped.actions, [.start, .permissions, .uninstall])
+    XCTAssertEqual(
+      IndexerState.running.actions, [.reindex, .stop, .restart, .permissions, .uninstall])
+    XCTAssertEqual(IndexerState.waiting.actions, [.stop, .restart, .permissions, .uninstall])
     XCTAssertNil(IndexerState(rawValue: "unknown"))
   }
 
   func testFailedControlProcessReportsFailure() {
     XCTAssertThrowsError(
-      try IndexerMenuController.run(URL(fileURLWithPath: "/usr/bin/false"), arguments: []))
+      try IndexerProcess.run(URL(fileURLWithPath: "/usr/bin/false"), arguments: []))
   }
 
   func testAccessSetupCannotStartScanningDuringPreparation() {
@@ -220,6 +221,6 @@ final class IndexerMenuTests: XCTestCase {
 
   func testUnrecognizedStatusIsNotTreatedAsStopped() {
     XCTAssertThrowsError(
-      try IndexerMenuController.readState(helper: URL(fileURLWithPath: "/usr/bin/true")))
+      try CommandLineIndexerService(helper: URL(fileURLWithPath: "/usr/bin/true")).state())
   }
 }

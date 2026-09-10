@@ -1,7 +1,11 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    // Match Package.swift instead of inheriting the build machine's OS minimum.
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .os_tag = .macos,
+        .os_version_min = .{ .semver = .{ .major = 14, .minor = 0, .patch = 0 } },
+    } });
     const optimize = b.standardOptimizeOption(.{});
 
     // FSEvents now ships as a sub-framework nested inside CoreServices. Add its
@@ -23,7 +27,13 @@ pub fn build(b: *std.Build) void {
         }),
     });
     indexer.root_module.addSystemFrameworkPath(.{ .cwd_relative = coreservices_frameworks });
+    indexer.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" }) });
+    indexer.root_module.addIncludePath(b.path("src/index"));
+    indexer.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "usr/lib" }) });
+    // Compile SDK headers as C: translate-c cannot represent recent Mach bitfields.
+    indexer.root_module.addCSourceFile(.{ .file = b.path("src/index/fsevents_bridge.c"), .flags = &.{ "-isysroot", sdk_path } });
     indexer.root_module.linkFramework("CoreServices", .{});
+    indexer.root_module.linkFramework("CoreFoundation", .{});
     indexer.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(indexer);
 
@@ -38,6 +48,13 @@ pub fn build(b: *std.Build) void {
     });
     query.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(query);
+
+    // Leave room for codesign's LC_CODE_SIGNATURE load command. Without this,
+    // Zig's x86_64 Mach-O layout can let signing overwrite the first function.
+    // https://github.com/ziglang/zig/issues/23704
+    for ([_]*std.Build.Step.Compile{ indexer, query }) |executable| {
+        executable.headerpad_size = 0x1000;
+    }
 
     // === Library: zest-core (C ABI for the Swift UI) ===
     // Pure-CPU engine surface (reader + search). No frameworks, no Io.

@@ -8,9 +8,7 @@ const service = @import("service.zig");
 const runtime = @import("../core/runtime.zig");
 const humanize = @import("../core/humanize.zig");
 const progress = @import("progress.zig");
-const c = @cImport({
-    @cInclude("CoreFoundation/CoreFoundation.h");
-});
+const c = fsevents.c;
 
 var dirty_count = std.atomic.Value(usize).init(0);
 var watch_root: []const u8 = "";
@@ -23,7 +21,7 @@ fn onFSEvent(paths: []const []const u8, must_rescan: bool) void {
     }
     if (relevant == 0) return;
     const total = dirty_count.fetchAdd(relevant, .monotonic) +| relevant;
-    if (total >= schedule.event_threshold) c.CFRunLoopStop(c.CFRunLoopGetCurrent());
+    if (total >= schedule.event_threshold) c.zest_run_loop_stop();
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -113,7 +111,7 @@ fn runWatchLoop(ops: *DaemonStartup) !void {
     var state = schedule.Schedule{ .last_success = runtime.nowNanos() };
     if (!ops.initial_ok) state.failed(runtime.nowNanos());
     while (true) {
-        _ = c.CFRunLoopRunInMode(c.kCFRunLoopDefaultMode, 2.0, 0);
+        c.zest_run_loop_run(2.0);
         state.add(dirty_count.swap(0, .monotonic));
         const request = readRequest(ops.request_path);
         const requested = if (request) |token| if (ops.request_seen) |seen| !std.mem.eql(u8, &token, &seen) else true else false;

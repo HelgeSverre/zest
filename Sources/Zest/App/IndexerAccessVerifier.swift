@@ -36,9 +36,9 @@ enum IndexerAccessVerifier {
     let launchctl = URL(fileURLWithPath: "/bin/launchctl")
     // Cleanup is attempted even if bootstrap partially succeeded before error.
     defer {
-      _ = try? IndexerMenuController.run(launchctl, arguments: ["bootout", target], timeout: 5)
+      _ = try? IndexerProcess.run(launchctl, arguments: ["bootout", target], timeout: 5)
     }
-    _ = try IndexerMenuController.run(
+    _ = try IndexerProcess.run(
       launchctl, arguments: ["bootstrap", domain, plist.path], timeout: 5)
     let deadline = ProcessInfo.processInfo.systemUptime + 4
     while ProcessInfo.processInfo.systemUptime < deadline {

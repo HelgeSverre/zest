@@ -1,11 +1,12 @@
 // swift-tools-version:5.9
 import PackageDescription
+import Foundation
 
 // libzest-core.a is produced by `zig build core` into ./zig-out/lib.
 // swift build runs from the repo root, so this -L path is relative to root.
 // SwiftPM does not track that external archive as an input; use the justfile
 // recipes, which invalidate CZestCore after rebuilding it so Swift relinks.
-let zigLibDir = "zig-out/lib"
+let zigLibDir = ProcessInfo.processInfo.environment["ZEST_CORE_LIB_DIR"] ?? "zig-out/lib"
 
 let package = Package(
     name: "Zest",

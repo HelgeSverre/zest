@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     win.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     window = win
+    indexerMenu.refreshOnLaunch()
   }
 
   // MARK: Main menu
