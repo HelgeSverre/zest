@@ -4,6 +4,11 @@ main
 .idea/
 .build/
 .swiftpm/
+dist/
+signing/
+*.p8
+*.p12
+*.certSigningRequest
 Sample of Zest.txt
 *.sample.txt
 sample.*.txt

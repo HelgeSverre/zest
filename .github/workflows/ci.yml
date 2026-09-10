@@ -15,8 +15,10 @@ concurrency:
 jobs:
   test:
     name: Zig and Swift tests
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Check out repository
@@ -59,3 +61,9 @@ jobs:
 
       - name: Run test suite
         run: just test
+
+      - name: Exercise daemon in an isolated home
+        run: just test-daemon
+
+      - name: Build and validate local-only release candidate
+        run: just package

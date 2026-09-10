@@ -1,0 +1,75 @@
+name: macOS Package
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+      - name: Run release gates
+        run: |
+          brew install just
+          just test
+          just test-daemon
+      - name: Define private signing paths
+        run: |
+          echo "APPLE_SIGNING_KEYCHAIN=$RUNNER_TEMP/zest-signing.keychain-db" >> "$GITHUB_ENV"
+          echo "APPLE_NOTARY_KEY_PATH=$RUNNER_TEMP/zest-notary.p8" >> "$GITHUB_ENV"
+      - name: Import signing assets
+        env:
+          APPLE_APPLICATION_CERTIFICATE_BASE64: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_BASE64 }}
+          APPLE_APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_PASSWORD }}
+          APPLE_APPLICATION_SIGNING_IDENTITY: ${{ vars.APPLE_APPLICATION_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ vars.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+        run: bash .github/scripts/import-apple-signing-assets.sh
+      - name: Build, sign, notarize, and validate
+        env:
+          APPLE_APPLICATION_SIGNING_IDENTITY: ${{ vars.APPLE_APPLICATION_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ vars.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+        run: bash .github/scripts/package-macos-pkg.sh
+      - name: Test installer payload on the disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(dist/installer.*/*.pkg)
+          test "${#packages[@]}" = 1
+          test ! -e /Applications/Zest.app
+          sudo /usr/sbin/installer -pkg "${packages[0]}" -target /
+          node scripts/verify-release.mjs /Applications/Zest.app
+          test ! -e "$HOME/Library/LaunchAgents/dev.zest.app.indexer.plist"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: zest-macos-installer
+          if-no-files-found: error
+          path: |
+            dist/installer.*/*.pkg
+            dist/installer.*/*.pkg.sha256
+      - name: Preserve notarization diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: zest-notarization-diagnostics
+          if-no-files-found: ignore
+          path: dist/installer.*/notarization-*.json
+      - name: Remove temporary signing credentials
+        if: always()
+        run: |
+          if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]]; then security delete-keychain "$APPLE_SIGNING_KEYCHAIN" 2>/dev/null || true; fi
+          if [[ -n "${APPLE_NOTARY_KEY_PATH:-}" ]]; then rm -f "$APPLE_NOTARY_KEY_PATH"; fi

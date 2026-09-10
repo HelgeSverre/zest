@@ -3,6 +3,31 @@
 _default:
     @just --list
 
+# Build and verify a local-only Universal app.
+[group('release')]
+package:
+    bash scripts/package.sh
+
+# Build a local-only installer package.
+[group('release')]
+pkg:
+    bash .github/scripts/package-macos-pkg.sh --unsigned
+
+# Build a Developer ID signed candidate (not notarized, not published).
+[group('release')]
+package-signed:
+    bash .github/scripts/package-macos-pkg.sh --signed-only
+
+# Explicitly submit the signed PKG to Apple, staple, and verify it. No publishing.
+[group('release')]
+package-notarized:
+    bash .github/scripts/package-macos-pkg.sh
+
+# Use existing local identities and the ignored signing/ folder; submits to Apple.
+[group('release')]
+pkg-local:
+    bash scripts/package-local-signed.sh
+
 # Build all binaries and relink the Swift app with the ReleaseFast core.
 [group('dev')]
 build:

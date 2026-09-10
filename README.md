@@ -19,11 +19,25 @@ Zest is a fast, keyboard-friendly Finder alternative for macOS. A native AppKit 
 
 ## Quick start
 
-### Requirements
+### Install the beta
 
-- macOS 14 or later, on Apple Silicon or Intel
+Download the [signed, notarized Universal installer](https://github.com/HelgeSverre/zest/releases/download/v0.1.0/zest-universal-apple-darwin.pkg), or use Homebrew:
+
+```sh
+brew install --cask helgesverre/tap/zest
+```
+
+Open Zest from Applications, then choose **Index > Set Up Indexer**. Installing
+does not start a scan. Full Disk Access and background approval are guided in the
+app. See the [0.1.0 beta notes](docs/releases/0.1.0.md) for known limitations.
+Disable background indexing before upgrading or uninstalling; user data is kept.
+There is no automatic updater yet.
+
+### Build from source
+
+- macOS 14 or later, on Apple Silicon or Intel (Universal release candidate).
 - Zig 0.16.0
-- Xcode Command Line Tools
+- Xcode 26.3 (the compiler used by CI; the app still runs on macOS 14+)
 - [`just`](https://github.com/casey/just) for the supported development commands
 
 Build the first index, then launch the app:
@@ -135,7 +149,16 @@ and **Restart Indexer** while running, **Start Indexer** while stopped, and
 If Zest cannot find the helper executable, **Locate Indexer…** lets you select it.
 Menu operations run in the background and report failures.
 
-Menu installation first stages the indexer without registering or starting it.
+Packaged releases use a bundled **SMAppService** LaunchAgent. Setup explicitly
+migrates an existing development daemon; app launch alone does not install or
+start one. macOS background-item approval is shown separately from Full Disk
+Access. **Stop Indexer** and **Disable Background Indexing…** unregister the
+packaged service, including at future logins. The CLI lifecycle described below
+is retained for development builds. See [the release runbook](docs/RELEASE.md)
+for Universal PKG packaging, signing, installation, and removal.
+
+Development menu installation first stages the indexer without registering or starting it.
+The packaged app uses its own bundled executable instead of copying one.
 The native SwiftUI guide has three distinct panels: Welcome, Enable Access, and
 Ready to Index. It includes buttons to open **System Settings → Privacy & Security →
 Full Disk Access**, copy the installed helper path, and reveal it in Finder.
@@ -168,7 +191,7 @@ Records include a run ID and PID; the app checks liveness and freshness, ignores
 malformed/oversized records, and does not confuse a stopped writer with success.
 Telemetry failures never prevent index publication. Successful one-shot scans
 remove their progress record; the daemon retains its last result. Both `just index`
-and daemon scans report progress. Existing installed helpers must be updated via
+and daemon scans report progress. Existing development helpers must be updated via
 **Index → Set Up Full Disk Access…** (or `just install-daemon`) to emit it.
 
 Set `ZEST_PROGRESS_SNAPSHOT_DIR` when running `swift test --filter IndexProgressTests`
@@ -189,7 +212,7 @@ the executable may require granting access again. A release should use a stable
 code-signing identity. CLI `install` remains an explicit install-and-start command;
 `prepare-install` only stages the executable for permission setup.
 
-Installation copies the helper to
+Development CLI installation copies the helper to
 `~/Library/Application Support/zest/bin/zest-indexer`, so development builds and
 `just clean` do not remove the installed executable. Run `just install-daemon`
 again after changing daemon code to update that copy. Diagnostics go to

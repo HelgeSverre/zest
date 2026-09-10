@@ -1,0 +1,40 @@
+name: Release
+on:
+  push:
+    tags: ['v[0-9]*']
+permissions:
+  contents: read
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Verify tag matches release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: test "$RELEASE_TAG" = "v$(jq -r .version release.json)"
+  macos:
+    needs: version
+    uses: ./.github/workflows/macos-pkg.yml
+    secrets: inherit
+  draft:
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: zest-macos-installer
+          path: artifacts
+      - name: Create draft for manual acceptance and publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mapfile -d '' packages < <(find artifacts -type f \( -name '*.pkg' -o -name '*.sha256' \) -print0)
+          test "${#packages[@]}" = 2
+          gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease --generate-notes "${packages[@]}"

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>dev.zest.app</string>
+  <key>CFBundleName</key><string>Zest</string>
+  <key>CFBundleDisplayName</key><string>Zest</string>
+  <key>CFBundleExecutable</key><string>Zest</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Liseth Solutions AS. MIT License.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>Zest accesses files you choose to preview on your Desktop.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Zest accesses files you choose to preview in Documents.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Zest accesses files you choose to preview in Downloads.</string>
+</dict></plist>
