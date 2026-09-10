@@ -128,6 +128,37 @@ flowchart TB
 - **Event coalescing:** pending changes rebuild once 30 seconds have passed since the previous build, or immediately when 1,000 events accumulate.
 - **Safety net:** the daemon performs a full rescan every 24 hours.
 
+Installation copies the helper to
+`~/Library/Application Support/zest/bin/zest-indexer`, so development builds and
+`just clean` do not remove the installed executable. Run `just install-daemon`
+again after changing daemon code to update that copy. Diagnostics go to
+`~/Library/Application Support/zest/daemon.log`. Stopping unloads the job for
+the current login session; it starts again at the next login. Use
+`just uninstall-daemon` to remove automatic startup (index and user data remain).
+
+The same controls are available from the CLI:
+
+```sh
+./zig-out/bin/zest-indexer status
+./zig-out/bin/zest-indexer reindex
+./zig-out/bin/zest-indexer stop
+./zig-out/bin/zest-indexer start
+./zig-out/bin/zest-indexer restart
+```
+
+Re-index requests are queued for the existing daemon, including requests arriving
+during a scan. Failed builds preserve the last good index and retry after 5, 10,
+20 seconds, up to a five-minute delay. Scanning and filesystem-event handling
+share exclusions, including hidden trees and Zest's own output directory.
+Each scan uses unique intermediate files, so overlapping development scans do
+not overwrite each other's shards; the last successful publication wins.
+
+Run `just test-daemon` (requires Node.js) for live FSEvents, forced re-index,
+failure recovery, exclusion-churn, and overlapping-scan checks in a temporary
+home. Zig tests also validate plist round-trips with macOS's parser and exercise
+launchd lifecycle/failure handling under a disposable service label when a GUI
+login domain is available.
+
 Use `just index` for a one-off home-directory scan. The indexer can also target another subtree:
 
 ```sh

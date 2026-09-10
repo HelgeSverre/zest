@@ -92,7 +92,44 @@ pub fn ensureAppSupportDir(allocator: std.mem.Allocator) !void {
 
 /// Check if a single path component (leaf dirent name) should be excluded.
 pub fn shouldExclude(name: []const u8) bool {
-    return name_excludes.has(name);
+    return (name.len > 0 and name[0] == '.') or name_excludes.has(name);
+}
+
+/// Apply the walker's rules to every component below the scan root. Events
+/// refer to descendants (including deleted paths), so no filesystem lookup is
+/// appropriate here. The explicit root itself is always allowed.
+pub fn shouldExcludeDescendant(path: []const u8, root: []const u8, support: []const u8) bool {
+    if (isPathUnder(path, support)) return true;
+    if (!isPathUnder(path, root)) return true;
+    var end = root.len;
+    while (end < path.len) {
+        if (path[end] == '/') end += 1;
+        const start = end;
+        while (end < path.len and path[end] != '/') : (end += 1) {}
+        if (shouldExclude(path[start..end]) or shouldExcludePath(path[0..end])) return true;
+    }
+    return false;
+}
+
+test "event exclusions match descendants and preserve component boundaries" {
+    const root = "/home/me";
+    const support = "/home/me/Library/Application Support/zest";
+    for ([_][]const u8{
+        "/home/me/project/node_modules/pkg/index.js",
+        "/home/me/project/.git/objects/abc",
+        "/home/me/.hidden/file",
+        "/home/me/project/__pycache__/file",
+        "/home/me/Library/Caches/app/file",
+        "/home/me/Library/Logs/app/file",
+        "/home/me/Library/Developer/tool/file",
+        "/home/me/Library/Application Support/zest/scan.tmp.0",
+        "/home/other/file",
+    }) |path| try std.testing.expect(shouldExcludeDescendant(path, root, support));
+    for ([_][]const u8{
+        root,                            "/home/me/normal.txt",              "/home/me/project/node_modules-old/file",
+        "/home/me/XLibrary/Caches/file", "/home/me/Library/Caches-old/file", "/home/me/Library/Application Support/zest-other/file",
+    }) |path| try std.testing.expect(!shouldExcludeDescendant(path, root, support));
+    try std.testing.expect(!shouldExcludeDescendant("/home/me/.explicit/file", "/home/me/.explicit", support));
 }
 
 /// Check if a full directory path should be excluded because it ends with one
@@ -119,6 +156,7 @@ test "shouldExclude" {
 /// True when `path` is `dir` itself or lives underneath it. A bare prefix
 /// match is not enough: `/a/zest-foo` must not count as under `/a/zest`.
 pub fn isPathUnder(path: []const u8, dir: []const u8) bool {
+    if (std.mem.eql(u8, dir, "/")) return std.mem.startsWith(u8, path, "/");
     if (!std.mem.startsWith(u8, path, dir)) return false;
     return path.len == dir.len or path[dir.len] == '/';
 }

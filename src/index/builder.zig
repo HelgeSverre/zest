@@ -5,20 +5,27 @@ const config = @import("../config/config.zig");
 const runtime = @import("../core/runtime.zig");
 const bulk_scan = @import("bulk_scan.zig");
 const humanize = @import("../core/humanize.zig");
+const progress = @import("progress.zig");
 
 /// Build the index: walk the filesystem in parallel (a `getattrlistbulk` worker
 /// pool, see `bulk_scan.zig`), streaming entries to per-worker temp files, then
 /// read them back and convert to the columnar index format. The temp files
 /// survive a crash mid-walk.
 pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
-    const support_dir = try config.appSupportDir(allocator);
+    return buildIndexWithProgress(allocator, root, null);
+}
+
+pub fn buildIndexWithProgress(allocator: std.mem.Allocator, root: []const u8, reporter: ?*progress.Reporter) ![]u8 {
+    const support_path = try config.appSupportDir(allocator);
+    defer allocator.free(support_path);
+    const support_dir = try std.Io.Dir.cwd().realPathFileAlloc(runtime.io, support_path, allocator);
     defer allocator.free(support_dir);
 
     const n_threads = @min(std.Thread.getCpuCount() catch 4, bulk_scan.max_scan_threads);
 
-    // Phase 1: parallel walk → per-worker scan.tmp.N files.
+    // Phase 1: parallel walk → uniquely named per-worker shards.
     const t_start = runtime.nowNanos();
-    const scan = try bulk_scan.parallelScan(allocator, root, support_dir, n_threads);
+    const scan = try bulk_scan.parallelScanWithProgress(allocator, root, support_dir, n_threads, reporter);
     defer {
         for (scan.paths) |p| {
             std.Io.Dir.deleteFileAbsolute(runtime.io, p) catch {};
@@ -31,6 +38,7 @@ pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
 
     // Phase 2: read the temp files back, build the columnar index.
     std.debug.print("  building columnar index...\n", .{});
+    if (reporter) |report| report.setPhase(.building, "");
     var parsed: usize = 0;
     const index_data = try buildFromScanFiles(allocator, scan.paths, &parsed);
     errdefer allocator.free(index_data);

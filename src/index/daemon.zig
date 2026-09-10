@@ -3,349 +3,152 @@ const builder = @import("builder.zig");
 const config = @import("../config/config.zig");
 const fsevents = @import("fsevents.zig");
 const startup = @import("startup.zig");
+const schedule = @import("schedule.zig");
+const service = @import("service.zig");
 const runtime = @import("../core/runtime.zig");
 const humanize = @import("../core/humanize.zig");
-
+const progress = @import("progress.zig");
 const c = @cImport({
-    // Only CFRunLoop is needed here, which lives in CoreFoundation. Avoid the
-    // CoreServices umbrella, whose `<AE/AE.h>` include breaks Zig 0.16's
-    // translate-c (see fsevents.zig).
     @cInclude("CoreFoundation/CoreFoundation.h");
 });
 
-/// Accumulated FSEvents dirty paths. Bumped from the run-loop callback and
-/// read/reset from the watch loop; atomic so the access is well-defined even if
-/// FSEvents ever delivers the callback off the run-loop thread.
 var dirty_count = std.atomic.Value(usize).init(0);
+var watch_root: []const u8 = "";
+var exclude_prefix: []const u8 = "";
 
-/// Path prefix whose events are ignored (the daemon's own output dir).
-/// Set once in runWatchLoop before FSEventStreamStart, never mutated —
-/// safe even if FSEvents ever delivered off-thread.
-var exclude_prefix: ?[]const u8 = null;
-
-/// FSEvents callback — filter out events from the daemon's own output dir,
-/// then bump the dirty counter for the remaining relevant paths.
-fn onFSEvent(paths: []const []const u8) void {
-    var relevant: usize = 0;
-    for (paths) |p| {
-        if (exclude_prefix) |ex| {
-            if (config.isPathUnder(p, ex)) continue;
-        }
-        relevant += 1;
+fn onFSEvent(paths: []const []const u8, must_rescan: bool) void {
+    var relevant: usize = if (must_rescan) schedule.event_threshold else 0;
+    for (paths) |path| {
+        if (!config.shouldExcludeDescendant(path, watch_root, exclude_prefix)) relevant +|= 1;
     }
     if (relevant == 0) return;
-    const total = dirty_count.fetchAdd(relevant, .monotonic) + relevant;
-    if (total >= event_threshold) {
-        // Poke the run loop so CFRunLoopRunInMode returns early
-        c.CFRunLoopStop(c.CFRunLoopGetCurrent());
-    }
+    const total = dirty_count.fetchAdd(relevant, .monotonic) +| relevant;
+    if (total >= schedule.event_threshold) c.CFRunLoopStop(c.CFRunLoopGetCurrent());
 }
-
-const poll_interval_s: f64 = 2.0; // CFRunLoop poll interval
-const rebuild_interval_ns: i128 = 30 * std.time.ns_per_s; // 30 seconds
-const daily_rescan_ns: i128 = 24 * 3600 * std.time.ns_per_s; // 24 hours
-const event_threshold: usize = 1000;
-
-const plist_label = "dev.zest.indexer";
-const plist_filename = plist_label ++ ".plist";
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-
-    // Check for subcommands
-    if (args.len >= 2) {
-        if (std.mem.eql(u8, args[1], "install")) {
-            return install(allocator, args);
-        } else if (std.mem.eql(u8, args[1], "uninstall")) {
-            return uninstall(allocator);
-        }
-    }
-
+    if (try service.handle(allocator, args)) return;
     var full_scan = false;
     var scan_root: ?[]const u8 = null;
-
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--full-scan")) {
             full_scan = true;
-        } else {
-            scan_root = arg;
-        }
+        } else if (std.mem.startsWith(u8, arg, "-") or scan_root != null) {
+            return error.UnexpectedArgument;
+        } else scan_root = arg;
     }
-
-    // Default to $HOME
-    const home = runtime.getEnvVarOwned(allocator, "HOME") catch {
-        std.debug.print("error: HOME not set\n", .{});
-        return;
-    };
+    const home = try runtime.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home);
-
-    const root = scan_root orelse home;
-
     try config.ensureAppSupportDir(allocator);
-
-    if (full_scan) {
-        try runFullScan(allocator, root);
-    } else {
-        try runDaemon(allocator, root);
-    }
+    // Match FSEvents' canonical spelling for symlinked homes and /private/tmp.
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(runtime.io, scan_root orelse home, allocator);
+    defer allocator.free(root);
+    if (full_scan) try runFullScan(allocator, root, false) else try runDaemon(allocator, root);
 }
 
 const DaemonStartup = struct {
     allocator: std.mem.Allocator,
     root: []const u8,
+    request_path: []const u8,
     watcher: *fsevents.FSEventsWatcher,
     watcher_started: bool = false,
+    initial_ok: bool = false,
+    request_seen: ?[16]u8 = null,
 
     pub fn startWatcher(self: *DaemonStartup) !void {
         try self.watcher.start();
         self.watcher_started = true;
     }
-
     pub fn initialScan(self: *DaemonStartup) !void {
-        try runFullScan(self.allocator, self.root);
+        self.request_seen = readRequest(self.request_path);
+        runFullScan(self.allocator, self.root, true) catch |err| {
+            std.debug.print("error: initial scan failed: {}; retrying in 5s\n", .{err});
+            return;
+        };
+        self.initial_ok = true;
     }
-
     pub fn watchLoop(self: *DaemonStartup) !void {
-        try runWatchLoop(self.allocator, self.root);
+        try runWatchLoop(self);
     }
 };
 
-/// Start observing before the initial scan so changes made during that scan
-/// remain queued for the run loop instead of falling into a startup gap.
 fn runDaemon(allocator: std.mem.Allocator, root: []const u8) !void {
+    const support = try config.appSupportDir(allocator);
+    defer allocator.free(support);
+    const canonical_support = try std.Io.Dir.cwd().realPathFileAlloc(runtime.io, support, allocator);
+    defer allocator.free(canonical_support);
+    watch_root = root;
+    exclude_prefix = canonical_support;
+    defer {
+        watch_root = "";
+        exclude_prefix = "";
+    }
+    const request_path = try std.fs.path.join(allocator, &.{ support, service.request_filename });
+    defer allocator.free(request_path);
     std.debug.print("Starting FSEvents watcher on {s}...\n", .{root});
-
-    const app_support = try config.appSupportDir(allocator);
-    defer allocator.free(app_support);
-
-    // The callback reads this borrowed prefix for the watcher lifetime. It is
-    // cleared only after the stream has stopped and the watcher is released.
-    exclude_prefix = app_support;
-    defer exclude_prefix = null;
-
     var watcher: fsevents.FSEventsWatcher = undefined;
-    try watcher.init(allocator, root, &.{app_support}, onFSEvent);
+    try watcher.init(allocator, root, &.{canonical_support}, onFSEvent);
     defer watcher.deinit();
-
-    var ops = DaemonStartup{
-        .allocator = allocator,
-        .root = root,
-        .watcher = &watcher,
-    };
+    var ops = DaemonStartup{ .allocator = allocator, .root = root, .request_path = request_path, .watcher = &watcher };
     defer if (ops.watcher_started) watcher.stop();
-
     try startup.run(&ops);
 }
 
-fn plistPath(allocator: std.mem.Allocator) ![]u8 {
-    const home = runtime.getEnvVarOwned(allocator, "HOME") catch {
-        std.debug.print("error: HOME not set\n", .{});
-        return error.HomeNotSet;
-    };
-    defer allocator.free(home);
-    return std.fmt.allocPrint(allocator, "{s}/Library/LaunchAgents/{s}", .{ home, plist_filename });
+/// Never delete the request file: a request arriving during a scan must survive
+/// that scan's completion. Only acknowledge the token captured before scanning.
+fn readRequest(path: []const u8) ?[16]u8 {
+    const file = std.Io.Dir.openFileAbsolute(runtime.io, path, .{}) catch return null;
+    defer file.close(runtime.io);
+    var token: [16]u8 = undefined;
+    var buffer: [32]u8 = undefined;
+    var reader = file.reader(runtime.io, &buffer);
+    reader.interface.readSliceAll(&token) catch return null;
+    return token;
 }
 
-fn runLaunchctl(verb: []const u8, path: []const u8) !void {
-    const argv: []const []const u8 = &.{ "launchctl", verb, path };
-    var child = try std.process.spawn(runtime.io, .{ .argv = argv });
-    const term = try child.wait(runtime.io);
-    switch (term) {
-        .exited => |code| if (code != 0) {
-            std.debug.print("warning: launchctl {s} exited with code {d}\n", .{ verb, code });
-        },
-        else => std.debug.print("warning: launchctl {s} terminated abnormally\n", .{verb}),
-    }
-}
-
-fn install(allocator: std.mem.Allocator, args: []const []const u8) !void {
-    // Determine binary path: --binary-path override or self exe path
-    var binary_path_owned: ?[]u8 = null;
-    defer if (binary_path_owned) |p| allocator.free(p);
-
-    var binary_path: []const u8 = "/usr/local/bin/zest-indexer";
-
-    var has_override = false;
-    var i: usize = 2;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--binary-path")) {
-            i += 1;
-            if (i < args.len) {
-                binary_path = args[i];
-                has_override = true;
-            } else {
-                std.debug.print("error: --binary-path requires an argument\n", .{});
-                return;
-            }
-        }
-    }
-
-    // Try to detect self exe path if no override was given
-    if (!has_override) {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (std.process.executablePath(runtime.io, &buf)) |len| {
-            binary_path_owned = try allocator.dupe(u8, buf[0..len]);
-            binary_path = binary_path_owned.?;
-        } else |_| {}
-    }
-
-    // Generate plist content
-    const plist_content = try generatePlist(allocator, binary_path);
-    defer allocator.free(plist_content);
-
-    // Determine plist destination
-    const plist_dest = try plistPath(allocator);
-    defer allocator.free(plist_dest);
-
-    // Ensure LaunchAgents directory exists
-    const parent = std.fs.path.dirname(plist_dest) orelse return error.NoParentDir;
-    try runtime.ensureDir(parent);
-
-    // Write the plist file
-    try runtime.writeFileAbsolute(plist_dest, plist_content);
-
-    std.debug.print("Wrote plist to {s}\n", .{plist_dest});
-
-    // Load via launchctl
-    runLaunchctl("load", plist_dest) catch |err| {
-        std.debug.print("error: launchctl load failed: {}\n", .{err});
-        return err;
-    };
-
-    std.debug.print("zest-indexer daemon installed and loaded.\n", .{});
-    std.debug.print("Binary: {s}\n", .{binary_path});
-}
-
-fn uninstall(allocator: std.mem.Allocator) !void {
-    const plist_dest = try plistPath(allocator);
-    defer allocator.free(plist_dest);
-
-    // Unload via launchctl (ignore errors if not loaded)
-    runLaunchctl("unload", plist_dest) catch {};
-
-    // Delete the plist file
-    std.Io.Dir.deleteFileAbsolute(runtime.io, plist_dest) catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print("Plist not found at {s}, nothing to remove.\n", .{plist_dest});
-            return;
-        }
-        std.debug.print("error: failed to delete plist: {}\n", .{err});
-        return err;
-    };
-
-    std.debug.print("zest-indexer daemon uninstalled.\n", .{});
-    std.debug.print("Removed {s}\n", .{plist_dest});
-}
-
-/// Start FSEvents watcher and run an indefinite loop that rebuilds the index
-/// when enough events accumulate or enough time has passed.
-fn runWatchLoop(allocator: std.mem.Allocator, root: []const u8) !void {
-    std.debug.print("Watcher active. Polling for changes (rebuild every 30s or 1000+ events).\n", .{});
-
-    var last_rebuild = runtime.nowNanos();
-    var last_full_rescan = last_rebuild;
-
-    // Run indefinitely, servicing the CFRunLoop for FSEvents callbacks
+fn runWatchLoop(ops: *DaemonStartup) !void {
+    std.debug.print("Watcher active. Rebuild after 30s or 1000 events; failures retry with backoff.\n", .{});
+    var state = schedule.Schedule{ .last_success = runtime.nowNanos() };
+    if (!ops.initial_ok) state.failed(runtime.nowNanos());
     while (true) {
-        // Run the CFRunLoop for up to poll_interval_s seconds.
-        // This services FSEvents callbacks on this thread.
-        // Returns when the timeout expires or CFRunLoopStop is called.
-        _ = c.CFRunLoopRunInMode(c.kCFRunLoopDefaultMode, poll_interval_s, 0);
-
-        const now = runtime.nowNanos();
-        const elapsed = now - last_rebuild;
-        const since_full_rescan = now - last_full_rescan;
-
-        const dc = dirty_count.load(.monotonic);
-        const daily_rescan_due = since_full_rescan >= daily_rescan_ns;
-        const should_rebuild = daily_rescan_due or
-            (dc >= event_threshold) or
-            (dc > 0 and elapsed >= rebuild_interval_ns);
-
-        if (should_rebuild) {
-            if (daily_rescan_due) {
-                std.debug.print("Daily full rescan triggered ({d}h since last full rescan)...\n", .{
-                    @divTrunc(since_full_rescan, 3600 * std.time.ns_per_s),
-                });
-            } else {
-                std.debug.print("Rebuilding index ({d} events, {d}s since last rebuild)...\n", .{
-                    dc,
-                    @divTrunc(elapsed, std.time.ns_per_s),
-                });
-            }
-
-            dirty_count.store(0, .monotonic);
-
-            runFullScan(allocator, root) catch |err| {
-                std.debug.print("error: rebuild failed: {}\n", .{err});
-                continue;
-            };
-
-            const rebuild_time = runtime.nowNanos();
-            last_rebuild = rebuild_time;
-            if (daily_rescan_due) {
-                last_full_rescan = rebuild_time;
-            }
-        }
+        _ = c.CFRunLoopRunInMode(c.kCFRunLoopDefaultMode, 2.0, 0);
+        state.add(dirty_count.swap(0, .monotonic));
+        const request = readRequest(ops.request_path);
+        const requested = if (request) |token| if (ops.request_seen) |seen| !std.mem.eql(u8, &token, &seen) else true else false;
+        if (!state.due(runtime.nowNanos(), requested)) continue;
+        std.debug.print("Rebuilding index ({d} events, requested={}, retry={d})...\n", .{ state.pending, requested, state.failures });
+        runFullScan(ops.allocator, ops.root, true) catch |err| {
+            state.failed(runtime.nowNanos());
+            std.debug.print("error: rebuild failed: {}; retry in {d}s\n", .{ err, @divTrunc(state.retry_at - runtime.nowNanos(), std.time.ns_per_s) + 1 });
+            continue;
+        };
+        state.succeeded(runtime.nowNanos());
+        ops.request_seen = request;
     }
 }
 
-fn runFullScan(allocator: std.mem.Allocator, root: []const u8) !void {
+fn runFullScan(allocator: std.mem.Allocator, root: []const u8, daemon: bool) !void {
+    const support = try config.appSupportDir(allocator);
+    defer allocator.free(support);
+    var reporter: ?progress.Reporter = progress.Reporter.init(allocator, support, daemon) catch null;
+    const report: ?*progress.Reporter = if (reporter) |*value| value else null;
+    if (report) |value| value.start();
+    defer if (report) |value| value.deinit();
+    errdefer |err| if (report) |value| value.setPhase(.failed, @errorName(err));
     std.debug.print("Building index for {s}...\n", .{root});
-
-    const index_data = try builder.buildIndex(allocator, root);
+    const index_data = try builder.buildIndexWithProgress(allocator, root, report);
     defer allocator.free(index_data);
-
-    const idx_path = try config.indexPath(allocator);
-    defer allocator.free(idx_path);
-
-    // Ensure parent directory exists
-    const parent = std.fs.path.dirname(idx_path) orelse return error.NoParentDir;
-    try runtime.ensureDir(parent);
-
-    // Durable, atomic publish: write into a uniquely-named temp in the same
-    // directory, fsync it, then rename over the index. The unique temp name
-    // avoids the fixed-".tmp" collision two indexer processes would hit, and the
-    // fsync closes the torn-index-on-power-loss window the plain write left open.
+    const path = try config.indexPath(allocator);
+    defer allocator.free(path);
     const t_write = runtime.nowNanos();
-    runtime.writeFileAtomic(idx_path, index_data) catch |err| {
-        std.debug.print("error: failed to write index: {}\n", .{err});
-        return err;
-    };
-
+    if (report) |value| try value.writeIndex(path, index_data) else try runtime.writeFileAtomic(path, index_data);
     var write_buf: [16]u8 = undefined;
     var size_buf: [16]u8 = undefined;
-    std.debug.print("  timing: write={s}\n", .{
+    std.debug.print("  timing: write={s}\nIndex built: {s} at {s}\n", .{
         humanize.duration(&write_buf, @divTrunc(runtime.nowNanos() - t_write, std.time.ns_per_ms)),
+        humanize.bytes(&size_buf, index_data.len),
+        path,
     });
-    std.debug.print("Index built: {s} at {s}\n", .{ humanize.bytes(&size_buf, index_data.len), idx_path });
-}
-
-/// Generate a launchd plist for the indexer daemon.
-pub fn generatePlist(allocator: std.mem.Allocator, binary_path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator,
-        \\<?xml version="1.0" encoding="UTF-8"?>
-        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        \\<plist version="1.0">
-        \\<dict>
-        \\    <key>Label</key>
-        \\    <string>dev.zest.indexer</string>
-        \\    <key>ProgramArguments</key>
-        \\    <array>
-        \\        <string>{s}</string>
-        \\    </array>
-        \\    <key>RunAtLoad</key>
-        \\    <true/>
-        \\    <key>KeepAlive</key>
-        \\    <true/>
-        \\    <key>ProcessType</key>
-        \\    <string>Background</string>
-        \\    <key>LowPriorityIO</key>
-        \\    <true/>
-        \\</dict>
-        \\</plist>
-        \\
-    , .{binary_path});
 }

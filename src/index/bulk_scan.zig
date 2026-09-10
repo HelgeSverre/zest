@@ -20,6 +20,7 @@ const file_types = @import("../core/file_types.zig");
 const config = @import("../config/config.zig");
 const runtime = @import("../core/runtime.zig");
 const format = @import("format.zig");
+const progress = @import("progress.zig");
 
 /// Number of scan worker threads. 8 remains the measured sweet spot on a
 /// 12-core M-series machine; 12 workers overloaded virtual/network filesystem
@@ -87,6 +88,9 @@ const Shared = struct {
     pending: usize = 0,
     done: bool = false,
     alloc: std.mem.Allocator,
+    root: []const u8,
+    support: []const u8,
+    progress: ?*progress.Reporter = null,
     total_entries: std.atomic.Value(u64) = .init(0),
     /// Set when an internal scanner failure makes the shard set incomplete.
     /// The builder must reject the result rather than publish partial data.
@@ -105,7 +109,7 @@ const Worker = struct {
 // consuming worker thread stacks and makes its lifetime explicit.
 const attr_buffer_size = 128 * 1024;
 
-/// Walk `root` in parallel and write TSV entries to `support_dir`/scan.tmp.{0..N}.
+/// Walk `root` using a unique shard namespace for every scan invocation.
 pub const ScanResult = struct {
     paths: []const []u8,
     entry_count: u64,
@@ -121,20 +125,48 @@ pub fn parallelScan(
     support_dir: []const u8,
     n_threads: usize,
 ) !ScanResult {
+    return parallelScanWithProgress(allocator, root, support_dir, n_threads, null);
+}
+
+pub fn parallelScanWithProgress(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    support_dir: []const u8,
+    n_threads: usize,
+    reporter: ?*progress.Reporter,
+) !ScanResult {
     const io = runtime.io;
     const n = @max(1, n_threads);
 
-    var sh = Shared{ .alloc = allocator };
-    defer sh.queue.deinit(allocator);
-    try sh.queue.append(allocator, try allocator.dupe(u8, root));
+    var sh = Shared{ .alloc = allocator, .root = root, .support = support_dir, .progress = reporter };
+    defer {
+        for (sh.queue.items) |path| allocator.free(path);
+        sh.queue.deinit(allocator);
+    }
+    const owned_root = try allocator.dupe(u8, root);
+    sh.queue.append(allocator, owned_root) catch |err| {
+        allocator.free(owned_root);
+        return err;
+    };
     sh.pending = 1;
 
     // Per-worker temp files + buffered writers (each writer needs a stable
     // buffer and a stable File.Writer slot, so heap-allocate the arrays).
     const paths = try allocator.alloc([]u8, n);
     errdefer allocator.free(paths);
+    var paths_created: usize = 0;
+    var files_opened: usize = 0;
+    var scan_id: u128 = undefined;
+    io.random(std.mem.asBytes(&scan_id));
     const files = try allocator.alloc(std.Io.File, n);
     defer allocator.free(files);
+    errdefer {
+        for (files[0..files_opened]) |file| file.close(io);
+        for (paths[0..paths_created]) |p| {
+            std.Io.Dir.deleteFileAbsolute(io, p) catch {};
+            allocator.free(p);
+        }
+    }
     const fwriters = try allocator.alloc(std.Io.File.Writer, n);
     defer allocator.free(fwriters);
     const wbufs = try allocator.alloc([]u8, n);
@@ -153,8 +185,14 @@ pub fn parallelScan(
     }
 
     for (0..n) |i| {
-        paths[i] = try std.fmt.allocPrint(allocator, "{s}/scan.tmp.{d}", .{ support_dir, i });
-        files[i] = try std.Io.Dir.createFileAbsolute(io, paths[i], .{});
+        const shard_path = try std.fmt.allocPrint(allocator, "{s}/scan-{x}.{d}", .{ support_dir, scan_id, i });
+        files[i] = std.Io.Dir.createFileAbsolute(io, shard_path, .{ .exclusive = true }) catch |err| {
+            allocator.free(shard_path);
+            return err;
+        };
+        paths[i] = shard_path;
+        paths_created += 1;
+        files_opened += 1;
         wbufs[i] = try allocator.alloc(u8, 64 * 1024);
         wbuf_count += 1;
         attr_bufs[i] = try allocator.alloc(u8, attr_buffer_size);
@@ -257,8 +295,14 @@ fn workerMain(w: *Worker) void {
 /// Scan one directory via getattrlistbulk, writing TSV lines for its entries
 /// and collecting non-excluded subdirectory paths into `subdirs`.
 fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc: std.mem.Allocator) void {
+    if (config.isPathUnder(path, w.shared.support)) return;
     const io = runtime.io;
     var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
+        if (std.mem.eql(u8, path, w.shared.root)) {
+            std.debug.print("error: scan root unavailable: {s}: {}\n", .{ path, err });
+            w.shared.scan_failed.store(true, .monotonic);
+            return;
+        }
         switch (err) {
             error.AccessDenied, error.PermissionDenied, error.FileNotFound, error.NotDir => {},
             // Network and virtual filesystems (notably OrbStack's NFS mount)
@@ -299,6 +343,8 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
     // add cache pressure. Keep this synchronized with the measured constant.
     const buf = w.attr_buf;
     while (true) {
+        const before = w.local_entries;
+        defer if (w.shared.progress) |reporter| reporter.discovered(w.local_entries - before, path);
         const rc = getattrlistbulk(fd, &alist, buf.ptr, buf.len, FSOPT_PACK_INVAL_ATTRS);
         if (rc < 0) {
             const errno = std.posix.errno(rc);
@@ -374,7 +420,6 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             if (name.len > 0 and name[name.len - 1] == 0) name = name[0 .. name.len - 1];
 
             if (config.shouldExclude(name)) continue;
-            if (name.len > 0 and name[0] == '.') continue;
 
             const kind: types.FileKind = switch (objtype) {
                 VDIR => .directory,
@@ -389,7 +434,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
                         w.shared.scan_failed.store(true, .monotonic);
                         continue;
                     };
-                    if (config.shouldExcludePath(cp)) {
+                    if (config.shouldExcludeDescendant(cp, w.shared.root, w.shared.support)) {
                         alloc.free(cp);
                         continue;
                     }
@@ -426,6 +471,43 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
             w.local_entries += 1;
         }
     }
+}
+
+test "scan invocations own separate shards and unavailable roots fail closed" {
+    const allocator = std.testing.allocator;
+    const io = runtime.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "data");
+    try tmp.dir.createDirPath(io, "support");
+    try tmp.dir.writeFile(io, .{ .sub_path = "data/file.txt", .data = "hello" });
+    const root = try tmp.dir.realPathFileAlloc(io, "data", allocator);
+    defer allocator.free(root);
+    const support = try tmp.dir.realPathFileAlloc(io, "support", allocator);
+    defer allocator.free(support);
+    const a = try parallelScan(allocator, root, support, 1);
+    defer {
+        for (a.paths) |p| allocator.free(p);
+        allocator.free(a.paths);
+    }
+    const b = try parallelScan(allocator, root, support, 1);
+    defer {
+        for (b.paths) |p| allocator.free(p);
+        allocator.free(b.paths);
+    }
+    try std.testing.expect(!std.mem.eql(u8, a.paths[0], b.paths[0]));
+    try std.testing.expect(a.complete and b.complete);
+    const a_data = try runtime.readFileAlloc(allocator, a.paths[0], .limited(4096));
+    defer allocator.free(a_data);
+    try std.testing.expect(std.mem.indexOf(u8, a_data, "file.txt") != null);
+    const absent = try std.fs.path.join(allocator, &.{ root, "absent" });
+    defer allocator.free(absent);
+    const missing = try parallelScan(allocator, absent, support, 1);
+    defer {
+        for (missing.paths) |p| allocator.free(p);
+        allocator.free(missing.paths);
+    }
+    try std.testing.expect(!missing.complete);
 }
 
 test "scanner reads allocated size rather than logical data length" {

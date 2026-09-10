@@ -18,6 +18,10 @@ comptime {
     _ = @import("index/search.zig");
     _ = @import("index/builder.zig");
     _ = @import("index/startup.zig");
+    _ = @import("index/schedule.zig");
+    _ = @import("index/service.zig");
+    _ = @import("index/access.zig");
+    _ = @import("index/progress.zig");
 
     // CLI
     _ = @import("query_main.zig");

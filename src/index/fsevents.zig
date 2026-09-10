@@ -8,7 +8,7 @@ const c = @cImport({
     @cInclude("FSEvents/FSEvents.h");
 });
 
-pub const FSEventCallback = *const fn (paths: []const []const u8) void;
+pub const FSEventCallback = *const fn (paths: []const []const u8, must_rescan: bool) void;
 
 pub const FSEventsWatcher = struct {
     stream: c.FSEventStreamRef,
@@ -74,7 +74,7 @@ pub const FSEventsWatcher = struct {
             cf_array,
             c.kFSEventStreamEventIdSinceNow,
             2.0, // 2 second coalesce latency
-            c.kFSEventStreamCreateFlagFileEvents | c.kFSEventStreamCreateFlagNoDefer | c.kFSEventStreamCreateFlagIgnoreSelf,
+            c.kFSEventStreamCreateFlagFileEvents | c.kFSEventStreamCreateFlagNoDefer | c.kFSEventStreamCreateFlagIgnoreSelf | c.kFSEventStreamCreateFlagWatchRoot,
         ) orelse return error.FSEventStreamCreateFailed;
 
         // IgnoreSelf covers this process's own writes; exclusion paths cover other writers.
@@ -135,7 +135,7 @@ fn streamCallback(
     info: ?*anyopaque,
     numEvents: usize,
     eventPaths: ?*anyopaque,
-    _: [*c]const c.FSEventStreamEventFlags,
+    flags: [*c]const c.FSEventStreamEventFlags,
     _: [*c]const c.FSEventStreamEventId,
 ) callconv(.c) void {
     const self: *FSEventsWatcher = @ptrCast(@alignCast(info orelse return));
@@ -144,12 +144,20 @@ fn streamCallback(
 
     const paths_ptr: [*]const [*:0]const u8 = @ptrCast(@alignCast(eventPaths));
 
-    var path_slices = alloc.alloc([]const u8, numEvents) catch return;
+    var path_slices = alloc.alloc([]const u8, numEvents) catch {
+        cb(&.{}, true);
+        return;
+    };
     defer alloc.free(path_slices);
 
+    var must_rescan = false;
     for (0..numEvents) |i| {
         path_slices[i] = std.mem.span(paths_ptr[i]);
+        // MustScanSubDirs is handled by our normal full rebuild after filtering
+        // its path. Dropped events and root changes invalidate the stream more
+        // broadly, so they bypass exclusions and force a safety scan.
+        if (flags[i] & (c.kFSEventStreamEventFlagUserDropped | c.kFSEventStreamEventFlagKernelDropped | c.kFSEventStreamEventFlagRootChanged) != 0) must_rescan = true;
     }
 
-    cb(path_slices);
+    cb(path_slices, must_rescan);
 }

@@ -74,8 +74,5 @@ pub fn writeFileAtomic(path: []const u8, data: []const u8) !void {
 
 /// Create a directory at an absolute path, treating "already exists" as success.
 pub fn ensureDir(path: []const u8) !void {
-    std.Io.Dir.createDirAbsolute(io, path, .default_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std.Io.Dir.cwd().createDirPath(io, path);
 }
