@@ -1,0 +1,29 @@
+name: Homebrew smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Install the public cask
+        run: |
+          test ! -e /Applications/Zest.app
+          brew install --cask helgesverre/tap/zest
+          zest-query --help
+          node scripts/verify-release.mjs /Applications/Zest.app
+      - name: Uninstall while retaining user data
+        run: |
+          mkdir -p "$HOME/Library/Application Support/zest"
+          touch "$HOME/Library/Application Support/zest/retention-test"
+          brew uninstall --cask helgesverre/tap/zest
+          test ! -e /Applications/Zest.app
+          test -f "$HOME/Library/Application Support/zest/retention-test"
+          if command -v zest-query; then exit 1; fi
