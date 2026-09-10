@@ -17,7 +17,17 @@ jobs:
         run: |
           test ! -e /Applications/Zest.app
           brew install --cask helgesverre/tap/zest
+          for executable in zest zest-query zest-indexer; do
+            test -x "$(command -v "$executable")"
+          done
           zest-query --help
+          fixture="$(mktemp -d "$RUNNER_TEMP/zest-cli.XXXXXX")"
+          mkdir "$fixture/files"
+          printf 'CLI smoke test\n' > "$fixture/files/global-command-test.txt"
+          HOME="$fixture" zest-indexer --full-scan "$fixture/files"
+          HOME="$fixture" zest-query --scope "$fixture/files" | grep -F global-command-test.txt
+          HOME="$fixture" zest --snapshot "$fixture/zest.png" 800x600
+          test -s "$fixture/zest.png"
           node scripts/verify-release.mjs /Applications/Zest.app
       - name: Uninstall while retaining user data
         run: |
@@ -26,4 +36,6 @@ jobs:
           brew uninstall --cask helgesverre/tap/zest
           test ! -e /Applications/Zest.app
           test -f "$HOME/Library/Application Support/zest/retention-test"
-          if command -v zest-query; then exit 1; fi
+          for executable in zest zest-query zest-indexer; do
+            if command -v "$executable"; then exit 1; fi
+          done

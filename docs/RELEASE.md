@@ -142,7 +142,9 @@ local packaging. Publishing the draft remains a separate explicit action.
 ## Homebrew distribution
 
 The cask lives in HelgeSverre/homebrew-tap as Casks/zest.rb and installs the same
-notarized Universal PKG, exposing only zest-query (not the development daemon CLI).
+notarized Universal PKG, exposing zest, zest-query, and zest-indexer on PATH.
+The indexer executable includes legacy development-service commands; use the
+app's Index menu to manage its SMAppService background registration instead.
 After verifying and publishing the release, run:
 
 ```sh

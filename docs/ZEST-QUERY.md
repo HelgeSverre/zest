@@ -12,7 +12,36 @@ brew install --cask helgesverre/tap/zest
 zest-query --help
 ```
 
-The cask links the bundled query executable into Homebrew's bin directory. With
+The cask links three bundled executables into Homebrew's bin directory:
+
+| Command | Purpose |
+| --- | --- |
+| `zest` | Launch the native app (it remains attached to the terminal; `zest &` backgrounds it) |
+| `zest-query` | Read-only indexed file discovery |
+| `zest-indexer` | Low-level scanner and foreground daemon |
+
+There is no `zest-index` alias. Use the app's **Index** menu to manage the installed
+background service. The indexer's `install`, `start`, `stop`, `restart`, and
+`status` commands concern the separate legacy development service, not the app's
+SMAppService registration. Running `zest-indexer` without arguments starts a
+foreground daemon; do not run it alongside the app-managed daemon.
+
+For an isolated one-shot scan (without replacing your normal index):
+
+```sh
+fixture="$(mktemp -d)"
+HOME="$fixture" zest-indexer --full-scan "$(pwd -P)"
+HOME="$fixture" zest-query --scope "$(pwd -P)" --depth all
+```
+
+The temporary index remains under `$fixture` until you remove it. In 0.1.0,
+`zest-indexer` has no `--help` option; use the documented `--full-scan PATH` form.
+
+If you installed the earlier query-only cask, run `brew update` followed by
+`brew reinstall --cask helgesverre/tap/zest` to add the other commands. Disable
+background indexing before reinstalling.
+
+With
 the PKG installed directly, invoke:
 
 ```sh
