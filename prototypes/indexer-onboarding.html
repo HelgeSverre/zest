@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zest · Indexer onboarding concept</title>
+<style>
+:root { color-scheme: dark; --bg:#111417; --surface:#1b1f23; --raised:#24292e; --line:#333a40; --text:#eef0f2; --muted:#a0a8ae; --accent:#b8ef71; --ink:#182310; }
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; background:#101215; color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; display:grid; place-items:center; padding:40px 24px; }
+button, select { font:inherit; }
+button { cursor:pointer; }
+button:focus-visible, select:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+button:disabled { opacity:.35; cursor:default; }
+.prototype { width:min(860px,100%); }
+.specimen { display:flex; justify-content:space-between; align-items:center; gap:16px; margin:0 4px 18px; color:var(--muted); font-size:12px; }
+.specimen strong { color:var(--text); font-weight:500; }
+.specimen select { background:#1b1f23; border:1px solid var(--line); color:var(--text); border-radius:7px; padding:5px 9px; font-size:12px; }
+.window { background:var(--surface); border:1px solid #41474b; border-radius:16px; overflow:hidden; box-shadow:0 35px 90px #0007,0 2px 8px #0005; }
+.chrome { height:42px; display:flex; align-items:center; padding:0 17px; background:#202529; border-bottom:1px solid #ffffff06; gap:8px; }
+.traffic { width:12px; height:12px; border-radius:50%; background:#52575c; }
+button.traffic { border:0; padding:0; background:#f27870; }
+.chrome span:last-child { margin:auto; padding-right:52px; color:#a7afb5; font-size:12px; font-weight:500; }
+.layout { display:grid; grid-template-columns:205px 1fr; min-height:544px; }
+aside { background:#171b1e; border-right:1px solid #ffffff09; padding:32px 24px 24px; display:flex; flex-direction:column; }
+.brand { font-size:22px; font-weight:650; letter-spacing:-1px; display:flex; gap:10px; align-items:center; }
+.brandmark { color:var(--accent); font-size:28px; line-height:1; }
+.rail-caption { color:var(--muted); font-size:11px; letter-spacing:1.4px; text-transform:uppercase; margin:36px 0 19px; }
+.steps { display:grid; gap:27px; }
+.step { display:flex; gap:12px; align-items:center; border:0; background:none; text-align:left; color:#808991; padding:0; position:relative; }
+.step:not(:last-child)::after { content:""; height:22px; width:1px; background:#353c42; position:absolute; top:31px; left:13px; }
+.number { flex-shrink:0; width:28px; height:28px; border:1px solid #41484e; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:600; }
+.step.active { color:var(--text); }
+.step.active .number { background:var(--accent); border-color:var(--accent); color:var(--ink); }
+.step.complete .number { color:var(--accent); border-color:#59703e; }
+.step small { display:block; font-size:11px; color:#828c94; margin-top:1px; }
+.rail-foot { margin-top:auto; padding-top:40px; color:#88939b; font-size:11px; display:flex; align-items:center; gap:7px; }
+.dot { width:6px; height:6px; background:#929b9f; border-radius:50%; display:inline-block; flex-shrink:0; }
+main { min-width:0; display:flex; flex-direction:column; }
+.panel { padding:35px 38px 24px; flex:1; }
+[hidden] { display:none !important; }
+.eyebrow { margin:0 0 8px; color:var(--accent); text-transform:uppercase; letter-spacing:1.5px; font-size:10px; font-weight:650; }
+h1 { font-size:29px; font-weight:630; letter-spacing:-1px; line-height:1.17; margin:0 0 12px; }
+.intro { color:var(--muted); margin:0; max-width:410px; font-size:13px; line-height:1.65; }
+.art { height:178px; margin:20px 0 17px; display:flex; align-items:center; justify-content:center; position:relative; }
+.orbit { width:148px; height:148px; border:1px solid #3c4935; border-radius:50%; display:grid; place-items:center; position:relative; }
+.orbit::before { content:""; position:absolute; inset:17px; border:1px dashed #3a4433; border-radius:50%; }
+.folder { width:70px; height:48px; border:1px solid #cbea9f; background:linear-gradient(#b7e586,#8db65e); border-radius:6px; position:relative; box-shadow:0 7px 15px #0003; }
+.folder::before { content:""; position:absolute; left:-1px; top:-9px; width:29px; height:12px; border:1px solid #cbea9f; border-bottom:0; border-radius:5px 5px 0 0; background:#b4df83; }
+.folder::after { content:"Z"; position:absolute; inset:0; display:grid; place-items:center; color:#34521a; font-size:24px; font-weight:700; }
+.file-pill { position:absolute; padding:7px 11px; background:#242b29; border:1px solid #424d40; border-radius:8px; font-size:11px; color:#c5d0c0; box-shadow:0 4px 12px #0002; }
+.file-pill.one { left:calc(50% - 173px); top:32px; transform:rotate(-6deg); }
+.file-pill.two { left:calc(50% + 60px); top:75px; transform:rotate(5deg); }
+.file-pill.three { left:calc(50% - 147px); top:128px; transform:rotate(-3deg); }
+.benefit { display:flex; align-items:flex-start; gap:10px; margin:9px 0; font-size:12px; color:#c9ced2; }
+.tick { color:var(--accent); font-weight:600; }
+.privacy { color:#8c979e; font-size:11px; line-height:1.6; margin:16px 0 0; }
+footer { padding:18px 28px; border-top:1px solid #ffffff0c; display:flex; align-items:center; gap:9px; min-height:74px; }
+.spacer { flex:1; }
+.button { border:1px solid #424b52; background:#2a3035; color:var(--text); border-radius:7px; padding:8px 14px; font-size:12px; font-weight:550; min-height:34px; }
+.button:hover:not(:disabled) { background:#343d44; }
+.button.primary { border-color:var(--accent); background:var(--accent); color:var(--ink); }
+.button.primary:hover:not(:disabled) { background:#c8fa8a; }
+.quiet { background:none; color:var(--muted); border:0; padding:7px 0; font-size:12px; }
+.quiet:hover { color:var(--text); }
+.settings { border:1px solid #475057; border-radius:10px; overflow:hidden; margin:24px 0 16px; background:#242a2f; box-shadow:0 8px 20px #0002; }
+.settings-title { padding:11px 15px; border-bottom:1px solid #ffffff0a; font-size:12px; font-weight:600; display:flex; align-items:center; justify-content:space-between; }
+.mini-label { font-size:9px; font-weight:400; color:#98a2aa; border:1px solid #485059; border-radius:4px; padding:1px 5px; }
+.settings-body { padding:15px; }
+.settings-body p { margin:0 0 13px; font-size:11px; color:#a2adb5; }
+.app-row { display:flex; align-items:center; gap:10px; border:1px solid #465048; border-radius:7px; background:#29302b; padding:10px; font-size:12px; }
+.terminal { width:29px; height:29px; border-radius:6px; background:#15191c; border:1px solid #525b61; color:#dde6db; display:grid; place-items:center; font:12px ui-monospace,monospace; }
+.app-row small { display:block; font-size:10px; color:#99a392; margin-top:2px; }
+.switch { width:34px; height:20px; border-radius:20px; padding:2px; border:0; background:#58616a; margin-left:auto; }
+.switch::before { content:""; display:block; width:16px; height:16px; border-radius:50%; background:white; box-shadow:0 1px 3px #0003; transition:transform .15s; }
+.switch[aria-checked="true"] { background:#81b84e; }
+.switch[aria-checked="true"]::before { transform:translateX(14px); }
+.settings-bottom { margin-top:11px; display:flex; align-items:center; justify-content:space-between; color:#9da7ae; font-size:10px; }
+.plus { font-size:17px; line-height:20px; border:1px solid #4a555e; color:#dfe5e9; border-radius:4px; background:#333c43; width:28px; }
+.pathbox { padding:10px 12px; border:1px solid #3a4248; border-radius:7px; background:#191d20; margin-top:12px; }
+.pathbox label { display:block; color:#87939b; font-size:10px; margin-bottom:4px; }
+.pathbox code { font:10px/1.5 ui-monospace,"SF Mono",monospace; color:#c0c8cf; overflow-wrap:anywhere; user-select:all; }
+.instruction { display:flex; align-items:flex-start; gap:10px; margin:12px 0; color:#aeb8bf; font-size:12px; }
+.instruction b { color:var(--text); font-weight:550; }
+.key { color:#e0e5e9; border:1px solid #475057; border-bottom-width:2px; border-radius:4px; padding:0 4px; font-size:10px; white-space:nowrap; }
+.verification { display:flex; flex-direction:column; align-items:center; text-align:center; padding:30px 10px 26px; }
+.status-ring { width:84px; height:84px; border:1px solid #4a5840; border-radius:50%; display:grid; place-items:center; background:#242d22; color:var(--accent); font-size:32px; position:relative; margin-bottom:18px; }
+.status-ring.waiting { background:#242b2e; border:1px dashed #788991; color:#b2c0c7; }
+.status-ring.denied { background:#302b21; border-color:#7c6841; color:#e2bf76; }
+.verification h2 { margin:0 0 7px; font-size:18px; font-weight:550; letter-spacing:-.3px; }
+.verification p { color:var(--muted); font-size:12px; max-width:315px; margin:0; line-height:1.65; min-height:40px; }
+.checklist { padding:0 15px; border:1px solid #39423d; border-radius:9px; background:#202723; }
+.check-row { padding:11px 0; display:flex; justify-content:space-between; align-items:center; font-size:11px; gap:12px; color:#b4beb6; }
+.check-row + .check-row { border-top:1px solid #ffffff09; }
+.check-row span:last-child { color:var(--accent); font-size:10px; }
+.bottom-note { text-align:center; color:#829087; margin:13px 0 0; font-size:10px; }
+.end { padding:72px 38px; text-align:center; }
+.end .status-ring { margin:0 auto 24px; }
+.end h1 { font-size:27px; }
+.end p { color:var(--muted); font-size:13px; margin-bottom:26px; }
+.demo-note { color:#818b92; margin:17px 4px 0; font-size:11px; display:flex; justify-content:space-between; gap:20px; }
+@media(max-width:680px) { body { padding:16px 10px; } .layout { grid-template-columns:1fr; } aside { padding:16px 22px; border-right:0; border-bottom:1px solid #ffffff0c; } .brand,.rail-caption,.rail-foot,.step small { display:none; } .steps { display:flex; justify-content:space-between; gap:12px; } .step { font-size:11px; gap:6px; } .step::after { display:none; } .panel { padding:26px 24px; } h1 { font-size:27px; } .specimen { flex-wrap:wrap; } .demo-note { flex-wrap:wrap; gap:5px; } }
+@media(prefers-reduced-motion:reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="prototype">
+  <div class="specimen"><div><strong>Zest / Indexer setup</strong> <span> · Interactive concept</span></div><label>Verification preview &nbsp; <select id="scenario"><option value="waiting">Waiting for access</option><option value="verified">Access verified</option><option value="denied">Unable to verify</option></select></label></div>
+  <section class="window" aria-label="Set up background indexing">
+    <header class="chrome"><button class="traffic" id="close" aria-label="Close setup"></button><span class="traffic"></span><span class="traffic"></span><span>Set up Zest</span></header>
+    <div class="layout" id="flow">
+      <aside>
+        <div class="brand"><span class="brandmark">⌁</span> zest</div>
+        <p class="rail-caption">Background indexing</p>
+        <nav class="steps" aria-label="Setup steps">
+          <button class="step active" data-step="0" aria-current="step"><span class="number">1</span><span>Welcome<small>A little permission</small></span></button>
+          <button class="step" data-step="1"><span class="number">2</span><span>Enable access<small>One change in Settings</small></span></button>
+          <button class="step" data-step="2"><span class="number">3</span><span>Ready to index<small>We’ll check for you</small></span></button>
+        </nav>
+        <div class="rail-foot"><span class="dot"></span> Indexer paused during setup</div>
+      </aside>
+      <main>
+        <section class="panel" data-panel="0">
+          <p class="eyebrow">Make yourself at home</p>
+          <h1>Your files. Always<br>within reach.</h1>
+          <p class="intro">Let Zest keep your file index up to date in the background. A one-time permission helps it see your protected folders, too.</p>
+          <div class="art" aria-hidden="true"><div class="orbit"><div class="folder"></div></div><span class="file-pill one">▤ &nbsp; Documents</span><span class="file-pill two">▧ &nbsp; Desktop</span><span class="file-pill three">↓ &nbsp; Downloads</span></div>
+          <div class="benefit"><span class="tick">✓</span><span>One setup instead of separate folder prompts.</span></div>
+          <div class="benefit"><span class="tick">✓</span><span>Filenames and metadata indexed locally on your Mac.</span></div>
+          <p class="privacy">Full Disk Access also allows access to protected app data.<br>Your scan exclusions still apply. You can revoke access anytime.</p>
+        </section>
+        <section class="panel" data-panel="1" hidden>
+          <p class="eyebrow">One change in macOS</p>
+          <h1>Give the indexer access.</h1>
+          <p class="intro">Open Full Disk Access, add <b>zest-indexer</b>, then turn on its switch. macOS may ask you to authenticate.</p>
+          <div class="settings">
+            <div class="settings-title"><span>‹ &nbsp; Full Disk Access</span><span class="mini-label">Illustration</span></div>
+            <div class="settings-body"><p>Allow the apps below to access protected files.</p>
+              <div class="app-row"><span class="terminal">&gt;_</span><div>zest-indexer<small>Zest’s background indexer</small></div><button class="switch" id="permission" role="switch" aria-checked="false" aria-label="Simulate enabling indexer access"></button></div>
+              <div class="settings-bottom"><button class="plus" id="add" aria-label="Preview adding the indexer">+</button><span id="settings-hint">Add the helper, then enable its switch</span></div>
+            </div>
+          </div>
+          <div class="instruction"><span class="tick">↗</span><span><b>Find the right file.</b> In the add-file dialog, press <span class="key">⇧⌘G</span> and paste this path.</span></div>
+          <div class="pathbox"><label>Installed helper · select to copy</label><code>~/Library/Application Support/zest/bin/zest-indexer</code></div>
+          <p class="privacy">Already enabled? Continue — we’ll verify access in the next step.</p>
+        </section>
+        <section class="panel" data-panel="2" hidden>
+          <p class="eyebrow">The last little check</p>
+          <h1 id="verify-heading">Let’s make sure it worked.</h1>
+          <p class="intro">Zest checks the installed indexer’s access automatically. There’s nothing to restart.</p>
+          <div class="verification" aria-live="polite"><div class="status-ring waiting" id="status-symbol" aria-hidden="true">···</div><h2 id="status-title">Waiting for access</h2><p id="status-description">Enable zest-indexer in Full Disk Access. We’ll pick up the change when you return.</p></div>
+          <div class="checklist"><div class="check-row"><span>Installed background helper</span><span>✓ Ready</span></div><div class="check-row"><span>Protected-folder access</span><span id="check-status">Checking…</span></div></div>
+          <p class="bottom-note" id="verification-note">Checking automatically · Indexing hasn’t started yet</p>
+        </section>
+        <footer><button class="quiet" id="skip">Skip for now</button><div class="spacer"></div><button class="button" id="back" hidden>Back</button><button class="button primary" id="next">Set up access <span aria-hidden="true">→</span></button></footer>
+      </main>
+    </div>
+    <section class="end" id="end" hidden><div class="status-ring" aria-hidden="true">✓</div><h1 id="end-title">You’re all set.</h1><p id="end-description">Background indexing would now start.</p><button class="button" id="reset">Replay setup</button></section>
+  </section>
+  <div class="demo-note"><span>Design prototype only. No settings are opened or changed.</span><span>Three panels · One task at a time</span></div>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let step = 0;
+  let settingsOpened = false;
+  const steps = [...document.querySelectorAll('[data-step]')];
+  const panels = [...document.querySelectorAll('[data-panel]')];
+  function render() {
+    panels.forEach((panel, index) => panel.hidden = index !== step);
+    steps.forEach((button, index) => {
+      button.classList.toggle('active', index === step);
+      button.classList.toggle('complete', index < step);
+      button.querySelector('.number').textContent = index < step ? '✓' : index + 1;
+      if (index === step) button.setAttribute('aria-current', 'step');
+      else button.removeAttribute('aria-current');
+    });
+    $('back').hidden = step === 0;
+    $('next').textContent = step === 0 ? 'Set up access →' : step === 1 ? (settingsOpened ? 'Continue →' : 'Open System Settings ↗') : 'Done';
+    $('next').disabled = step === 2 && $('scenario').value !== 'verified';
+  }
+  function status() {
+    const value = $('scenario').value;
+    const verified = value === 'verified';
+    const denied = value === 'denied';
+    $('permission').setAttribute('aria-checked', String(verified));
+    $('status-symbol').className = 'status-ring' + (verified ? '' : denied ? ' denied' : ' waiting');
+    $('status-symbol').textContent = verified ? '✓' : denied ? '!' : '···';
+    $('status-title').textContent = verified ? 'Access verified' : denied ? 'We couldn’t verify access' : 'Waiting for access';
+    $('status-description').textContent = verified ? 'The installed indexer can read a protected folder. You’re ready to start background indexing.' : denied ? 'Check that the installed helper is enabled in Settings. We’ll keep trying, or you can skip for now.' : 'Enable zest-indexer in Full Disk Access. We’ll pick up the change when you return.';
+    $('check-status').textContent = verified ? '✓ Verified' : denied ? 'Not verified' : 'Checking…';
+    $('check-status').style.color = verified ? 'var(--accent)' : denied ? '#e2bf76' : 'var(--muted)';
+    $('verification-note').textContent = verified ? 'This confirms folder access, not access to every location on disk.' : 'Checking automatically · Indexing hasn’t started yet';
+    render();
+  }
+  function finish(kind) {
+    $('flow').hidden = true;
+    $('end').hidden = false;
+    $('end-title').textContent = kind === 'done' ? 'You’re all set.' : kind === 'skip' ? 'Start with what’s accessible.' : 'Setup can wait.';
+    $('end-description').textContent = kind === 'done' ? 'Background indexing would now start. You can manage it from the Index menu.' : kind === 'skip' ? 'Indexing would start without verification. Folder prompts or incomplete results are still possible.' : 'The indexer stays paused. Reopen setup from the Index menu when you’re ready.';
+  }
+  steps.forEach(button => button.addEventListener('click', () => { step = Number(button.dataset.step); render(); }));
+  $('back').onclick = () => { step = Math.max(0, step - 1); render(); };
+  $('next').onclick = () => {
+    if (step === 2) { if ($('scenario').value === 'verified') finish('done'); return; }
+    if (step === 1 && !settingsOpened) {
+      settingsOpened = true;
+      $('settings-hint').textContent = 'Settings opened (simulated) · Try the switch above';
+    } else step++;
+    render();
+  };
+  $('scenario').onchange = () => { step = 2; status(); };
+  $('permission').onclick = () => {
+    $('scenario').value = $('scenario').value === 'verified' ? 'waiting' : 'verified';
+    settingsOpened = true;
+    $('settings-hint').textContent = 'Permission change simulated · Continue to verify';
+    status();
+  };
+  $('add').onclick = () => { $('settings-hint').textContent = 'zest-indexer added (simulated) · Enable the switch'; settingsOpened = true; render(); };
+  $('skip').onclick = () => finish('skip');
+  $('close').onclick = () => finish('close');
+  $('reset').onclick = () => {
+    step = 0; settingsOpened = false; $('scenario').value = 'waiting';
+    $('flow').hidden = false; $('end').hidden = true;
+    $('settings-hint').textContent = 'Add the helper, then enable its switch'; status();
+  };
+  status();
+})();
+</script>
+</body>
+</html>

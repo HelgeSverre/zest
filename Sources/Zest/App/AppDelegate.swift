@@ -2,10 +2,14 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var window: NSWindow!
+  private let indexerMenu = IndexerMenuController()
   /// Set by `RootViewController.viewDidAppear` so menu actions (Go Up, Open
   /// Selected) can reach the coordinator and the active browser. Weak so we
   /// don't extend the controller's lifetime past its window.
   weak var rootViewController: RootViewController?
+
+  func setUpIndexer() { indexerMenu.setUpAccess() }
+  func retryIndexer() { indexerMenu.retryIndexing() }
 
   func applicationDidFinishLaunching(_: Notification) {
     installMainMenu()
@@ -112,6 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     focusList.target = self
     mainMenu.addItem(
       makeMenu("View", items: [foldersOnTop, .separator(), focusSidebar, focusList]))
+
+    let indexMenuItem = NSMenuItem()
+    indexMenuItem.submenu = indexerMenu.menu
+    mainMenu.addItem(indexMenuItem)
 
     // Navigation — the new keyboard shortcuts from the old Zig UI.
     let navMenu = NSMenu(title: "Navigation")

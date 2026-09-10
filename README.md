@@ -128,6 +128,44 @@ flowchart TB
 - **Event coalescing:** pending changes rebuild once 30 seconds have passed since the previous build, or immediately when 1,000 events accumulate.
 - **Safety net:** the daemon performs a full rescan every 24 hours.
 
+The native **Index** menu shows whether the launchd indexer is running, stopped,
+waiting to start, or not installed. It offers **Re-index Now**, **Stop Indexer**,
+and **Restart Indexer** while running, **Start Indexer** while stopped, and
+**Set Up Indexer…** when absent. Starting always performs a full scan.
+If Zest cannot find the helper executable, **Locate Indexer…** lets you select it.
+Menu operations run in the background and report failures.
+
+Menu installation first stages the indexer without registering or starting it.
+The native SwiftUI guide has three distinct panels: Welcome, Enable Access, and
+Ready to Index. It includes buttons to open **System Settings → Privacy & Security →
+Full Disk Access**, copy the installed helper path, and reveal it in Finder.
+Add that executable and enable its switch. The guide polls access automatically;
+click **Done** once verified, or **Skip for now** and confirm to start without verification. Closing
+setup leaves the indexer unregistered, so it will not start unexpectedly at login.
+For an existing installation, **Set Up Full Disk Access…** pauses indexing and
+stages the current helper and opens the same guide; closing that guide leaves
+the existing daemon stopped.
+
+UI tests render all five onboarding states (welcome, access, waiting, verified,
+and unavailable) using the actual native window without probing permissions or
+starting the daemon. To save those captures, set `ZEST_ONBOARDING_SNAPSHOT_DIR`
+to an output directory when running `swift test --filter IndexerMenuTests`.
+
+macOS requires the user to enable Full Disk Access in System Settings; there is
+no public one-click permission prompt or reliable public authorization query.
+The guide launches a fresh, short-lived instance of the installed helper through
+launchd every few seconds to test directory access to Safari, Mail, or Messages
+(falling back only when a directory is absent). It does not read file contents or
+inspect the privacy database. This verifies a protected-folder operation, not the
+system's Full Disk Access switch or access to every folder. Denied, missing, or
+inconclusive results never enable Done. Closing the guide stops polling.
+Starting without granting access may still produce separate folder prompts. Full Disk Access is
+broader than folder-specific consent and can expose protected app data; scanner
+exclusions remain in effect. Development builds are ad-hoc signed, so replacing
+the executable may require granting access again. A release should use a stable
+code-signing identity. CLI `install` remains an explicit install-and-start command;
+`prepare-install` only stages the executable for permission setup.
+
 Installation copies the helper to
 `~/Library/Application Support/zest/bin/zest-indexer`, so development builds and
 `just clean` do not remove the installed executable. Run `just install-daemon`
