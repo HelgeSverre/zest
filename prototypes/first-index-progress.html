@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zest · Your first index</title>
+<style>
+:root{color-scheme:dark;--text:#eef0f2;--muted:#a0a8ae;--accent:#b8ef71;--line:#353e44;--surface:#1b1f23;--ink:#182310}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background:#101215;color:var(--text);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}button,select{font:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:4px}button:disabled{cursor:default;opacity:.4}[hidden]{display:none!important}.prototype{width:min(1080px,100%)}.harness{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:0 3px 17px;color:var(--muted);font-size:12px}.harness strong{color:var(--text);font-weight:500}.controls{display:flex;gap:8px;align-items:center}.controls select,.controls button{background:#20262b;border:1px solid var(--line);border-radius:6px;color:var(--text);padding:6px 10px;font-size:11px}.window{position:relative;border:1px solid #41474b;border-radius:14px;overflow:hidden;background:#14181c;box-shadow:0 32px 90px #0007}.toolbar{height:58px;display:flex;align-items:center;gap:24px;background:#202529;padding:0 20px;border-bottom:1px solid #30363c}.lights{display:flex;gap:8px}.lights i{width:12px;height:12px;background:#f27870;border-radius:50%}.lights i:nth-child(2){background:#d9b864}.lights i:nth-child(3){background:#80b868}.brand{font-size:19px;font-weight:650;letter-spacing:-.7px}.brand span{color:var(--accent);margin-right:7px}.search{margin-left:auto;width:52%;padding:7px 12px;border:1px solid #3c444b;border-radius:7px;background:#171c20;color:#7e8b95;font-size:12px}.search kbd{float:right;font:10px/18px inherit;color:#697780}.workspace{display:grid;grid-template-columns:180px 1fr;min-height:610px}.sidebar{background:#181d21;padding:22px 14px;border-right:1px solid #293138}.section-label{font-size:10px;letter-spacing:1.3px;color:#71808c;margin:3px 12px 12px}.nav-item{padding:8px 12px;color:#a6b1b9;font-size:12px;border-radius:6px;display:flex;gap:10px}.nav-item.active{background:#283226;color:#d2e7ba}.nav-item .icon{width:17px;color:#91a77c}.sidebar .section-label:not(:first-child){margin-top:28px}.content{min-width:0}.breadcrumb{height:45px;border-bottom:1px solid #252d34;color:#9aa7b0;font-size:11px;padding:14px 22px}.table-head,.file-row{display:grid;grid-template-columns:1fr 90px 130px;gap:12px;padding:10px 24px}.table-head{color:#71808b;font-size:10px;letter-spacing:.8px;border-bottom:1px solid #252d34}.file-row{color:#acb9c3;font-size:12px;border-bottom:1px solid #ffffff04}.file-row span:first-child{color:#d4dce2}.file-row .folder-icon{color:#99be79;margin-right:10px}.file-row span:not(:first-child){font-size:11px;color:#81909b}.statusbar{min-height:34px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 16px;border-top:1px solid #30373e;background:#1a2025;font-size:10px;color:#8c9ba5}.statusbar button{border:0;background:none;color:var(--accent);font-size:10px;padding:0}.status-left{display:flex;align-items:center;gap:9px}.small-dot{width:5px;height:5px;background:var(--accent);border-radius:50%}.mini-progress{width:65px;height:3px;border-radius:4px;background:#465038;overflow:hidden}.mini-progress span{display:block;width:40%;height:100%;background:var(--accent)}.shade{position:absolute;inset:58px 0 34px;display:flex;align-items:center;justify-content:center;padding:20px;background:#0d1115b3;backdrop-filter:blur(4px)}.dialog{width:540px;max-width:100%;border:1px solid #434c4f;border-radius:14px;background:var(--surface);box-shadow:0 25px 70px #0008;overflow:hidden}.dialog-body{padding:29px 34px 27px}.dialog-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:26px}.eyebrow{font-size:10px;letter-spacing:1.5px;color:var(--accent);font-weight:600}.live{font-size:10px;color:#aebba2;display:flex;align-items:center;gap:6px}.live .small-dot{box-shadow:0 0 0 3px #b8ef7110}.hero{display:flex;align-items:center;gap:18px;margin-bottom:21px}.glyph{width:64px;height:64px;flex-shrink:0;display:grid;place-items:center;border:1px solid #455539;border-radius:17px;background:#252f22;position:relative}.folder{height:27px;width:36px;background:linear-gradient(#c4e999,#94b764);border-radius:4px;position:relative}.folder::before{content:"";position:absolute;top:-5px;left:0;width:16px;height:8px;background:#b9dd8e;border-radius:3px}.glyph .result-mark{font-size:28px;color:var(--accent)}h1{margin:0 0 5px;font-size:25px;letter-spacing:-.8px;line-height:1.2;font-weight:620}.subtitle{font-size:12px;line-height:1.65;color:var(--muted);margin:0;max-width:340px}.phase-rail{display:flex;align-items:center;gap:10px;margin:23px 0 26px}.phase{display:flex;align-items:center;gap:6px;font-size:10px;white-space:nowrap;color:#75828b}.phase b{display:grid;place-items:center;border:1px solid #465057;border-radius:50%;height:17px;width:17px;font-size:9px;font-weight:500}.phase.active{color:#e2eadb}.phase.active b{border-color:var(--accent);background:var(--accent);color:var(--ink)}.phase.complete{color:#b5c6a5}.phase.complete b{border-color:#526442;color:var(--accent)}.connector{height:1px;background:#354037;flex:1}.metrics{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:13px}.count{font-size:33px;line-height:1.1;letter-spacing:-1px;font-weight:550;font-variant-numeric:tabular-nums}.count-label{font-size:11px;color:var(--muted);margin-top:5px}.elapsed{text-align:right;color:#98a59c;font-size:11px;font-variant-numeric:tabular-nums}.elapsed b{display:block;font-size:12px;font-weight:450;color:#d1d9ce;margin-bottom:3px}.track{height:6px;background:#323d30;border-radius:6px;overflow:hidden;position:relative}.fill{width:36%;height:100%;background:var(--accent);border-radius:6px;transition:width .35s ease}.track.indeterminate .fill{animation:scan 2.7s ease-in-out infinite}.track.paused .fill{animation:none;background:#a9966f;width:40%}.detail-line{margin-top:10px;display:flex;justify-content:space-between;gap:12px;font-size:10px;color:#8c9b91}.detail-line strong{font-weight:500;color:#bdcbb1}.activity{margin-top:22px;padding:12px 13px;background:#171c1e;border:1px solid #333c40;border-radius:8px;display:flex;gap:10px;align-items:center;min-height:58px}.activity-icon{font-size:18px;color:#8da279;flex-shrink:0}.activity label{font-size:10px;color:#8b999f;display:block;margin-bottom:4px}.activity code{font:10px/1.5 ui-monospace,"SF Mono",monospace;color:#bdc6cc;overflow-wrap:anywhere}.activity-text{min-width:0}.reassurance{font-size:11px;line-height:1.7;color:#8e9c95;margin:18px 0 0}.reassurance strong{font-weight:500;color:#b7c4ae}.dialog-footer{border-top:1px solid #ffffff0a;padding:15px 24px;min-height:62px;display:flex;gap:10px;align-items:center;background:#1d2226}.footer-note{color:#84918b;font-size:10px;display:flex;align-items:center;gap:7px}.spacer{flex:1}.button{font-size:11px;font-weight:550;border:1px solid #424c53;border-radius:7px;padding:8px 13px;background:#293137;color:var(--text)}.button.primary{background:var(--accent);border-color:var(--accent);color:var(--ink)}.button:hover{filter:brightness(1.1)}.error .glyph{background:#302b21;border-color:#77613b}.error .result-mark{color:#e2bf76}.error .live{color:#d2b782}.error .live .small-dot{background:#d2b782}.empty{height:400px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#8b999f;text-align:center;padding:24px}.empty h2{color:#ccd7ce;font-size:19px;font-weight:500;margin:10px 0 6px}.empty p{font-size:12px;margin:0 0 17px}.caption{font-size:11px;color:#808c94;margin:17px 3px 0;display:flex;justify-content:space-between;gap:16px}.caption strong{color:#a7b3ba;font-weight:500}@keyframes scan{0%{transform:translateX(-110%)}60%,100%{transform:translateX(390%)}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.track.indeterminate .fill{width:100%;opacity:.5}}@media(max-width:650px){body{padding:14px 8px}.harness{align-items:flex-start;flex-direction:column}.controls{flex-wrap:wrap}.workspace{grid-template-columns:1fr;min-height:620px}.sidebar{display:none}.toolbar{gap:12px}.search{width:45%}.shade{padding:12px}.dialog-body{padding:25px 22px}.dialog-top{margin-bottom:23px}.hero{gap:12px}h1{font-size:23px}.glyph{width:52px;height:52px}.phase-rail{gap:6px}.phase{font-size:9px}.count{font-size:29px}.caption{flex-direction:column;gap:5px}.dialog-footer{padding:15px 18px}.footer-note{max-width:150px}.table-head,.file-row{grid-template-columns:1fr 65px 80px;padding:10px 15px}}
+</style>
+</head>
+<body>
+<div class="prototype">
+  <div class="harness"><div><strong>Zest / The first index</strong> · Interactive concept</div><div class="controls"><label for="scene">Preview</label><select id="scene"><option value="scan">Scanning files</option><option value="build">Building index</option><option value="load">Opening index</option><option value="ready">Ready</option><option value="error">Scan interrupted</option><option value="background">Later re-indexing</option></select><button id="tour">Play full flow</button></div></div>
+  <section class="window" aria-label="Zest application preview">
+    <header class="toolbar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><div class="brand"><span>⌁</span>zest</div><div class="search">⌕ &nbsp; Search your files <kbd>⌘K</kbd></div></header>
+    <div class="workspace" id="workspace" inert>
+      <aside class="sidebar"><p class="section-label">BROWSE</p><div class="nav-item active"><span class="icon">⌂</span>Home</div><div class="nav-item"><span class="icon">▤</span>Documents</div><div class="nav-item"><span class="icon">▧</span>Desktop</div><div class="nav-item"><span class="icon">↓</span>Downloads</div><p class="section-label">FAVOURITES</p><div class="nav-item"><span class="icon">⌘</span>Projects</div></aside>
+      <main class="content"><div class="breadcrumb">⌂ &nbsp; Home</div><div class="table-head"><span>NAME</span><span>SIZE</span><span>MODIFIED</span></div><div id="files" hidden><div class="file-row"><span><span class="folder-icon">▰</span>Applications</span><span>2.4 GB</span><span>Today, 09:24</span></div><div class="file-row"><span><span class="folder-icon">▰</span>Desktop</span><span>184 MB</span><span>Today, 10:12</span></div><div class="file-row"><span><span class="folder-icon">▰</span>Documents</span><span>6.8 GB</span><span>Yesterday</span></div><div class="file-row"><span><span class="folder-icon">▰</span>Downloads</span><span>3.1 GB</span><span>Today, 08:42</span></div><div class="file-row"><span><span class="folder-icon">▰</span>Pictures</span><span>14.2 GB</span><span>Yesterday</span></div><div class="file-row"><span><span class="folder-icon">▰</span>Projects</span><span>8.6 GB</span><span>Today, 10:39</span></div></div><div class="empty" id="empty" hidden><h2>Your files are on their way.</h2><p>Zest is building its first index in the background.</p><button class="button" id="show-progress">Show progress</button></div></main>
+    </div>
+    <div class="statusbar"><div class="status-left"><span class="small-dot"></span><span id="status-text">Creating your first index…</span><div class="mini-progress" id="mini" hidden><span></span></div></div><button id="status-action">View progress</button></div>
+    <div class="shade" id="overlay">
+      <section class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="title" aria-describedby="subtitle">
+        <div class="dialog-body">
+          <div class="dialog-top"><span class="eyebrow">A little setup. A faster everyday.</span><span class="live"><span class="small-dot"></span><span id="live-label">Indexer running</span></span></div>
+          <div class="hero"><div class="glyph" aria-hidden="true"><div class="folder" id="folder"></div><span class="result-mark" id="mark" hidden>✓</span></div><div><h1 id="title">Getting to know your files.</h1><p class="subtitle" id="subtitle">Zest is creating your first search index.<br>This only takes a little patience, once.</p></div></div>
+          <div class="phase-rail" aria-label="Index creation phases"><div class="phase active" id="phase-0"><b>1</b>Discover files</div><span class="connector"></span><div class="phase" id="phase-1"><b>2</b>Build index</div><span class="connector"></span><div class="phase" id="phase-2"><b>3</b>Ready to search</div></div>
+          <div class="metrics"><div><div class="count" id="count">24,816</div><div class="count-label" id="count-label">files & folders discovered</div></div><div class="elapsed"><b id="elapsed">00:18</b><span id="elapsed-label">elapsed</span></div></div>
+          <div class="track indeterminate" id="track" role="progressbar" aria-label="Discovering files" aria-valuetext="Scanning; total file count is not yet known"><div class="fill" id="fill"></div></div>
+          <div class="detail-line"><span id="phase-detail">Scanning your home folder</span><strong id="progress-detail">Finding files…</strong></div>
+          <div class="activity"><span class="activity-icon" id="activity-icon" aria-hidden="true">▰</span><div class="activity-text"><label id="activity-label">Currently exploring</label><code id="activity-path">~/Documents/Projects</code></div></div>
+          <p class="reassurance" id="reassurance"><strong>Your files stay right where they are.</strong> Zest records filenames and metadata locally. Your scan exclusions still apply.</p>
+        </div>
+        <footer class="dialog-footer"><span class="footer-note" id="footer-note">Updates live · No need to refresh</span><span class="spacer"></span><button class="button" id="secondary">Run in background</button><button class="button primary" id="primary" hidden>Open Zest →</button></footer>
+      </section>
+    </div>
+  </section>
+  <div class="caption"><span><strong>First run:</strong> a focused overlay. <strong>Later updates:</strong> a quiet status bar.</span><span>Simulated activity only · No files scanned</span></div>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const paths = ['~/Documents/Projects', '~/Pictures', '~/Downloads', '~/Projects/Studio', '~/Documents/Archive'];
+  let scene = 'scan', files = 24816, seconds = 18, percent = 64, ticks = 0, touring = false, hidden = false;
+  const time = n => String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
+  const setText = (id, text) => $(id).textContent = text;
+  function visibility() {
+    const background = scene === 'background';
+    $('overlay').hidden = hidden || background;
+    $('workspace').inert = !($('overlay').hidden);
+    $('files').hidden = !(background || (scene === 'ready' && hidden));
+    $('empty').hidden = !hidden || scene === 'ready' || background;
+    $('mini').hidden = !background && !hidden;
+    $('status-action').hidden = background || (scene === 'ready' && hidden);
+    setText('status-text', background ? 'Updating index · Existing results available' : scene === 'ready' ? '187,432 files & folders indexed' : scene === 'error' ? 'First index interrupted' : 'Creating your first index…');
+  }
+  function metrics() {
+    setText('count', files.toLocaleString('en-US'));
+    setText('elapsed', time(seconds));
+    if (scene === 'scan') setText('activity-path', paths[Math.floor(ticks / 3) % paths.length]);
+    if (scene === 'build') {
+      $('fill').style.width = percent + '%';
+      $('track').setAttribute('aria-valuenow', percent);
+      $('track').setAttribute('aria-valuetext', percent + '% of index written');
+      setText('progress-detail', percent + '% of this step');
+    }
+  }
+  function render() {
+    $('scene').value = scene;
+    $('dialog').classList.toggle('error', scene === 'error');
+    $('folder').hidden = scene === 'ready' || scene === 'error';
+    $('mark').hidden = !$('folder').hidden;
+    setText('mark', scene === 'error' ? '!' : '✓');
+    const phase = scene === 'scan' || scene === 'error' ? 0 : scene === 'build' ? 1 : 2;
+    for (let i = 0; i < 3; i++) {
+      const node = $('phase-' + i);
+      node.classList.toggle('active', i === phase);
+      node.classList.toggle('complete', i < phase || scene === 'ready');
+      node.querySelector('b').textContent = i < phase || scene === 'ready' ? '✓' : i + 1;
+    }
+    const content = {
+      scan: ['Getting to know your files.', 'Zest is creating your first search index. Larger collections can take a few minutes.', 'Indexer running', 'files & folders discovered', 'Scanning your home folder', 'Finding files…', 'Currently exploring', paths[0], 'Updates live · No need to refresh'],
+      build: ['Turning files into fast search.', 'Discovery is complete. Zest is writing the index that makes finding your files feel instant.', 'Indexer running', 'files & folders discovered', 'Writing the search index', percent + '% of this step', 'Working locally', 'Saving the first index on this Mac', 'Progress shown for this step only'],
+      load: ['Just opening the door.', 'Your index has been saved. Zest is loading it before showing your files.', 'Loading index', 'files & folders indexed', 'Opening the new index', 'Nearly ready', 'Finishing up', 'Loading searchable results into Zest', 'The overlay closes only after results are loaded'],
+      ready: ['Your files are ready.', 'Your first index is loaded. From now on, Zest keeps it up to date in the background.', 'Index loaded', 'files & folders indexed', 'First index complete', 'Ready to search', 'All set', 'Your results are loaded and ready', 'Future updates happen quietly in the background'],
+      error: ['The scan was interrupted.', 'Zest couldn’t finish the first index. Your files haven’t been changed.', 'Needs attention', 'files & folders found before stopping', 'No index available yet', 'Not completed', 'What happened', 'The indexer stopped before it finished.', 'Retry starts a new first-index scan'],
+      background: ['','','','','','','','','']
+    }[scene];
+    ['title','subtitle','live-label','count-label','phase-detail','progress-detail','activity-label','activity-path','footer-note'].forEach((id, i) => setText(id, content[i]));
+    setText('elapsed-label', scene === 'ready' ? 'total time' : scene === 'error' ? 'before interruption' : 'elapsed');
+    $('track').className = 'track' + (scene === 'scan' || scene === 'load' ? ' indeterminate' : scene === 'error' ? ' paused' : '');
+    $('track').removeAttribute('aria-valuenow');
+    $('track').removeAttribute('aria-valuemin');
+    $('track').removeAttribute('aria-valuemax');
+    $('track').setAttribute('aria-label', scene === 'build' ? 'Writing the index' : scene === 'load' ? 'Loading results' : 'First index progress');
+    $('track').setAttribute('aria-valuetext', scene === 'scan' ? 'Scanning; total file count is not yet known' : scene === 'ready' ? 'Complete' : scene === 'error' ? 'Interrupted' : 'Loading');
+    if (scene === 'build' || scene === 'ready') {
+      $('track').setAttribute('aria-valuemin', '0'); $('track').setAttribute('aria-valuemax', '100');
+      $('track').setAttribute('aria-valuenow', scene === 'ready' ? '100' : String(percent));
+    }
+    $('fill').style.width = scene === 'ready' ? '100%' : '36%';
+    $('primary').hidden = scene !== 'error' && scene !== 'ready';
+    setText('primary', scene === 'error' ? 'Retry indexing' : 'Open Zest →');
+    $('secondary').hidden = scene === 'ready';
+    setText('secondary', scene === 'error' ? 'Set up access…' : 'Run in background');
+    setText('reassurance', scene === 'error' ? 'If this keeps happening, check indexer access and available disk space. Nothing will appear in search until the first index completes.' : scene === 'load' || scene === 'ready' ? 'The first run does the heavy lifting. Future updates run in the background while you keep using your existing index.' : 'Your files stay right where they are. Zest records filenames and metadata locally. Your scan exclusions still apply.');
+    visibility(); metrics();
+  }
+  function select(value) {
+    scene = value; ticks = 0; hidden = false;
+    files = value === 'scan' ? 24816 : value === 'error' ? 82416 : 187432;
+    seconds = value === 'scan' ? 18 : value === 'error' ? 47 : value === 'build' ? 72 : 79;
+    percent = 64; render();
+  }
+  $('scene').onchange = () => { touring = false; setText('tour', 'Play full flow'); select($('scene').value); };
+  $('tour').onclick = () => {
+    touring = !touring; setText('tour', touring ? 'Stop playback' : 'Play full flow');
+    if (touring) select('scan');
+  };
+  $('primary').onclick = () => {
+    if (scene === 'error') select('scan');
+    else { hidden = true; visibility(); }
+  };
+  $('secondary').onclick = () => {
+    if (scene === 'error') { window.location.href = 'indexer-onboarding.html'; return; }
+    hidden = true; visibility(); $('show-progress').focus();
+  };
+  function show() { hidden = false; visibility(); $('secondary').focus(); }
+  $('show-progress').onclick = show;
+  $('status-action').onclick = show;
+  $('dialog').addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const buttons = [...$('dialog').querySelectorAll('button')].filter(button => !button.hidden && !button.disabled);
+    const first = buttons[0], last = buttons[buttons.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  setInterval(() => {
+    if (document.hidden) return;
+    ticks++;
+    if (scene === 'scan') { seconds++; files += 1247 + (ticks % 4) * 287; metrics(); }
+    if (scene === 'build') { seconds++; percent = Math.min(99, percent + 3); metrics(); }
+    if (touring) {
+      if (scene === 'scan' && ticks >= 6) select('build');
+      else if (scene === 'build' && ticks >= 6) select('load');
+      else if (scene === 'load' && ticks >= 3) select('ready');
+      else if (scene === 'ready' && ticks >= 3) { hidden = true; touring = false; setText('tour', 'Play full flow'); visibility(); }
+    }
+  }, 1000);
+  render();
+})();
+</script>
+</body>
+</html>

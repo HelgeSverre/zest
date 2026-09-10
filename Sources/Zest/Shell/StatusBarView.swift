@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// The 28pt status strip at the bottom of the window (spec §6.3 / §7, v2
 /// prototype). Three regions on a `Theme.panel` bar:
@@ -13,6 +14,9 @@ final class StatusBarView: NSView {
   private let countSuffix = NSTextField(labelWithString: "files indexed")
   private let selectionLabel = NSTextField(labelWithString: "")
   private let freshnessLabel = NSTextField(labelWithString: "")
+  private let progressButton = NSButton(title: "", target: nil, action: nil)
+  private let progressBar = NSHostingView(rootView: IndexProgressBar(fraction: nil, active: false))
+  var onProgressClick: (() -> Void)?
 
   private static let accent = Theme.darkAccent
 
@@ -67,8 +71,26 @@ final class StatusBarView: NSView {
     for v in [liveDot, countLabel, countSuffix, selectionLabel, freshnessLabel] as [NSView] {
       addSubview(v)
     }
+    progressButton.translatesAutoresizingMaskIntoConstraints = false
+    progressButton.isBordered = false
+    progressButton.font = .systemFont(ofSize: 11)
+    progressButton.contentTintColor = Theme.catCode
+    progressButton.target = self
+    progressButton.action = #selector(showProgress(_:))
+    progressButton.isHidden = true
+    addSubview(progressButton)
+    progressBar.translatesAutoresizingMaskIntoConstraints = false
+    progressBar.sizingOptions = []
+    progressBar.isHidden = true
+    addSubview(progressBar)
 
     NSLayoutConstraint.activate([
+      progressButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+      progressButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+      progressBar.trailingAnchor.constraint(equalTo: progressButton.leadingAnchor, constant: -8),
+      progressBar.centerYAnchor.constraint(equalTo: centerYAnchor),
+      progressBar.widthAnchor.constraint(equalToConstant: 64),
+      progressBar.heightAnchor.constraint(equalToConstant: 6),
       // Left cluster.
       liveDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
       liveDot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -101,6 +123,19 @@ final class StatusBarView: NSView {
   }
 
   // MARK: Public API
+
+  func setProgress(_ text: String?, fraction: Double? = nil, active: Bool = false) {
+    progressButton.title = text ?? ""
+    progressButton.isHidden = text == nil
+    freshnessLabel.isHidden = text != nil
+    progressButton.toolTip = text
+    // Keep the center selection summary from painting behind live progress.
+    selectionLabel.isHidden = text != nil
+    progressBar.isHidden = text == nil || !active
+    progressBar.rootView = IndexProgressBar(fraction: fraction, active: active && text != nil)
+  }
+
+  @objc private func showProgress(_: Any?) { onProgressClick?() }
 
   /// Update the center selection summary (nil clears it).
   func setSelection(_ summary: String?) {

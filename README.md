@@ -151,6 +151,29 @@ and unavailable) using the actual native window without probing permissions or
 starting the daemon. To save those captures, set `ZEST_ONBOARDING_SNAPSHOT_DIR`
 to an output directory when running `swift test --filter IndexerMenuTests`.
 
+### First-index progress
+
+Until the first usable index is loaded, Zest shows a native progress overlay with
+discovery counts, elapsed time, a sampled current folder, and the current phase.
+Scanning and building are indeterminate; saving reports actual bytes written,
+not an estimated overall percentage. The overlay closes only after the new index
+is opened and the first query returns. **Run in background** hides it; the status
+bar reopens it. Later rebuilds leave the existing index usable and only update
+the status bar. Interrupted scans offer retry and access-setup actions.
+
+The indexer writes private (`0600`), atomically replaced `progress-*.json` records
+in its excluded support directory. A dedicated heartbeat updates long-running
+phases once per second, without per-file IPC or writes on scan worker threads.
+Records include a run ID and PID; the app checks liveness and freshness, ignores
+malformed/oversized records, and does not confuse a stopped writer with success.
+Telemetry failures never prevent index publication. Successful one-shot scans
+remove their progress record; the daemon retains its last result. Both `just index`
+and daemon scans report progress. Existing installed helpers must be updated via
+**Index → Set Up Full Disk Access…** (or `just install-daemon`) to emit it.
+
+Set `ZEST_PROGRESS_SNAPSHOT_DIR` when running `swift test --filter IndexProgressTests`
+to capture native overlay states at the app's minimum size without starting a scan.
+
 macOS requires the user to enable Full Disk Access in System Settings; there is
 no public one-click permission prompt or reliable public authorization query.
 The guide launches a fresh, short-lived instance of the installed helper through

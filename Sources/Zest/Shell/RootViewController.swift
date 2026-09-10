@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// The window's root: a vibrancy backdrop plus the chrome bands and the
 /// sidebar|content split, laid out with explicit Auto Layout constraints.
@@ -16,6 +17,10 @@ final class RootViewController: NSViewController {
   private var savedFiltersCard: SavedFiltersCard!
   private var savedFiltersDialog: SavedFiltersDialog!
   private var filePreviewOverlay: FilePreviewOverlay!
+  private lazy var indexProgress = IndexProgressModel(hasIndex: coordinator.core != nil)
+  private let progressMonitor = IndexProgressMonitor()
+  private var progressOverlay: NSHostingView<FirstIndexProgressView>!
+  private var latestProgress: IndexProgressSnapshot?
   /// Local monitor for mouse thumb buttons (button 3 = back, 4 = forward) —
   /// a monitor rather than a responder override so it works regardless of
   /// which subview is under the cursor.
@@ -137,6 +142,41 @@ final class RootViewController: NSViewController {
     browser.previewOverlay = preview
     preview.onClose = { [weak browser] in browser?.closePreview() }
 
+    let progress = NSHostingView(
+      rootView: FirstIndexProgressView(
+        model: indexProgress,
+        onBackground: { [weak self] in
+          self?.indexProgress.dismissed = true
+          self?.refreshIndexProgress()
+        },
+        onRetry: { (NSApp.delegate as? AppDelegate)?.retryIndexer() },
+        onSetup: { (NSApp.delegate as? AppDelegate)?.setUpIndexer() }))
+    progress.sizingOptions = []
+    progress.translatesAutoresizingMaskIntoConstraints = false
+    progressOverlay = progress
+    view.addSubview(progress)
+    NSLayoutConstraint.activate([
+      progress.topAnchor.constraint(equalTo: view.topAnchor),
+      progress.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+      progress.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      progress.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+    ])
+    statusBar.onProgressClick = { [weak self] in
+      guard let self else { return }
+      if self.indexProgress.firstRun {
+        self.indexProgress.dismissed = false
+        self.refreshIndexProgress()
+      } else if self.indexProgress.phase == .interrupted {
+        (NSApp.delegate as? AppDelegate)?.retryIndexer()
+      }
+    }
+    progressMonitor.onUpdate = { [weak self] snapshot in
+      guard let self else { return }
+      self.latestProgress = snapshot
+      self.coordinator.reloadIndexIfChanged()
+      self.refreshIndexProgress()
+    }
+
     // The coordinator is the single source of truth. Any state change —
     // navigation, query text, scope, or sort — refreshes every observer.
     coordinator.onChange = { [weak self] in
@@ -146,6 +186,7 @@ final class RootViewController: NSViewController {
       self.filterBar.refresh()
       self.sidebar.refresh()
       self.statusBar.refresh()
+      self.refreshIndexProgress()
     }
     coordinator.startIndexReloadTimer()
 
@@ -155,7 +196,8 @@ final class RootViewController: NSViewController {
     mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .leftMouseDown]) {
       [weak self] event in
       guard let self, event.window === self.view.window,
-        !self.savedFiltersDialog.isShown, !self.filePreviewOverlay.isShown
+        !self.savedFiltersDialog.isShown, !self.filePreviewOverlay.isShown,
+        !self.indexProgress.showsOverlay
       else { return event }
       if event.type == .leftMouseDown {
         // Clicking outside an editing search field blurs it; the click
@@ -194,6 +236,22 @@ final class RootViewController: NSViewController {
     // snapshot renders immediately and the first off-main delivery fires a
     // second onChange with the real rows.
     coordinator.start()
+    refreshIndexProgress()
+    progressMonitor.start()
+  }
+
+  private func refreshIndexProgress() {
+    indexProgress.update(
+      latestProgress,
+      usableIndex: coordinator.core != nil && !coordinator.isLoading,
+      indexCount: coordinator.core.map { UInt64($0.totalCount) },
+      indexModified: coordinator.core.map { Double($0.fileIdentity.mtime) },
+      alive: IndexProgressMonitor.processAlive)
+    let wasHidden = progressOverlay.isHidden
+    progressOverlay.isHidden = !indexProgress.showsOverlay
+    if wasHidden && !progressOverlay.isHidden { view.window?.makeFirstResponder(progressOverlay) }
+    statusBar.setProgress(
+      indexProgress.statusText, fraction: indexProgress.fraction, active: indexProgress.active)
   }
 
   deinit {
@@ -203,19 +261,23 @@ final class RootViewController: NSViewController {
   // MARK: - Focus shortcuts (⌘F / ⌘1 / ⌘2, via AppDelegate menu items)
 
   func focusSearch() {
+    guard !indexProgress.showsOverlay else { return }
     toolbar.focusSearch()
   }
 
   func focusSidebar() {
+    guard !indexProgress.showsOverlay else { return }
     sidebar.focusFirstRow()
   }
 
   func focusFileList() {
+    guard !indexProgress.showsOverlay else { return }
     browser.focusTable()
   }
 
   override func viewDidAppear() {
     super.viewDidAppear()
+    if indexProgress.showsOverlay { view.window?.makeFirstResponder(progressOverlay) }
     // Hand the controller to the AppDelegate so menu actions (Go Up, Open
     // Selected) can reach the coordinator and the active browser.
     (NSApp.delegate as? AppDelegate)?.rootViewController = self
