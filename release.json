@@ -1,6 +1,6 @@
 {
-  "version": "0.1.0",
-  "build": "1",
+  "version": "0.1.1",
+  "build": "2",
   "bundleId": "dev.zest.app",
   "minimumSystemVersion": "14.0",
   "architecture": "universal"

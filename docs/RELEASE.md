@@ -135,6 +135,13 @@ require both runtime checks, and --render-ui to render the packaged GUI too.
 It never registers a service or changes privacy access. Both Zig executables
 reserve header padding so signing cannot overwrite x86_64 code (Zig issue 23704).
 
+The verifier also calls `Zest --indexer-status` from the actual app bundle to
+exercise macOS ServiceManagement, including a missing registration record on a
+fresh install. This read-only diagnostic prints the indexer state or reports the
+underlying error on stderr with a nonzero exit code. The Index menu exposes
+genuine status errors through Show Status Error; a valid, unregistered bundle
+offers setup instead of requiring another reinstall.
+
 Pushing a version-matching tag runs the test/sign/notarize workflow and creates a
 DRAFT prerelease only after successful packaging. No tag or release is pushed by
 local packaging. Publishing the draft remains a separate explicit action.
@@ -148,7 +155,7 @@ app's Index menu to manage its SMAppService background registration instead.
 After verifying and publishing the release, run:
 
 ```sh
-node scripts/publish-cask.mjs 0.1.0
+node scripts/publish-cask.mjs 0.1.1
 brew install --cask helgesverre/tap/zest
 ```
 
