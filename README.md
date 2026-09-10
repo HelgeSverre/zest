@@ -135,6 +135,25 @@ zig build indexer -Doptimize=ReleaseFast
 ./zig-out/bin/zest-indexer --full-scan ~/code
 ```
 
+### Querying the index from the command line
+
+`zest-query` is a read-only wrapper over the same memory-mapped index and query
+engine as the app. It emits TSV, so its output can be sorted, filtered, or
+redirected without scanning the filesystem again.
+
+```sh
+just query-build
+./zig-out/bin/zest-query --scope "$HOME" --depth 1 --sort size --desc
+./zig-out/bin/zest-query 'size:>1gb kind:file' --depth all --sort size --desc
+./zig-out/bin/zest-query 'date:week size:>100mb' --depth all --sort mtime --desc
+```
+
+The default scope is `$HOME`, the default depth is direct children, and the
+default output limit is 50 rows. Use `--help` for all options. Results only
+include paths present in the index. The standard home scan excludes `.git`,
+`node_modules`, `__pycache__`, `~/Library/Caches`, and
+`~/Library/Developer`, so use a filesystem tool when investigating those paths.
+
 ### On-disk format
 
 The current writer emits format v7. The reader also accepts layout-compatible v6 indexes during an app/daemon rolling upgrade, using the v6 ASCII fold until a v7 rebuild is published.
@@ -236,6 +255,7 @@ The query and index use the same length-preserving Unicode fold, so matches map 
 | `just run` | Run Debug Swift with the ReleaseFast engine |
 | `just run-fast` | Run optimized Swift and Zig builds |
 | `just index` | Rebuild the home-directory index once |
+| `just query-build` | Build the read-only `zest-query` CLI |
 | `just install-daemon` | Install and start the launchd indexer |
 | `just uninstall-daemon` | Stop and remove the launchd indexer |
 | `just test` | Run Zig and Swift tests with the current core linked |

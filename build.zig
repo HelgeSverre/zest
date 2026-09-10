@@ -27,6 +27,18 @@ pub fn build(b: *std.Build) void {
     indexer.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(indexer);
 
+    // === Binary: zest-query (read-only index query CLI) ===
+    const query = b.addExecutable(.{
+        .name = "zest-query",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/query_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    query.root_module.linkSystemLibrary("c", .{});
+    b.installArtifact(query);
+
     // === Library: zest-core (C ABI for the Swift UI) ===
     // Pure-CPU engine surface (reader + search). No frameworks, no Io.
     const core_lib = b.addLibrary(.{
@@ -50,6 +62,9 @@ pub fn build(b: *std.Build) void {
     // the GUI target.
     const indexer_step = b.step("indexer", "Build only zest-indexer");
     indexer_step.dependOn(&b.addInstallArtifact(indexer, .{}).step);
+
+    const query_step = b.step("query", "Build only zest-query");
+    query_step.dependOn(&b.addInstallArtifact(query, .{}).step);
 
     // === Tests ===
     // Single test root that imports all modules

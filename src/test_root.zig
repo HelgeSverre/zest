@@ -19,6 +19,9 @@ comptime {
     _ = @import("index/builder.zig");
     _ = @import("index/startup.zig");
 
+    // CLI
+    _ = @import("query_main.zig");
+
     // C ABI
     _ = @import("capi/zest_core.zig");
 }
