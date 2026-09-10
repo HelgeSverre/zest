@@ -20,6 +20,9 @@ jobs:
       - name: Run release gates
         run: |
           brew install just
+          bash .github/scripts/build-test-fixture.sh
+      - name: Run unit and daemon tests
+        run: |
           just test
           just test-daemon
       - name: Define private signing paths

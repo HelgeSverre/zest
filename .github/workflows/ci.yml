@@ -33,31 +33,7 @@ jobs:
         run: brew install just
 
       - name: Build integration fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          fixture_home="$RUNNER_TEMP/zest-ci-home"
-          fixture_root="$RUNNER_TEMP/zest-ci-fixture"
-          mkdir -p "$fixture_home/Library/Application Support" \
-            "$fixture_root/src" "$fixture_root/docs" "$fixture_root/nested"
-
-          printf 'const answer: u8 = 42;\n' > "$fixture_root/main.zig"
-          printf 'pub fn nested() void {}\n' > "$fixture_root/src/nested.zig"
-          printf 'fixture image\n' > "$fixture_root/photo.png"
-          printf 'fixture document\n' > "$fixture_root/report.pdf"
-          printf 'nested document\n' > "$fixture_root/docs/notes.txt"
-          printf '# Fixture\n' > "$fixture_root/nested/readme.md"
-
-          zig build indexer -Doptimize=ReleaseFast
-          HOME="$fixture_home" ./zig-out/bin/zest-indexer --full-scan "$fixture_root"
-
-          index_path="$fixture_home/Library/Application Support/zest/index.zst"
-          test -s "$index_path"
-          {
-            echo "ZEST_TEST_INDEX_PATH=$index_path"
-            echo "ZEST_TEST_INDEX_SCOPE=$fixture_root"
-          } >> "$GITHUB_ENV"
+        run: bash .github/scripts/build-test-fixture.sh
 
       - name: Run test suite
         run: just test
