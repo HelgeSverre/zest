@@ -256,6 +256,9 @@ zig build indexer -Doptimize=ReleaseFast
 engine as the app. It emits TSV, so its output can be sorted, filtered, or
 redirected without scanning the filesystem again.
 
+Homebrew installs `zest-query` on PATH. See the [CLI and coding-agent guide](docs/ZEST-QUERY.md)
+for discovery examples, TSV parsing, limits, exit codes, and stale-index caveats.
+
 ```sh
 just query-build
 ./zig-out/bin/zest-query --scope "$HOME" --depth 1 --sort size --desc

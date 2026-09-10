@@ -27,6 +27,15 @@ SwiftPM does not track the external Zig archive as an input. Use the justfile
 recipes rather than invoking `swift build/test` after Zig changes; the recipes
 touch the `CZestCore` shim so the current archive is always relinked.
 
+## Indexed file discovery
+
+When available, `zest-query 'name kind:file' --scope "$(pwd -P)" --depth all`
+can quickly locate candidate files without walking the repository. It searches
+indexed filenames, not contents. Verify results before edits; use `rg --files`
+for current coverage and `rg` for content. Empty results can mean a stale index,
+exclusions, or missing permissions, not absence. Never trigger a full scan just
+to answer a discovery query. See [docs/ZEST-QUERY.md](docs/ZEST-QUERY.md).
+
 ## Architecture
 
 See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagnosis, benchmarks, phased plan). Key points:
