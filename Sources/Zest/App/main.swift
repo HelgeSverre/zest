@@ -1,5 +1,18 @@
 import AppKit
 
+// Read-only packaged-service diagnostic; no GUI, registration, or scanning.
+if CommandLine.arguments.contains("--indexer-status") {
+  do {
+    try BundledIndexerService.validateBundle(at: Bundle.main.bundleURL)
+    let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/zest-indexer")
+    print(try BundledIndexerService(helper: helper).state().rawValue)
+    exit(0)
+  } catch {
+    FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+    exit(1)
+  }
+}
+
 // Non-bundled executable (preserves `zest /path` ergonomics, like today's app).
 let app = NSApplication.shared
 

@@ -16,12 +16,16 @@ final class BundledIndexerService: IndexerControl {
   private let helper: URL
   private let defaults: UserDefaults
   private let run: (URL, [String]) throws -> String
+  private let validateBundle: () throws -> Void
   var requiresApproval: Bool { service.status == .requiresApproval }
 
   init(
     helper: URL, defaults: UserDefaults = .standard,
     registration: BackgroundServiceRegistration = SMAppService.agent(
       plistName: "dev.zest.app.indexer.plist"),
+    validateBundle: @escaping () throws -> Void = {
+      try BundledIndexerService.validateBundle(at: Bundle.main.bundleURL)
+    },
     run: @escaping (URL, [String]) throws -> String = {
       try IndexerProcess.run($0, arguments: $1)
     }
@@ -30,6 +34,7 @@ final class BundledIndexerService: IndexerControl {
     self.service = registration
     self.defaults = defaults
     self.run = run
+    self.validateBundle = validateBundle
   }
 
   static func state(
@@ -40,7 +45,10 @@ final class BundledIndexerService: IndexerControl {
     case .enabled: return running ? .running : .waiting
     case .requiresApproval: return .requiresApproval
     case .notRegistered: return previouslySetUp ? .stopped : .notInstalled
-    case .notFound: throw failure("The bundled indexer registration is missing. Reinstall Zest.")
+    // macOS can report notFound for an intact bundle with no BTM registration
+    // record (observed on a clean installation). Offer explicit setup again.
+    // The instance validates the actual bundle before allowing this fallback.
+    case .notFound: return .notInstalled
     @unknown default: throw failure("macOS returned an unknown background-item status.")
     }
   }
@@ -49,8 +57,27 @@ final class BundledIndexerService: IndexerControl {
     NSError(domain: "ZestIndexer", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
   }
 
+  static func validateBundle(at bundle: URL) throws {
+    let helper = bundle.appendingPathComponent("Contents/Helpers/zest-indexer")
+    let plist = bundle.appendingPathComponent("Contents/Library/LaunchAgents/\(label).plist")
+    guard FileManager.default.isExecutableFile(atPath: helper.path),
+      let data = try? Data(contentsOf: plist),
+      let properties = try? PropertyListSerialization.propertyList(from: data, format: nil)
+        as? [String: Any],
+      properties["Label"] as? String == label,
+      properties["BundleProgram"] as? String == "Contents/Helpers/zest-indexer",
+      properties["ProgramArguments"] as? [String] == ["zest-indexer"],
+      properties["Program"] == nil
+    else {
+      throw failure(
+        "Zest's bundled indexer or launch-agent configuration is missing or invalid. Reinstall Zest."
+      )
+    }
+  }
+
   func state() throws -> IndexerState {
     let authorization = service.status
+    if authorization == .notFound { try validateBundle() }
     let running: Bool
     if authorization == .enabled {
       // A registered job may still be launching; don't confuse eligibility with liveness.
@@ -109,7 +136,12 @@ final class BundledIndexerService: IndexerControl {
   }
 
   private func stop() throws {
-    if service.status == .notRegistered { return }
+    let authorization = service.status
+    if authorization == .notRegistered { return }
+    if authorization == .notFound {
+      try validateBundle()
+      return
+    }
     try service.unregister()
     // unregister can finish before launchd has reaped the job. Never race a
     // following register against an old process still holding the same label.

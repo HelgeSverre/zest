@@ -48,6 +48,11 @@ for (const architecture of architectures) {
   fs.writeFileSync(path.join(fixture, 'files/release-smoke.txt'), 'packaged helper test');
   const env = { ...process.env, HOME: fixture };
   const execute = (relative, args) => run('/usr/bin/arch', [`-${architecture}`, path.join(app, 'Contents', relative), ...args], env);
+  // Exercise the real ServiceManagement status path from the actual app bundle.
+  // Unlike fake-registration unit tests, this catches clean-install BTM behavior.
+  const status = execute('MacOS/Zest', ['--indexer-status']).trim();
+  assert(['not_installed', 'stopped', 'running', 'waiting', 'requiresApproval'].includes(status),
+    `Unexpected packaged indexer status: ${status}`);
   execute('Helpers/zest-indexer', ['--full-scan', path.join(fixture, 'files')]);
   const output = execute('Helpers/zest-query', ['--scope', path.join(fixture, 'files')]);
   assert(output.includes('release-smoke.txt'));

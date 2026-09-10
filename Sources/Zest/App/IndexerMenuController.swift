@@ -52,6 +52,7 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
   private var busy = false
   private var generation = 0
   private var message: String?
+  private var statusError: String?
   private var accessSetup: IndexerAccessSetupController?
   private let bundledService: BundledIndexerService?
 
@@ -124,6 +125,7 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       action: nil, keyEquivalent: "")
     status.isEnabled = false
     menu.addItem(status)
+    status.toolTip = statusError
     menu.addItem(.separator())
     for action in state?.actions ?? [] {
       let item = NSMenuItem(
@@ -140,6 +142,12 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       menu.addItem(locate)
     }
     if message != nil && helper != nil && !busy {
+      if statusError != nil {
+        let details = NSMenuItem(
+          title: "Show Status Error…", action: #selector(showStatusError(_:)), keyEquivalent: "")
+        details.target = self
+        menu.addItem(details)
+      }
       let refresh = NSMenuItem(
         title: "Refresh Status", action: #selector(refreshStatus(_:)), keyEquivalent: "")
       refresh.target = self
@@ -149,8 +157,18 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
 
   @objc private func refreshStatus(_: Any?) { refresh() }
 
+  @objc private func showStatusError(_: Any?) {
+    guard let statusError else { return }
+    let alert = NSAlert()
+    alert.messageText = "Couldn't check indexer status"
+    alert.informativeText = statusError
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
+  }
+
   private func refresh() {
     guard !busy else { return }
+    statusError = nil
     helper = helper ?? Self.findHelper()
     guard let helper else {
       message = "Indexer Tool Not Found"
@@ -172,9 +190,10 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
         case .success(let state):
           self.state = state
           self.message = nil
-        case .failure:
+        case .failure(let error):
           self.state = nil
           self.message = "Indexer: Status Unavailable"
+          self.statusError = error.localizedDescription
         }
         self.render()
       }
