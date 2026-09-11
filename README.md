@@ -420,6 +420,9 @@ The query and index use the same length-preserving Unicode fold, so matches map 
 | `just query-build` | Build the read-only `zest-query` CLI |
 | `just daemon-install` | Install and start the launchd indexer |
 | `just daemon-uninstall` | Stop and remove the launchd indexer |
+| `just install` | Build an unsigned PKG and install it to /Applications like a release (sudo) |
+| `just uninstall` | Quit, unregister the bundled indexer, remove the app and receipt |
+| `just nuke` | Clean slate: uninstall plus every zest launchd job, index, data, and defaults |
 | `just test` | Run Zig and Swift tests with the current core linked |
 | `just test-ui` | Run the headless AppKit UI tests against the local index |
 | `just lint` | Compile-check and lint both languages |

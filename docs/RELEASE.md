@@ -50,6 +50,8 @@ baseline CPU for each architecture; lipo combines the final binaries.
 
 - just app-package: ad-hoc Universal dist/Zest.app; local testing only.
 - just pkg-unsigned: unsigned LOCAL-ONLY PKG; no credentials or uploads.
+- just install / just uninstall / just nuke: install that PKG with the real
+  installer, remove it like a user would, or wipe every trace for a fresh-install test.
 - just pkg-signed: Developer ID signed PKG; no notarization or publication.
 - just pkg-notarized: signed PKG, explicit Apple submission, stapling and validation.
 - just pkg-local: same notarized workflow using installed Liseth identities and
