@@ -17,6 +17,17 @@ pub fn build(b: *std.Build) void {
         "System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks",
     });
 
+    // Version stamped into `--version` output; release.json is the single source of truth.
+    const release = std.json.parseFromSlice(
+        struct { version: []const u8, build: []const u8 },
+        b.allocator,
+        b.build_root.handle.readFileAlloc(b.graph.io, "release.json", b.allocator, .limited(4096)) catch @panic("cannot read release.json"),
+        .{ .ignore_unknown_fields = true },
+    ) catch @panic("release.json: expected {\"version\": \"x.y.z\", \"build\": \"n\"}");
+    const build_info = b.addOptions();
+    build_info.addOption([]const u8, "version", release.value.version);
+    build_info.addOption([]const u8, "build", release.value.build);
+
     // === Binary: zest-indexer (background daemon) ===
     const indexer = b.addExecutable(.{
         .name = "zest-indexer",
@@ -26,6 +37,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    indexer.root_module.addOptions("build_info", build_info);
     indexer.root_module.addSystemFrameworkPath(.{ .cwd_relative = coreservices_frameworks });
     indexer.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "System/Library/Frameworks" }) });
     indexer.root_module.addIncludePath(b.path("src/index"));
@@ -46,6 +58,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    query.root_module.addOptions("build_info", build_info);
     query.root_module.linkSystemLibrary("c", .{});
     b.installArtifact(query);
 
@@ -95,6 +108,7 @@ pub fn build(b: *std.Build) void {
     // builder.zig (imported by test_root) transitively pulls in bulk_scan.zig,
     // which references the libc `getattrlistbulk` symbol.
     tests.root_module.linkSystemLibrary("c", .{});
+    tests.root_module.addOptions("build_info", build_info);
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run all tests");

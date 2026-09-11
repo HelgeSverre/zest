@@ -29,9 +29,30 @@ brew install --cask helgesverre/tap/zest
 
 Open Zest from Applications, then choose **Index > Set Up Indexer**. Installing
 does not start a scan. Full Disk Access and background approval are guided in the
-app. See the [0.1.0 beta notes](docs/releases/0.1.0.md) for known limitations.
-Disable background indexing before upgrading or uninstalling; user data is kept.
-There is no automatic updater yet.
+app. Requires macOS 14 or newer, on Apple Silicon or Intel. See the
+[0.1.1 beta notes](docs/releases/0.1.1.md) for fixes and known limitations.
+Homebrew exposes `zest`, `zest-query`, and `zest-indexer` in your terminal; a direct
+PKG installation keeps those binaries inside the app bundle. `zest .` or
+`zest ~/Downloads` opens a new window in that folder; each invocation is its
+own process.
+
+### Update or switch to Homebrew
+
+Disable background indexing from the Index menu and quit Zest before upgrading
+or uninstalling. Your index and preferences are retained. There is no automatic updater.
+
+For an existing **Homebrew-managed** installation:
+
+```sh
+brew update
+brew upgrade --cask zest
+```
+
+If you installed the PKG directly, either install the newer PKG over the existing
+app or switch to Homebrew with `brew install --cask helgesverre/tap/zest`.
+**“Cask 'zest' is not installed”** means Homebrew does not manage the app—even if
+`/Applications/Zest.app` exists. Use `brew install`, not `brew upgrade`, in that case.
+After updating, reopen Zest and use the Index menu to start indexing or complete setup.
 
 ### Build from source
 
@@ -154,6 +175,21 @@ migrates an existing development daemon; app launch alone does not install or
 start one. macOS background-item approval is shown separately from Full Disk
 Access. **Stop Indexer** and **Disable Background Indexing…** unregister the
 packaged service, including at future logins. The CLI lifecycle described below
+In 0.1.1 and newer, check the packaged service without starting the GUI or a scan:
+
+```sh
+zest --indexer-status
+# Direct PKG installation, without Homebrew's terminal links:
+/Applications/Zest.app/Contents/MacOS/Zest --indexer-status
+```
+
+This prints `not_installed`, `stopped`, `running`, `waiting`, or `requiresApproval`.
+Failures report the underlying error on stderr and exit nonzero.
+
+All three commands (`zest`, `zest-query`, `zest-indexer`) accept `--help` and
+`--version`; the version comes from `release.json` at build time. Invalid
+arguments print `NAME: error: ...` on stderr and exit 2.
+
 is retained for development builds. See [the release runbook](docs/RELEASE.md)
 for Universal PKG packaging, signing, installation, and removal.
 
@@ -235,6 +271,7 @@ during a scan. Failed builds preserve the last good index and retry after 5, 10,
 20 seconds, up to a five-minute delay. Scanning and filesystem-event handling
 share exclusions, including hidden trees and Zest's own output directory.
 Each scan uses unique intermediate files, so overlapping development scans do
+./zig-out/bin/zest-indexer --help
 not overwrite each other's shards; the last successful publication wins.
 
 Run `just test-daemon` (requires Node.js) for live FSEvents, forced re-index,

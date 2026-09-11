@@ -1,4 +1,5 @@
 const std = @import("std");
+const cli = @import("core/cli.zig");
 const filters = @import("core/filters.zig");
 const humanize = @import("core/humanize.zig");
 const runtime = @import("core/runtime.zig");
@@ -23,7 +24,6 @@ const Config = struct {
     ascending: bool = false,
     human_sizes: bool = true,
     show_header: bool = true,
-    help: bool = false,
 };
 
 const MappedIndex = struct {
@@ -55,16 +55,8 @@ pub fn main(init: std.process.Init) !void {
     runtime.init(init);
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const config = parseArgs(args) catch |err| {
-        std.debug.print("error: invalid arguments ({t})\n\n", .{err});
-        printUsage();
-        std.process.exit(2);
-    };
-
-    if (config.help) {
-        printUsage();
-        return;
-    }
+    if (cli.handleCommon(args, "zest-query", usage)) return;
+    const config = parseArgs(args) catch |err| cli.fail("zest-query", "invalid arguments ({t})", .{err});
 
     const needs_home = config.index_path == null or config.scope == null;
     const home_owned = if (needs_home)
@@ -120,9 +112,7 @@ fn parseArgs(args: []const []const u8) !Config {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            config.help = true;
-        } else if (std.mem.eql(u8, arg, "--index")) {
+        if (std.mem.eql(u8, arg, "--index")) {
             i += 1;
             if (i >= args.len) return error.MissingIndexPath;
             config.index_path = args[i];
@@ -211,33 +201,32 @@ fn kindName(kind: types.FileKind) []const u8 {
     };
 }
 
-fn printUsage() void {
-    std.debug.print(
-        \\Usage: zest-query [QUERY] [OPTIONS]
-        \\
-        \\Read the existing Zest index without touching the filesystem.
-        \\QUERY accepts the same text and qualifiers as the app, such as
-        \\'size:>1gb kind:file' or 'date:week'.
-        \\
-        \\Options:
-        \\  --index PATH       Index file (default: Zest index under $HOME)
-        \\  --scope PATH       Absolute search root (default: $HOME)
-        \\  --depth N|all      Scope depth (default: 1, direct children)
-        \\  --limit N          Rows to print (default: 50)
-        \\  --scan-limit N     Matching rows collected before sort (default: 100000)
-        \\  --sort COLUMN      name, size, mtime/date, type/category (default: size)
-        \\  --asc | --desc     Sort direction (default: descending)
-        \\  --bytes            Print exact byte counts instead of human sizes
-        \\  --no-header        Omit the TSV header
-        \\  -h, --help         Show this help
-        \\
-        \\Examples:
-        \\  zest-query --scope "$HOME" --depth 1 --sort size --desc
-        \\  zest-query 'size:>1gb kind:file' --depth all --sort size --desc
-        \\  zest-query 'date:week size:>100mb' --depth all --sort mtime --desc
-        \\
-    , .{});
-}
+const usage =
+    \\Usage: zest-query [QUERY] [OPTIONS]
+    \\
+    \\Read the existing Zest index without touching the filesystem.
+    \\QUERY accepts the same text and qualifiers as the app, such as
+    \\'size:>1gb kind:file' or 'date:week'.
+    \\
+    \\Options:
+    \\  --index PATH       Index file (default: Zest index under $HOME)
+    \\  --scope PATH       Absolute search root (default: $HOME)
+    \\  --depth N|all      Scope depth (default: 1, direct children)
+    \\  --limit N          Rows to print (default: 50)
+    \\  --scan-limit N     Matching rows collected before sort (default: 100000)
+    \\  --sort COLUMN      name, size, mtime/date, type/category (default: size)
+    \\  --asc | --desc     Sort direction (default: descending)
+    \\  --bytes            Print exact byte counts instead of human sizes
+    \\  --no-header        Omit the TSV header
+    \\  -h, --help         Show this help
+    \\  -V, --version      Print version
+    \\
+    \\Examples:
+    \\  zest-query --scope "$HOME" --depth 1 --sort size --desc
+    \\  zest-query 'size:>1gb kind:file' --depth all --sort size --desc
+    \\  zest-query 'date:week size:>100mb' --depth all --sort mtime --desc
+    \\
+;
 
 test "parse query options" {
     const args = [_][]const u8{

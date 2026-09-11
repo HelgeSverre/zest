@@ -1,5 +1,6 @@
 //! launchd control shared by the CLI and the native app's Index menu.
 const std = @import("std");
+const cli = @import("../core/cli.zig");
 const runtime = @import("../core/runtime.zig");
 const config = @import("../config/config.zig");
 extern "c" fn getuid() c_uint;
@@ -220,7 +221,7 @@ const Service = struct {
 pub fn handle(gpa: std.mem.Allocator, args: []const []const u8) !bool {
     if (args.len < 2) return false;
     if (std.mem.eql(u8, args[1], "probe-access")) {
-        if (args.len != 2) return error.UnexpectedArgument;
+        if (args.len != 2) cli.fail("zest-indexer", "'probe-access' takes no arguments", .{});
         const access = @import("access.zig");
         const status = try access.probe(gpa);
         var buffer: [64]u8 = undefined;
@@ -233,10 +234,10 @@ pub fn handle(gpa: std.mem.Allocator, args: []const []const u8) !bool {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const service = try Service.init(arena.allocator());
-    if (command != .install and command != .@"prepare-install" and args.len != 2) return error.UnexpectedArgument;
+    if (command != .install and command != .@"prepare-install" and args.len != 2) cli.fail("zest-indexer", "'{s}' takes no arguments", .{args[1]});
     switch (command) {
         .install, .@"prepare-install" => {
-            const override = if (args.len == 4 and std.mem.eql(u8, args[2], "--binary-path")) args[3] else if (args.len == 2) null else return error.InvalidInstallArguments;
+            const override = if (args.len == 4 and std.mem.eql(u8, args[2], "--binary-path")) args[3] else if (args.len == 2) null else cli.fail("zest-indexer", "'{s}' accepts only --binary-path PATH", .{args[1]});
             if (command == .install) {
                 try service.install(override);
             } else {

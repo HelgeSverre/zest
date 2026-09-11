@@ -7,6 +7,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Selected) can reach the coordinator and the active browser. Weak so we
   /// don't extend the controller's lifetime past its window.
   weak var rootViewController: RootViewController?
+  /// Absolute folder from `zest PATH`, or nil for `$HOME`.
+  private let startPath: String?
+
+  init(startPath: String? = nil) {
+    self.startPath = startPath
+    super.init()
+  }
 
   func setUpIndexer() { indexerMenu.setUpAccess() }
   func retryIndexer() { indexerMenu.retryIndexing() }
@@ -26,7 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     win.minSize = NSSize(width: 800, height: 600)
     win.appearance = NSAppearance(named: .darkAqua)
     win.title = "Zest"
-    win.contentViewController = RootViewController()
+    win.contentViewController = RootViewController(
+      coordinator: AppCoordinator(startPath: startPath))
     win.setContentSize(NSSize(width: 1180, height: 760))
     win.center()
     win.makeKeyAndOrderFront(nil)

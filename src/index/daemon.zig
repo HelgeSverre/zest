@@ -1,4 +1,5 @@
 const std = @import("std");
+const cli = @import("../core/cli.zig");
 const builder = @import("builder.zig");
 const config = @import("../config/config.zig");
 const fsevents = @import("fsevents.zig");
@@ -27,24 +28,60 @@ fn onFSEvent(paths: []const []const u8, must_rescan: bool) void {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (cli.handleCommon(args, "zest-indexer", usage)) return;
     if (try service.handle(allocator, args)) return;
     var full_scan = false;
     var scan_root: ?[]const u8 = null;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--full-scan")) {
             full_scan = true;
-        } else if (std.mem.startsWith(u8, arg, "-") or scan_root != null) {
-            return error.UnexpectedArgument;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            cli.fail("zest-indexer", "unknown option '{s}'", .{arg});
+        } else if (scan_root != null) {
+            cli.fail("zest-indexer", "unexpected argument '{s}'", .{arg});
         } else scan_root = arg;
     }
     const home = try runtime.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home);
     try config.ensureAppSupportDir(allocator);
     // Match FSEvents' canonical spelling for symlinked homes and /private/tmp.
-    const root = try std.Io.Dir.cwd().realPathFileAlloc(runtime.io, scan_root orelse home, allocator);
+    const root = std.Io.Dir.cwd().realPathFileAlloc(runtime.io, scan_root orelse home, allocator) catch |err|
+        cli.fail("zest-indexer", "cannot resolve root '{s}' ({t}); expected a command or a directory", .{ scan_root orelse home, err });
     defer allocator.free(root);
     if (full_scan) try runFullScan(allocator, root, false) else try runDaemon(allocator, root);
 }
+
+const usage =
+    \\Usage: zest-indexer [COMMAND] [OPTIONS] [ROOT]
+    \\
+    \\Build and maintain the Zest search index. With no command it runs the
+    \\indexer in the foreground (initial scan, then FSEvents watching); this is
+    \\what the launchd agent invokes. ROOT defaults to $HOME.
+    \\
+    \\Commands:
+    \\  install            Install and start the launchd background agent
+    \\  uninstall          Stop and remove the launchd agent
+    \\  status             Print agent state (running, waiting, stopped, ...)
+    \\  start | stop       Start or stop the agent
+    \\  restart            Restart the agent
+    \\  reindex            Ask the running agent for a full rescan
+    \\
+    \\Options:
+    \\  --full-scan [ROOT] Scan once, write the index, and exit
+    \\  -h, --help         Show this help
+    \\  -V, --version      Print version
+    \\
+    \\Diagnostics:
+    \\  prepare-install [--binary-path PATH]
+    \\                     Stage the agent binary without starting it
+    \\  probe-access       Report whether Full Disk Access is granted
+    \\
+    \\Examples:
+    \\  zest-indexer install
+    \\  zest-indexer --full-scan ~/code
+    \\  zest-indexer status
+    \\
+;
 
 const DaemonStartup = struct {
     allocator: std.mem.Allocator,

@@ -226,7 +226,8 @@ final class AppCoordinator {
     !forwardStack.isEmpty
   }
 
-  init() {
+  /// `startPath` is an absolute directory (already validated); nil means `$HOME`.
+  init(startPath: String? = nil) {
     let fm = FileManager.default
     let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     let zestDir = support?.appendingPathComponent("zest")
@@ -234,7 +235,7 @@ final class AppCoordinator {
     core = indexPath.flatMap { ZestCore(indexPath: $0) }
     indexPathForReload = indexPath
     userState = UserState(directory: zestDir)
-    currentPath = fm.homeDirectoryForCurrentUser.path
+    currentPath = startPath ?? fm.homeDirectoryForCurrentUser.path
   }
 
   // MARK: - Pins & folder colors

@@ -7,7 +7,14 @@ import SwiftUI
 /// instead of stretching it full-width, so we constrain everything directly.)
 final class RootViewController: NSViewController {
   private let splitVC = NSSplitViewController()
-  let coordinator = AppCoordinator()
+  let coordinator: AppCoordinator
+
+  init(coordinator: AppCoordinator = AppCoordinator()) {
+    self.coordinator = coordinator
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) { fatalError("RootViewController is code-only") }
 
   private var toolbar: ToolbarView!
   private var filterBar: FilterBarView!

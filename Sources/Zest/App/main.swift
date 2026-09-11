@@ -1,7 +1,24 @@
 import AppKit
 
-// Read-only packaged-service diagnostic; no GUI, registration, or scanning.
-if CommandLine.arguments.contains("--indexer-status") {
+let action: LaunchAction
+switch LaunchOptions.parse(
+  Array(CommandLine.arguments.dropFirst()), cwd: FileManager.default.currentDirectoryPath)
+{
+case .success(let a): action = a
+case .failure(let err):
+  FileHandle.standardError.write(Data((err.message + "\n").utf8))
+  exit(err.exitCode)
+}
+
+switch action {
+case .help:
+  print(LaunchOptions.usage, terminator: "")
+  exit(0)
+case .version:
+  print(LaunchOptions.version)
+  exit(0)
+case .indexerStatus:
+  // Read-only packaged-service diagnostic; no GUI, registration, or scanning.
   do {
     try BundledIndexerService.validateBundle(at: Bundle.main.bundleURL)
     let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/zest-indexer")
@@ -11,29 +28,25 @@ if CommandLine.arguments.contains("--indexer-status") {
     FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
     exit(1)
   }
-}
-
-// Non-bundled executable (preserves `zest /path` ergonomics, like today's app).
-let app = NSApplication.shared
-
-// Dev verification: `Zest --snapshot <path> [WxH]` renders the UI off-screen to a
-// PNG and exits (no event loop). Used to check rendering during development.
-if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
+case .snapshot(let path, let size):
+  // Dev verification: renders the UI off-screen to a PNG and exits (no event loop).
+  let app = NSApplication.shared
   app.setActivationPolicy(.accessory)
-  let path = CommandLine.arguments[i + 1]
-  var size = NSSize(width: 1180, height: 760)
-  if i + 2 < CommandLine.arguments.count {
-    let parts = CommandLine.arguments[i + 2].split(separator: "x")
-    if parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]) {
-      size = NSSize(width: w, height: h)
-    }
-  }
   Snapshot.capture(RootViewController(), to: path, size: size)
   exit(0)
+case .bench(let iterations, let json):
+  // Dev benchmark: drives the real UI headlessly against the index and exits.
+  let app = NSApplication.shared
+  app.setActivationPolicy(.accessory)
+  exit(Bench.run(iterations: iterations, json: json))
+case .browse(let path):
+  // Window policy: every `zest PATH` invocation is its own process and window.
+  // To reuse a running instance instead, this is the one place to change:
+  // forward `path` via NSWorkspace.shared.open(_:withApplicationAt:) and exit,
+  // and handle it in AppDelegate.application(_:open:).
+  let app = NSApplication.shared
+  let delegate = AppDelegate(startPath: path)
+  app.delegate = delegate
+  app.setActivationPolicy(.regular)  // show in Dock / accept focus when unbundled
+  app.run()
 }
-
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.regular)
-// show in Dock / accept focus when unbundled
-app.run()

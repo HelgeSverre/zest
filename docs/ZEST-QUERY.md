@@ -34,8 +34,9 @@ HOME="$fixture" zest-indexer --full-scan "$(pwd -P)"
 HOME="$fixture" zest-query --scope "$(pwd -P)" --depth all
 ```
 
-The temporary index remains under `$fixture` until you remove it. In 0.1.0,
-`zest-indexer` has no `--help` option; use the documented `--full-scan PATH` form.
+The temporary index remains under `$fixture` until you remove it. Every bundled
+command accepts `--help` and `--version`; run `zest-indexer --help` for its
+commands (0.1.1 shipped without it; use the documented `--full-scan PATH` form there).
 
 If you installed the earlier query-only cask, run `brew update` followed by
 `brew reinstall --cask helgesverre/tap/zest` to add the other commands. Disable
@@ -105,6 +106,8 @@ The CLI does not print a separate truncation warning.
 Standard output is tab-separated, with this header unless suppressed:
 
 ```text
+| `-h`, `--help` | | Print usage and exit 0 |
+| `-V`, `--version` | | Print `zest-query X.Y.Z (build N)` and exit 0 |
 SIZE\tMTIME\tKIND\tPATH
 ```
 
