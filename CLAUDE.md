@@ -39,7 +39,7 @@ to answer a discovery query. See [docs/ZEST-QUERY.md](docs/ZEST-QUERY.md).
 
 ## Architecture
 
-See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagnosis, benchmarks, phased plan). Key points:
+See `docs/ARCHITECTURE.md` (accurate, kept current), `docs/TESTING.md`, `docs/BENCHMARKS.md`, and `docs/CAPI.md`. Key points:
 
 - **Index** — custom mmap'd columnar binary at `~/Library/Application Support/zest/index.zst` (~407 MB for 4.1M entries): names (original + case-folded blobs, byte-parallel — folding is length-preserving, see `core/casefold.zig`), prefix-deduped dir table + parent ids, metadata arrays, per-category bitmaps, per-folder histogram + ext-breakdown columns. Since v4, directory entries' `size` is their recursive subtree total (rolled up at build time), so folder sizes display O(1) and folders participate in sort-by-size and `size:` filters.
 - **Search** (`src/index/search.zig`) — substring scan over the case-folded name blob: a SIMD two-anchor filter (`@Vector`, width from `std.simd.suggestVectorLength`) rejects a whole register of positions per step, survivors go through `memcmp`; entry indices recovered by binary search are *monotonic in blob position* (the O(1) dedup relies on this). Queries take an optional cancel flag polled every 64 KiB, exposed to Swift as `zest_query_cancellable`. Filter-only queries scan the parent-id column; depth-1 listings resolve the scope dir id once.
@@ -52,9 +52,9 @@ See `docs/ARCHITECTURE.md` (accurate, kept current) and `docs/ROADMAP.md` (diagn
 
 - Zig 0.16.0. Filesystem/clock/env access in the *binaries* goes through the global `Io` handle in `core/runtime.zig` (set once in `main` from `std.process.Init`). The C-ABI lib (`capi/`) deliberately has **no** `Io` and no global state — pure CPU over caller-owned bytes.
 - FFI contract: `ZestRow` strings borrow into the mmap; Swift copies them immediately in `ZestCore.query`. Never hold Zig-side pointers in Swift beyond the call.
-- Swift: 4-space indent (swift-format config in repo), AppKit (no SwiftUI), Auto Layout with explicit constraints, Theme.* constants for all colors.
-- Tests: Zig tests embedded in source files, rooted at `src/test_root.zig`; Swift tests in `Sources/ZestTests`. Engine changes must keep `zest_query` result counts stable (benchmark harness prints them — compare before/after).
-- Perf changes: run `just bench-capi` before and after; medians over 7 samples; the table lives in docs/ROADMAP.md.
+- Swift: 2-space indent (`.swift-format` in repo), AppKit for the shell; SwiftUI only for the onboarding and first-index progress views, hosted in `NSHostingView`. Auto Layout with explicit constraints, Theme.* constants for all colors.
+- Tests: Zig tests embedded in source files, rooted at `src/test_root.zig`; Swift tests in `Sources/ZestTests`. Headless UI tests (`just test-ui`) drive the real window in-process via `A11y` identifiers; see `docs/TESTING.md`. Engine changes must keep `zest_query` result counts stable (benchmark harness prints them — compare before/after).
+- Perf changes: run `just bench-capi` before and after; medians over 7 samples; the table lives in docs/BENCHMARKS.md.
 
 ## Project Structure
 
@@ -71,5 +71,5 @@ src/index/             — format, builder, bulk_scan, reader, search, subtree,
                          bitmap, fsevents, daemon
 src/core/              — types, file_types, casefold, filters, humanize, runtime
 benchmarks/            — bench_capi.zig (real-index harness), bench_search.zig (synthetic)
-docs/                  — ARCHITECTURE.md, ROADMAP.md, archive/ (superseded docs)
+docs/                  — ARCHITECTURE.md, TESTING.md, BENCHMARKS.md, CAPI.md, RELEASE.md, ZEST-QUERY.md, archive/ (superseded docs)
 ```

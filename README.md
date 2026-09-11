@@ -370,7 +370,7 @@ flowchart TB
     Builder -->|publishes| Index
 ```
 
-Detailed architecture notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); [docs/architecture.html](docs/architecture.html) contains a standalone visual overview.
+Detailed architecture notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Query pipeline
 
@@ -446,7 +446,7 @@ The query and index use the same length-preserving Unicode fold, so matches map 
 
 UI tests (`just test-ui`, also part of `just test`) drive the real window in-process: `Sources/ZestTests/UIHarness.swift` builds `RootViewController` in an off-screen `NSWindow`, locates views by their `A11y` accessibility identifiers, and sends real `NSEvent` key and mouse events through the responder chain, so typing, Esc, ⌘↑, double-click, sidebar and scope-chip clicks are asserted against coordinator state and the visible cells. No XCUITest and no Accessibility permission is needed; the tests skip when there is no index.
 
-The remaining AppKit interaction layer (drag and drop, Quick Look, context menus) is verified manually. Benchmark harnesses report medians over deterministic synthetic data or the current real index, making performance changes easy to compare before and after.
+The remaining AppKit interaction layer (Quick Look, context menus) is verified manually. Benchmark harnesses report medians over deterministic synthetic data or the current real index, making performance changes easy to compare before and after.
 
 ## License
 

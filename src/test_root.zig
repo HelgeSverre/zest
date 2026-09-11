@@ -8,7 +8,6 @@ comptime {
     _ = @import("core/humanize.zig");
     _ = @import("core/cli.zig");
     _ = @import("config/config.zig");
-    _ = @import("config/user_config.zig");
 
     // Index
     _ = @import("index/format.zig");

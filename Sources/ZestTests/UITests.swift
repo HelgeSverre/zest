@@ -83,12 +83,21 @@ final class UITests: XCTestCase {
   }
 
   func testClickingSidebarCategorySetsFilter() throws {
-    ui.click(try ui.require(A11y.sidebarCategory("code")))
+    // The sidebar only renders categories present in the current folder, so
+    // pick the first one that exists rather than assuming a particular kind.
+    guard
+      let (byte, row) = Category.all.enumerated().lazy
+        .compactMap({ i, meta -> (UInt8, NSView)? in
+          ui.find(A11y.sidebarCategory(meta.queryKey), as: NSView.self).map { (UInt8(i), $0) }
+        }).first
+    else { throw XCTSkip("No category rows rendered for the start folder") }
+    let key = Category.all[Int(byte)].queryKey
+    ui.click(row)
     ui.settle()
-    XCTAssertEqual(ui.coordinator.filter.category, "code")
-    XCTAssertEqual(ui.coordinator.queryText, "cat:code")
+    XCTAssertEqual(ui.coordinator.filter.category, key)
+    XCTAssertEqual(ui.coordinator.queryText, "cat:\(key)")
     XCTAssertTrue(ui.coordinator.isSearchMode)
-    XCTAssertTrue(ui.coordinator.results().allSatisfy { $0.kind != 1 && $0.category == 7 })
+    XCTAssertTrue(ui.coordinator.results().allSatisfy { $0.kind != 1 && $0.category == byte })
   }
 
   func testTogglingScopeChipChangesResults() throws {

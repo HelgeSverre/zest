@@ -446,34 +446,6 @@ fn parseDateString(input: []const u8) !i64 {
     return epoch_days * 86400;
 }
 
-/// Format a criterion back to its text representation for display.
-pub fn formatCriterion(criterion: FilterCriterion, buf: []u8, now_unix: i64) []const u8 {
-    return switch (criterion) {
-        .kind => |f| {
-            const prefix: []const u8 = if (f.negated) "!kind:" else "kind:";
-            const val: []const u8 = switch (f.value) {
-                .file => "file",
-                .directory => "folder",
-                .symlink => "symlink",
-            };
-            return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, val }) catch "";
-        },
-        .extension => |f| {
-            const prefix: []const u8 = if (f.negated) "!ext:" else "ext:";
-            return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, f.value[0..f.len] }) catch "";
-        },
-        .size => |f| formatSizeCriterion(f, buf),
-        .date => |f| formatDateCriterion(f, buf, now_unix),
-        .category => |f| {
-            const prefix: []const u8 = if (f.negated) "!cat:" else "cat:";
-            return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, categoryName(f.value) }) catch "";
-        },
-        .path => |f| {
-            const prefix: []const u8 = if (f.negated) "!path:" else "path:";
-            return std.fmt.bufPrint(buf, "{s}{s}", .{ prefix, f.value[0..f.len] }) catch "";
-        },
-    };
-}
 
 fn categoryName(cat: types.FileCategory) []const u8 {
     return switch (cat) {
@@ -920,13 +892,6 @@ test "matchesAll keeps negated extensions ANDed" {
     try std.testing.expect(!matchesAll(&negs, .{ .name = "b.html" }));
 }
 
-test "formatCriterion comma extension round-trip" {
-    var buf: [128]u8 = undefined;
-    const f = testExtCriterion("php,html", false);
-    try std.testing.expectEqualStrings("ext:php,html", formatCriterion(f, &buf, test_now));
-    const neg = testExtCriterion("blade.php,html", true);
-    try std.testing.expectEqualStrings("!ext:blade.php,html", formatCriterion(neg, &buf, test_now));
-}
 
 test "parse date:today with injected now is deterministic" {
     // `now` is a parameter (not a clock read) so this module stays Io-free —
@@ -961,64 +926,13 @@ test "parseDate invalid" {
     try std.testing.expectError(error.InvalidDate, parseDate(">bad", test_now));
 }
 
-test "formatCriterion kind" {
-    var buf: [64]u8 = undefined;
-    const f = FilterCriterion{ .kind = .{ .value = .directory } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("kind:folder", result);
-}
 
-test "formatCriterion negated kind" {
-    var buf: [64]u8 = undefined;
-    const f = FilterCriterion{ .kind = .{ .negated = true, .value = .symlink } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("!kind:symlink", result);
-}
 
-test "formatCriterion extension" {
-    var buf: [64]u8 = undefined;
-    var f = FilterCriterion{ .extension = .{} };
-    @memcpy(f.extension.value[0..3], "pdf");
-    f.extension.len = 3;
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("ext:pdf", result);
-}
 
-test "formatCriterion category" {
-    var buf: [64]u8 = undefined;
-    const f = FilterCriterion{ .category = .{ .value = .code } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("cat:code", result);
-}
 
-test "formatCriterion size gt round-trip" {
-    var buf: [128]u8 = undefined;
-    const f = FilterCriterion{ .size = .{ .op = .gt, .value = 1024 * 1024 } }; // >1mb
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("size:>1mb", result);
-}
 
-test "formatCriterion size range round-trip" {
-    var buf: [128]u8 = undefined;
-    const f = FilterCriterion{ .size = .{ .op = .range, .value = 1024 * 1024, .value_upper = 10 * 1024 * 1024 } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("size:1mb..10mb", result);
-}
 
-test "formatCriterion size 500kb" {
-    var buf: [128]u8 = undefined;
-    const f = FilterCriterion{ .size = .{ .op = .gt, .value = 500 * 1024 } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("size:>500kb", result);
-}
 
-test "formatCriterion date comparison" {
-    var buf: [128]u8 = undefined;
-    // Jan 1, 2024 midnight UTC = 1704067200
-    const f = FilterCriterion{ .date = .{ .op = .gt, .value = 1704067200 } };
-    const result = formatCriterion(f, &buf, test_now);
-    try std.testing.expectEqualStrings("date:>2024-01-01", result);
-}
 
 test "formatEpochDate known date" {
     var buf: [16]u8 = undefined;

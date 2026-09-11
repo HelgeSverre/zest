@@ -34,29 +34,6 @@ pub const FileCategory = enum(u8) {
     }
 };
 
-pub const FileEntry = struct {
-    name: []const u8,
-    path: []const u8,
-    size: u64,
-    mtime: i64,
-    kind: FileKind,
-    category: FileCategory,
-
-    pub fn isDirectory(self: FileEntry) bool {
-        return self.kind == .directory;
-    }
-
-    pub fn isFile(self: FileEntry) bool {
-        return self.kind == .file;
-    }
-};
-
-pub const Pin = struct {
-    name: []const u8,
-    path: []const u8,
-    is_default: bool,
-};
-
 pub const SearchResult = struct {
     name: []const u8,
     dir_path: []const u8,
@@ -65,24 +42,4 @@ pub const SearchResult = struct {
     kind: FileKind,
     category: FileCategory,
     score: u32,
-};
-
-pub const DirListing = struct {
-    entries: []FileEntry,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *DirListing) void {
-        for (self.entries) |entry| {
-            self.allocator.free(entry.name);
-            self.allocator.free(entry.path);
-        }
-        self.allocator.free(self.entries);
-    }
-};
-
-pub const IndexStatus = enum {
-    not_found,
-    indexing,
-    ready,
-    stale,
 };

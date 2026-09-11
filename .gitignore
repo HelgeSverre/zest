@@ -1,6 +1,5 @@
 zig-out/
 .zig-cache/
-main
 .idea/
 .build/
 .swiftpm/
@@ -9,6 +8,3 @@ signing/
 *.p8
 *.p12
 *.certSigningRequest
-Sample of Zest.txt
-*.sample.txt
-sample.*.txt

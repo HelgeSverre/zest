@@ -36,5 +36,5 @@ excluded:
   - zig-out
   - docs
 
-# Treat warnings as errors so `just lint` fails on real issues, not noise.
+# Warnings stay warnings; set true to make `just lint` fail on them.
 strict: false

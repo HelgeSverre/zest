@@ -634,7 +634,7 @@ it doubles as a plain-C-style consumer.
 
 **Result-count rule.** The harness prints the result count of every query.
 Engine changes must keep those counts identical before and after; compare the
-two tables (the current one lives in `docs/ROADMAP.md`) and use medians over 7
+two tables (the current one lives in `docs/BENCHMARKS.md`) and use medians over 7
 samples for timing claims.
 
 **Index compatibility.** `zest_open` accepts header versions 6 and 7

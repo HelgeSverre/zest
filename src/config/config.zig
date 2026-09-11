@@ -3,10 +3,6 @@ const runtime = @import("../core/runtime.zig");
 
 pub const app_name = "zest";
 pub const index_filename = "index.zst";
-pub const pins_filename = "pins.json";
-pub const folder_colors_filename = "folder_colors.json";
-pub const filters_filename = "filters.json";
-pub const config_filename = "config.json";
 
 /// Directory/file leaf names to exclude from indexing. Matched against a single
 /// path component (the dirent name), so entries here must NOT contain '/'.
@@ -41,46 +37,11 @@ pub fn appSupportDir(allocator: std.mem.Allocator) ![]const u8 {
     return std.fs.path.join(allocator, &.{ home, "Library", "Application Support", app_name });
 }
 
-/// Returns the config directory: ~/.config/zest/
-pub fn configDir(allocator: std.mem.Allocator) ![]const u8 {
-    const home = runtime.getEnvVarOwned(allocator, "HOME") catch return error.HomeNotFound;
-    defer allocator.free(home);
-    return std.fs.path.join(allocator, &.{ home, ".config", app_name });
-}
-
 /// Returns the index file path: ~/Library/Application Support/zest/index.zst
 pub fn indexPath(allocator: std.mem.Allocator) ![]const u8 {
     const support = try appSupportDir(allocator);
     defer allocator.free(support);
     return std.fs.path.join(allocator, &.{ support, index_filename });
-}
-
-/// Returns the pins file path: ~/Library/Application Support/zest/pins.json
-pub fn pinsPath(allocator: std.mem.Allocator) ![]const u8 {
-    const support = try appSupportDir(allocator);
-    defer allocator.free(support);
-    return std.fs.path.join(allocator, &.{ support, pins_filename });
-}
-
-/// Returns the folder colors path: ~/Library/Application Support/zest/folder_colors.json
-pub fn folderColorsPath(allocator: std.mem.Allocator) ![]const u8 {
-    const support = try appSupportDir(allocator);
-    defer allocator.free(support);
-    return std.fs.path.join(allocator, &.{ support, folder_colors_filename });
-}
-
-/// Returns the saved filters path: ~/.config/zest/filters.json
-pub fn filtersPath(allocator: std.mem.Allocator) ![]const u8 {
-    const cfg = try configDir(allocator);
-    defer allocator.free(cfg);
-    return std.fs.path.join(allocator, &.{ cfg, filters_filename });
-}
-
-/// Returns the user config path: ~/.config/zest/config.json
-pub fn configPath(allocator: std.mem.Allocator) ![]const u8 {
-    const cfg = try configDir(allocator);
-    defer allocator.free(cfg);
-    return std.fs.path.join(allocator, &.{ cfg, config_filename });
 }
 
 /// Ensure the app support directory exists.

@@ -2,9 +2,9 @@
 # Shared by regular CI and release gates; no reliance on a runner's real index.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-: "${RUNNER_TEMP:?This fixture requires a disposable runner directory}"
-: "${GITHUB_ENV:?Set the GitHub environment output file}"
-fixture_directory="$(mktemp -d "$RUNNER_TEMP/zest-ci.XXXXXX")"
+# CI: RUNNER_TEMP + GITHUB_ENV are set and the vars are appended there (raw
+# KEY=value, GitHub takes the value literally). Local: `eval "$(bash $0)"`.
+fixture_directory="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/zest-ci.XXXXXX")"
 fixture_home="$fixture_directory/home"
 fixture_root="$fixture_directory/files"
 mkdir -p "$fixture_home/Library/Application Support" \
@@ -19,7 +19,12 @@ zig build indexer -Doptimize=ReleaseFast
 HOME="$fixture_home" ./zig-out/bin/zest-indexer --full-scan "$fixture_root"
 index_path="$fixture_home/Library/Application Support/zest/index.zst"
 test -s "$index_path"
-{
-  echo "ZEST_TEST_INDEX_PATH=$index_path"
-  echo "ZEST_TEST_INDEX_SCOPE=$fixture_root"
-} >> "$GITHUB_ENV"
+if [ -n "${GITHUB_ENV:-}" ]; then
+  {
+    echo "ZEST_TEST_INDEX_PATH=$index_path"
+    echo "ZEST_TEST_INDEX_SCOPE=$fixture_root"
+  } >> "$GITHUB_ENV"
+else
+  printf 'export ZEST_TEST_INDEX_PATH=%q\n' "$index_path"
+  printf 'export ZEST_TEST_INDEX_SCOPE=%q\n' "$fixture_root"
+fi

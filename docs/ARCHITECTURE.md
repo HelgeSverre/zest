@@ -524,7 +524,7 @@ Sources/Zest/
     ├── Theme.swift                     ← Ink graphite tokens, accent derivation, syntax colours
     ├── Category.swift                  ← category byte → label / colour / SF Symbol
     ├── Hairline.swift · NSView+Occlusion.swift
-Sources/ZestTests/          ← XCTest: coordinator sort, filters, preview, indexer service/menu, progress, …
+Sources/ZestTests/          ← XCTest: unit tests + ZestCoreTests (real index) + UITests/UIHarness (headless window)
 
 Plugins/EmbedHighlightQueriesPlugin/    ← SwiftPM build-tool plugin (runs the tool below)
 Tools/EmbedHighlightQueriesTool/        ← .scm → EmbeddedHighlightQueries.generated.swift
@@ -541,7 +541,7 @@ scripts/render-cask.mjs · publish-cask.mjs ← Homebrew tap
 scripts/make-icon.swift                 ← AppIcon iconset
 .github/workflows/                      ← ci (test, test-daemon, app-package), macos-pkg, release, homebrew
 .github/scripts/                        ← build-test-fixture, package-macos-pkg, import-apple-signing-assets
-docs/                                   ← ARCHITECTURE, CAPI, ROADMAP, RELEASE, ZEST-QUERY, releases/, archive/
+docs/                                   ← ARCHITECTURE, TESTING, BENCHMARKS, CAPI, RELEASE, ZEST-QUERY, releases/, archive/
 ```
 
 ## Index file lifecycle (one rebuild)
@@ -598,9 +598,10 @@ docs/                                   ← ARCHITECTURE, CAPI, ROADMAP, RELEASE
 ## See also
 
 - [CLAUDE.md](../CLAUDE.md) — build, test, and code conventions.
+- [docs/TESTING.md](TESTING.md) — test layers, the CI fixture, and the headless UI harness.
 - [docs/CAPI.md](CAPI.md) — full C ABI reference for `libzest-core.a`.
 - [docs/ZEST-QUERY.md](ZEST-QUERY.md) — the `zest-query` CLI: options, output,
   agent guidance.
 - [docs/RELEASE.md](RELEASE.md) — packaging, signing, notarization, Homebrew,
   install/remove flow.
-- [docs/ROADMAP.md](ROADMAP.md) — diagnosis, benchmarks, phased plan.
+- [docs/BENCHMARKS.md](BENCHMARKS.md) — engine and UI benchmark tables.
