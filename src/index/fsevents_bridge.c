@@ -39,7 +39,10 @@ void *zest_events_create(const char *root, const char *const *excludes, size_t c
     FSEventStreamContext streamContext = {0, watcher, NULL, NULL, NULL};
     watcher->stream = FSEventStreamCreate(NULL, events, &streamContext, paths,
         kFSEventStreamEventIdSinceNow, 2.0,
-        kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer |
+        /* Directory-level events: each path is a directory whose contents
+         * changed, coalesced by the kernel. That is exactly the unit the
+         * incremental rebuild relists, and far fewer events than FileEvents. */
+        kFSEventStreamCreateFlagNoDefer |
         kFSEventStreamCreateFlagIgnoreSelf | kFSEventStreamCreateFlagWatchRoot);
     CFRelease(paths);
     if (!watcher->stream) { free(watcher); return NULL; }

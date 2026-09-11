@@ -240,12 +240,15 @@ small, testable modules:
    (`progress.Reporter.writeIndex`, 1 MiB chunks, `fsync` before rename).
 3. **FSEvents watcher** (`fsevents.zig` over the C bridge
    `fsevents_bridge.c`): one `FSEventStream` on the root with 2.0 s latency and
-   `FileEvents | NoDefer | IgnoreSelf | WatchRoot`. The canonical app-support
+   `NoDefer | IgnoreSelf | WatchRoot` — directory-level events, so each path
+   is a directory whose contents changed. The canonical app-support
    dir is passed to `FSEventStreamSetExclusionPaths` so the daemon's own index
    writes (and any other writer's) never schedule a rebuild; `onFSEvent` filters
-   a second time through `config.shouldExcludeDescendant`. A callback carrying
+   a second time through `config.shouldExcludeDescendant`, then records the
+   directory in a dirty set. A callback carrying
    `UserDropped` / `KernelDropped` / `RootChanged` counts as
-   `schedule.event_threshold` events on its own (forced rescan).
+   `schedule.event_threshold` events on its own and forces the next rebuild
+   to be a full walk.
 4. **Coalesced rebuild** (`schedule.zig`): the CFRunLoop wakes every 2 s
    (`zest_run_loop_run(2.0)`, or early via `zest_run_loop_stop` once the
    pending count crosses the threshold). A rebuild is due when any of:
@@ -253,6 +256,19 @@ small, testable modules:
    ≥ 24 h since the last success (daily self-heal); an explicit request; or a
    previous failure whose retry time has passed. Failures back off
    `5 s × 2^(failures-1)`, capped at 300 s, and keep the last good index.
+   **Incremental rebuild** (`incremental.zig`): an ordinary change batch does
+   not walk the tree. The daemon reads the previous `index.zst` back into
+   entries, relists each dirty directory with one `getattrlistbulk` call,
+   drops old entries under directory children that vanished from a listing
+   (deleted or renamed away), recursively scans directory children the old
+   index never saw (created or renamed in), patches the relisted directories'
+   own mtimes, and hands the merged entries to `writeIndex`, which re-derives
+   folder sizes, histograms, and extension buckets. On a 4.1M-entry home this
+   is ~0.3 s merge + ~0.9 s build + ~0.6 s write versus a 15–20 s, 60
+   CPU-second walk. Explicit requests, dropped events, a failed previous
+   rebuild, and the daily self-heal still take the full walk; so does a batch
+   touching more than `max(64, dirs/20)` directories or more than 256
+   vanished/new subtrees (`error.TooManyChanges`).
 5. **Re-index requests**: `zest-indexer reindex` (CLI) or the app's *Re-index
    Now* writes a token to `reindex.request`. The daemon reads the first 16
    bytes each tick and rebuilds when the token differs from the one it last

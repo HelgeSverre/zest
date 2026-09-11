@@ -19,6 +19,8 @@ const ignored = ['project/node_modules', 'project/.git', '.hidden', 'project/__p
   'Library/Caches', 'Library/Logs', 'Library/Developer'];
 for (const dir of ignored) fs.mkdirSync(path.join(home, dir), { recursive: true });
 fs.writeFileSync(path.join(home, 'original.txt'), 'original');
+fs.mkdirSync(path.join(home, 'tree/inner'), { recursive: true });
+fs.writeFileSync(path.join(home, 'tree/inner/leaf.txt'), 'leaf');
 // FSEvents can assign IDs to coalesced fixture-creation events after the
 // filesystem calls return. Let setup settle before starting a SinceNow stream.
 await new Promise(resolve => setTimeout(resolve, 3000));
@@ -79,9 +81,13 @@ try {
 
   fs.renameSync(path.join(home, 'original.txt'), path.join(home, 'renamed.txt'));
   fs.writeFileSync(path.join(home, 'created.txt'), 'created');
+  fs.renameSync(path.join(home, 'tree'), path.join(home, 'tree2'));
   await until(() => builds() === 2);
+  assert(log.includes('incremental: relisted'), 'a change batch must rebuild incrementally, not walk the tree');
   assert(query().includes('renamed.txt'));
   assert(query().includes('created.txt'));
+  assert(query().includes('tree2/inner/leaf.txt'), 'a renamed directory must be rescanned under its new name');
+  assert(!query().includes('tree/inner'));
   assert(!query().includes('original.txt'));
   assert(!query().includes('ignored.txt'));
   fs.unlinkSync(path.join(home, 'created.txt'));

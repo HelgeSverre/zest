@@ -9,20 +9,57 @@ const service = @import("service.zig");
 const runtime = @import("../core/runtime.zig");
 const humanize = @import("../core/humanize.zig");
 const progress = @import("progress.zig");
+const incremental = @import("incremental.zig");
+const format = @import("format.zig");
 const c = fsevents.c;
 
 var dirty_count = std.atomic.Value(usize).init(0);
 var watch_root: []const u8 = "";
 var exclude_prefix: []const u8 = "";
+// The FSEvents stream is scheduled on the main thread's run loop, so the
+// callback and the watch loop never run concurrently: no lock needed.
+var dirty_alloc: std.mem.Allocator = undefined;
+var dirty_dirs: std.StringHashMapUnmanaged(void) = .{};
+var needs_full = false;
 
+/// Directory-level events: each path is a directory whose contents changed.
 fn onFSEvent(paths: []const []const u8, must_rescan: bool) void {
+    if (must_rescan) needs_full = true;
     var relevant: usize = if (must_rescan) schedule.event_threshold else 0;
-    for (paths) |path| {
-        if (!config.shouldExcludeDescendant(path, watch_root, exclude_prefix)) relevant +|= 1;
+    for (paths) |raw| {
+        const path = if (raw.len > 1) std.mem.trimEnd(u8, raw, "/") else raw;
+        if (config.shouldExcludeDescendant(path, watch_root, exclude_prefix)) continue;
+        relevant +|= 1;
+        if (dirty_dirs.contains(path)) continue;
+        const owned = dirty_alloc.dupe(u8, path) catch {
+            needs_full = true;
+            continue;
+        };
+        dirty_dirs.put(dirty_alloc, owned, {}) catch {
+            dirty_alloc.free(owned);
+            needs_full = true;
+        };
     }
     if (relevant == 0) return;
     const total = dirty_count.fetchAdd(relevant, .monotonic) +| relevant;
     if (total >= schedule.event_threshold) c.zest_run_loop_stop();
+}
+
+/// Hand the accumulated dirty set to the caller (owned keys) and start a fresh one.
+fn takeDirty(allocator: std.mem.Allocator) ![]const []const u8 {
+    var taken = dirty_dirs;
+    dirty_dirs = .{};
+    defer taken.deinit(dirty_alloc);
+    const dirs = try allocator.alloc([]const u8, taken.count());
+    var it = taken.keyIterator();
+    var i: usize = 0;
+    while (it.next()) |k| : (i += 1) dirs[i] = k.*;
+    return dirs;
+}
+
+fn freeDirty(allocator: std.mem.Allocator, dirs: []const []const u8) void {
+    for (dirs) |d| dirty_alloc.free(d);
+    allocator.free(dirs);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -116,9 +153,13 @@ fn runDaemon(allocator: std.mem.Allocator, root: []const u8) !void {
     defer allocator.free(canonical_support);
     watch_root = root;
     exclude_prefix = canonical_support;
+    dirty_alloc = allocator;
     defer {
         watch_root = "";
         exclude_prefix = "";
+        var it = dirty_dirs.keyIterator();
+        while (it.next()) |k| allocator.free(k.*);
+        dirty_dirs.deinit(allocator);
     }
     const request_path = try std.fs.path.join(allocator, &.{ support, service.request_filename });
     defer allocator.free(request_path);
@@ -146,22 +187,76 @@ fn readRequest(path: []const u8) ?[16]u8 {
 fn runWatchLoop(ops: *DaemonStartup) !void {
     std.debug.print("Watcher active. Rebuild after 30s or 1000 events; failures retry with backoff.\n", .{});
     var state = schedule.Schedule{ .last_success = runtime.nowNanos() };
+    var last_full = runtime.nowNanos();
     if (!ops.initial_ok) state.failed(runtime.nowNanos());
     while (true) {
         c.zest_run_loop_run(2.0);
         state.add(dirty_count.swap(0, .monotonic));
         const request = readRequest(ops.request_path);
         const requested = if (request) |token| if (ops.request_seen) |seen| !std.mem.eql(u8, &token, &seen) else true else false;
-        if (!state.due(runtime.nowNanos(), requested)) continue;
-        std.debug.print("Rebuilding index ({d} events, requested={}, retry={d})...\n", .{ state.pending, requested, state.failures });
-        runFullScan(ops.allocator, ops.root, true) catch |err| {
+        const now = runtime.nowNanos();
+        if (!state.due(now, requested)) continue;
+        // Explicit requests, dropped events, failures, and the daily safety
+        // scan take the full walk; ordinary change batches are spliced in.
+        const dirs = try takeDirty(ops.allocator);
+        defer freeDirty(ops.allocator, dirs);
+        var full = requested or needs_full or dirs.len == 0 or now - last_full >= 24 * 3600 * std.time.ns_per_s;
+        std.debug.print("Rebuilding index ({d} events in {d} dirs, requested={}, retry={d}, {s})...\n", .{
+            state.pending, dirs.len, requested, state.failures, if (full) "full" else "incremental",
+        });
+        if (!full) runIncremental(ops.allocator, ops.root, dirs) catch |err| {
+            std.debug.print("incremental rebuild failed: {}; running a full scan\n", .{err});
+            full = true;
+        };
+        if (full) runFullScan(ops.allocator, ops.root, true) catch |err| {
             state.failed(runtime.nowNanos());
+            needs_full = true;
             std.debug.print("error: rebuild failed: {}; retry in {d}s\n", .{ err, @divTrunc(state.retry_at - runtime.nowNanos(), std.time.ns_per_s) + 1 });
             continue;
         };
+        if (full) last_full = now;
+        needs_full = false;
         state.succeeded(runtime.nowNanos());
         ops.request_seen = request;
     }
+}
+
+/// Relist only the changed directories and splice them into the previous index.
+fn runIncremental(allocator: std.mem.Allocator, root: []const u8, dirty: []const []const u8) !void {
+    const support = try config.appSupportDir(allocator);
+    defer allocator.free(support);
+    const support_dir = try std.Io.Dir.cwd().realPathFileAlloc(runtime.io, support, allocator);
+    defer allocator.free(support_dir);
+    const path = try config.indexPath(allocator);
+    defer allocator.free(path);
+    const old = try runtime.readFileAlloc(allocator, path, .unlimited);
+    defer allocator.free(old);
+    var reporter: ?progress.Reporter = progress.Reporter.init(allocator, support, true) catch null;
+    const report: ?*progress.Reporter = if (reporter) |*value| value else null;
+    if (report) |value| value.start();
+    defer if (report) |value| value.deinit();
+    errdefer |err| if (report) |value| value.setPhase(.failed, @errorName(err));
+
+    var strings = std.heap.ArenaAllocator.init(allocator);
+    defer strings.deinit();
+    var entries: std.ArrayList(format.IndexEntry) = .empty;
+    defer entries.deinit(allocator);
+    const t_merge = runtime.nowNanos();
+    const stats = try incremental.merge(allocator, strings.allocator(), old, dirty, root, support_dir, &entries);
+    if (report) |value| {
+        value.discovered(stats.after, root);
+        value.setPhase(.building, "");
+    }
+    const t_build = runtime.nowNanos();
+    const index_data = try format.writeIndex(allocator, entries.items);
+    defer allocator.free(index_data);
+    var merge_buf: [16]u8 = undefined;
+    var build_buf: [16]u8 = undefined;
+    std.debug.print("  incremental: relisted {d} dirs, rescanned {d} subtrees, dropped {d}, entries {d} -> {d}\n  timing: merge={s} build={s}\n", .{
+        stats.relisted,                                                                  stats.rescanned,                                                                            stats.dropped, stats.before, stats.after,
+        humanize.duration(&merge_buf, @divTrunc(t_build - t_merge, std.time.ns_per_ms)), humanize.duration(&build_buf, @divTrunc(runtime.nowNanos() - t_build, std.time.ns_per_ms)),
+    });
+    try publish(report, path, index_data);
 }
 
 fn runFullScan(allocator: std.mem.Allocator, root: []const u8, daemon: bool) !void {
@@ -177,6 +272,11 @@ fn runFullScan(allocator: std.mem.Allocator, root: []const u8, daemon: bool) !vo
     defer allocator.free(index_data);
     const path = try config.indexPath(allocator);
     defer allocator.free(path);
+    try publish(report, path, index_data);
+}
+
+/// Atomically replace the index file (via the reporter when one is active).
+fn publish(report: ?*progress.Reporter, path: []const u8, index_data: []const u8) !void {
     const t_write = runtime.nowNanos();
     if (report) |value| try value.writeIndex(path, index_data) else try runtime.writeFileAtomic(path, index_data);
     var write_buf: [16]u8 = undefined;

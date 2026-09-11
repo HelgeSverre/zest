@@ -64,6 +64,14 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, pa
     var strings = std.heap.ArenaAllocator.init(allocator);
     defer strings.deinit();
 
+    try parseScanFiles(allocator, strings.allocator(), scan_paths, &entries);
+
+    if (parsed_out) |p| p.* = entries.items.len;
+    return format.writeIndex(allocator, entries.items);
+}
+
+/// Parse every shard in `scan_paths`, appending to `entries`.
+pub fn parseScanFiles(allocator: std.mem.Allocator, strings: std.mem.Allocator, scan_paths: []const []u8, entries: *std.ArrayList(format.IndexEntry)) !void {
     for (scan_paths) |scan_path| {
         const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch
             return error.ScanShardUnavailable;
@@ -73,18 +81,33 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, pa
         // backslash-heavy path can't abort the build with StreamTooLong.
         var line_buf: [16384]u8 = undefined;
         var file_reader = file.reader(runtime.io, &line_buf);
-        try parseScanReader(allocator, strings.allocator(), &file_reader.interface, &entries);
+        try parseScanReader(allocator, strings, &file_reader.interface, entries);
     }
+}
 
-    if (parsed_out) |p| p.* = entries.items.len;
-    return format.writeIndex(allocator, entries.items);
+/// Recursively scan `root` (not `root` itself) and append its entries; the
+/// same walk, validation, and shard cleanup as a full build, for one subtree.
+pub fn scanSubtree(allocator: std.mem.Allocator, strings: std.mem.Allocator, root: []const u8, support_dir: []const u8, entries: *std.ArrayList(format.IndexEntry)) !void {
+    const n_threads = @min(std.Thread.getCpuCount() catch 4, bulk_scan.max_scan_threads);
+    const scan = try bulk_scan.parallelScanWithProgress(allocator, root, support_dir, n_threads, null);
+    defer {
+        for (scan.paths) |p| {
+            std.Io.Dir.deleteFileAbsolute(runtime.io, p) catch {};
+            allocator.free(p);
+        }
+        allocator.free(scan.paths);
+    }
+    try validateScanComplete(scan.complete);
+    const before = entries.items.len;
+    try parseScanFiles(allocator, strings, scan.paths, entries);
+    try validateParsedCount(scan.entry_count, entries.items.len - before);
 }
 
 /// Parse tab-separated scan lines from `reader`, appending entries to `entries`;
 /// name/dir_path strings are allocated from `strings`. Uses `takeDelimiter`, which
 /// *consumes* the newline — `takeDelimiterExclusive` leaves it in place and turns
 /// blank lines into a non-advancing infinite loop.
-fn parseScanReader(
+pub fn parseScanReader(
     allocator: std.mem.Allocator,
     strings: std.mem.Allocator,
     reader: *std.Io.Reader,

@@ -18,6 +18,7 @@ comptime {
     _ = @import("index/subtree.zig");
     _ = @import("index/search.zig");
     _ = @import("index/builder.zig");
+    _ = @import("index/incremental.zig");
     _ = @import("index/startup.zig");
     _ = @import("index/schedule.zig");
     _ = @import("index/service.zig");

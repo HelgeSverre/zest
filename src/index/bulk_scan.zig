@@ -232,6 +232,22 @@ pub fn parallelScanWithProgress(
     };
 }
 
+/// List one directory (no recursion) as TSV records into `writer`, exactly as
+/// the parallel walk would. Returns false on an internal scanner failure.
+pub fn listDir(allocator: std.mem.Allocator, path: []const u8, root: []const u8, support_dir: []const u8, writer: *std.Io.Writer) !bool {
+    var sh = Shared{ .alloc = allocator, .root = root, .support = support_dir };
+    const attr_buf = try allocator.alloc(u8, attr_buffer_size);
+    defer allocator.free(attr_buf);
+    var w = Worker{ .shared = &sh, .writer = writer, .attr_buf = attr_buf };
+    var subdirs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (subdirs.items) |s| allocator.free(s);
+        subdirs.deinit(allocator);
+    }
+    processDir(path, &w, &subdirs, allocator);
+    return !sh.scan_failed.load(.monotonic);
+}
+
 fn workerMain(w: *Worker) void {
     const sh = w.shared;
     const io = runtime.io;
