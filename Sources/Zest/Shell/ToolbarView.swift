@@ -132,7 +132,6 @@ final class ToolbarView: NSView {
 /// Saved button is a render-only stub.
 final class PillButton: NSView {
   var onClick: (() -> Void)?
-  private static let accent = Theme.darkAccent
 
   private let leadingIcon = NSImageView()
   private let label = NSTextField(labelWithString: "")
@@ -205,7 +204,7 @@ final class PillButton: NSView {
   override func mouseEntered(with event: NSEvent) {
     guard isTopmostUnderMouse else { return }
     layer?.backgroundColor = Theme.hover.cgColor
-    layer?.borderColor = PillButton.accent.accentLine.cgColor
+    layer?.borderColor = Theme.darkAccent.accentLine.cgColor
     label.textColor = Theme.text
     leadingIcon.contentTintColor = Theme.text
     trailingIcon.contentTintColor = Theme.text
@@ -229,13 +228,12 @@ final class IconButton: NSView {
 
   private let imageView = NSImageView()
   private var enabled = true
-  private var hovering = false
 
   init(symbol: String, help: String) {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
     toolTip = help
 
     let img = NSImage(systemSymbolName: symbol, accessibilityDescription: help)
@@ -262,7 +260,6 @@ final class IconButton: NSView {
     enabled = value
     alphaValue = value ? 1.0 : 0.35
     if !value {
-      hovering = false
       layer?.backgroundColor = NSColor.clear.cgColor
     }
   }
@@ -290,13 +287,11 @@ final class IconButton: NSView {
   override func mouseEntered(with event: NSEvent) {
     guard isTopmostUnderMouse else { return }
     guard enabled else { return }
-    hovering = true
     layer?.backgroundColor = Theme.hover.cgColor
     imageView.contentTintColor = Theme.text
   }
 
   override func mouseExited(with event: NSEvent) {
-    hovering = false
     layer?.backgroundColor = NSColor.clear.cgColor
     imageView.contentTintColor = Theme.textSecondary
   }

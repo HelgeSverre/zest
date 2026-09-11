@@ -2,13 +2,15 @@ import AppKit
 import SwiftUI
 
 struct IndexProgressSnapshot: Codable, Equatable {
+  /// Mirrors `progress.Phase` in src/index/progress.zig; decoding rejects anything else.
+  enum Phase: String, Codable { case scanning, building, writing, published, failed }
   let version: Int
   let runId: String
   let pid: Int32
   let startedAt: Double
   let updatedAt: Double
   let elapsedMs: UInt64
-  let phase: String
+  let phase: Phase
   let count: UInt64
   let currentPath: String
   let written: UInt64
@@ -26,7 +28,6 @@ struct IndexProgressSnapshot: Codable, Equatable {
 
   var valid: Bool {
     version == 1 && pid > 0 && !runId.isEmpty && runId.count <= 64
-      && ["scanning", "building", "writing", "published", "failed"].contains(phase)
       && startedAt.isFinite && updatedAt.isFinite && updatedAt >= startedAt
       && count <= UInt64(Int.max) && written <= total
   }
@@ -36,7 +37,7 @@ struct IndexProgressSnapshot: Codable, Equatable {
   }
 
   var fraction: Double? {
-    guard phase == "writing", total > 0 else { return nil }
+    guard phase == .writing, total > 0 else { return nil }
     return min(1, Double(written) / Double(total))
   }
 }
@@ -100,17 +101,17 @@ final class IndexProgressModel: ObservableObject {
     }
     // Old crash/failure records must not override a newer successfully loaded index.
     if usableIndex, let indexModified, snapshot.updatedAt < indexModified,
-      snapshot.phase == "failed" || snapshot.phase == "published" || !snapshot.isFresh(at: now)
+      snapshot.phase == .failed || snapshot.phase == .published || !snapshot.isFresh(at: now)
         || !alive(snapshot.pid)
     {
       phase = .ready
       detail = ""
       return
     }
-    if snapshot.phase == "published" {
+    if snapshot.phase == .published {
       phase = usableIndex ? .ready : snapshot.isFresh(at: now) ? .loading : .interrupted
       detail = "The index was saved, but Zest couldn’t load it. Try indexing again."
-    } else if snapshot.phase == "failed" {
+    } else if snapshot.phase == .failed {
       phase = .interrupted
       detail =
         "The indexer couldn’t finish: \(snapshot.message). The daemon will retry automatically if it is still running."
@@ -119,10 +120,10 @@ final class IndexProgressModel: ObservableObject {
       detail = "The indexer stopped reporting progress. It may have stopped or become unresponsive."
     } else {
       switch snapshot.phase {
-      case "scanning": phase = .scanning
-      case "building": phase = .building
-      case "writing": phase = .writing
-      default: phase = .idle
+      case .scanning: phase = .scanning
+      case .building: phase = .building
+      case .writing: phase = .writing
+      case .published, .failed: phase = .idle
       }
       detail = ""
     }
@@ -215,7 +216,7 @@ final class IndexProgressMonitor {
     }
     // A live scan wins over a stopped older process's terminal snapshot.
     let active = snapshots.filter {
-      !["failed", "published"].contains($0.phase) && $0.isFresh(at: now) && alive($0.pid)
+      $0.phase != .failed && $0.phase != .published && $0.isFresh(at: now) && alive($0.pid)
     }
     return (active.isEmpty ? snapshots : active).max { $0.updatedAt < $1.updatedAt }
   }

@@ -12,7 +12,6 @@ import AppKit
 /// the field and the query.
 final class SearchField: NSView {
   private let coordinator: AppCoordinator
-  private static let accent = Theme.darkAccent
 
   private let magnifier = NSImageView()
   private let field = InsetTextField()
@@ -196,13 +195,13 @@ final class SearchField: NSView {
     }
     focused = value
     if value {
-      layer?.borderColor = SearchField.accent.accentLine.cgColor
+      layer?.borderColor = Theme.darkAccent.accentLine.cgColor
       layer?.backgroundColor = Theme.panel.cgColor
-      layer?.shadowColor = SearchField.accent.accentSoft.cgColor
+      layer?.shadowColor = Theme.darkAccent.accentSoft.cgColor
       layer?.shadowOpacity = 1
       layer?.shadowRadius = 3
       layer?.shadowOffset = .zero
-      magnifier.contentTintColor = SearchField.accent.accent
+      magnifier.contentTintColor = Theme.darkAccent.accent
     } else {
       layer?.borderColor = Theme.border.cgColor
       layer?.backgroundColor = Theme.background.cgColor

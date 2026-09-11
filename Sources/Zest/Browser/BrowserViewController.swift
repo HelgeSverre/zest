@@ -127,9 +127,6 @@ final class BrowserViewController: NSViewController {
   }
   private var lastReloadKey: ReloadKey?
 
-  /// Derived accent family (dark) used by the selection chrome.
-  fileprivate static let accent = Theme.darkAccent
-
   // Column identifiers.
   private static let colName = NSUserInterfaceItemIdentifier("name")
   private static let colSize = NSUserInterfaceItemIdentifier("size")
@@ -729,7 +726,7 @@ final class BrowserViewController: NSViewController {
     tableView.dataSource = self
     tableView.setAccessibilityIdentifier(A11y.browserTable)
     tableView.delegate = self
-    tableView.rowHeight = 34
+    tableView.rowHeight = Theme.Metrics.rowHeight
     tableView.selectionHighlightStyle = .none
     tableView.usesAlternatingRowBackgroundColors = false
     tableView.backgroundColor = Theme.background
@@ -823,7 +820,7 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
 
   /// 48pt two-line rows in search mode, 34pt single-line rows when browsing.
   func tableView(_: NSTableView, heightOfRow _: Int) -> CGFloat {
-    searchMode ? 48 : 34
+    searchMode ? Theme.Metrics.searchRowHeight : Theme.Metrics.rowHeight
   }
 
   /// Header clicks drive the client-side sort: clicking the active column flips
@@ -915,14 +912,12 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
       let cell = dequeueLabel(id, alignment: .right, leading: 0, trailing: 10)
       cell.label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
       cell.label.textColor = Theme.textSecondary
-      cell.label.alignment = .right
       cell.label.stringValue = item.sizeText
       return cell
     case BrowserViewController.colExt:
       let cell = dequeueLabel(id, alignment: .left, leading: 0, trailing: 10)
       cell.label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
       cell.label.textColor = Theme.textTertiary
-      cell.label.alignment = .left
       cell.label.stringValue = item.extText
       return cell
     default:
@@ -951,13 +946,14 @@ extension BrowserViewController: NSTableViewDataSource, NSTableViewDelegate {
   }
 
   private func dequeueLabel(
-    _ id: NSUserInterfaceItemIdentifier, alignment _: NSTextAlignment,
+    _ id: NSUserInterfaceItemIdentifier, alignment: NSTextAlignment,
     leading: CGFloat, trailing: CGFloat,
   ) -> LabelCellView {
     if let v = tableView.makeView(withIdentifier: id, owner: self) as? LabelCellView {
       return v
     }
     let v = LabelCellView(leading: leading, trailing: trailing)
+    v.label.alignment = alignment
     v.identifier = id
     return v
   }
@@ -1054,7 +1050,7 @@ final class FileRowView: NSTableRowView {
     guard isSelected else {
       return
     }
-    let a = BrowserViewController.accent
+    let a = Theme.darkAccent
     let fillRect = bounds.insetBy(dx: 6, dy: 2)
     let path = NSBezierPath(roundedRect: fillRect, xRadius: 6, yRadius: 6)
     a.accentSoft.setFill()
@@ -1087,8 +1083,6 @@ private final class ZestHeaderCell: NSTableHeaderCell {
   }
 
   var sortIndicator: SortIndicator = .none
-
-  private static let accent = Theme.darkAccent
 
   override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
     drawInterior(withFrame: cellFrame, in: controlView)
@@ -1133,7 +1127,7 @@ private final class ZestHeaderCell: NSTableHeaderCell {
     let arrow = sortIndicator == .ascending ? "\u{2191}" : "\u{2193}"  // ↑ / ↓
     let arrowAttrs: [NSAttributedString.Key: Any] = [
       .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-      .foregroundColor: ZestHeaderCell.accent.accent,
+      .foregroundColor: Theme.darkAccent.accent,
     ]
     let arrowSize = (arrow as NSString).size(withAttributes: arrowAttrs)
     let glyphX: CGFloat

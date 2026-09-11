@@ -93,18 +93,18 @@ final class RootViewController: NSViewController {
     }
     c += [  // vertical chain; the split flexes to fill the middle
       toolbar.topAnchor.constraint(equalTo: view.topAnchor),
-      toolbar.heightAnchor.constraint(equalToConstant: 56),
+      toolbar.heightAnchor.constraint(equalToConstant: Theme.Metrics.toolbarHeight),
       h1.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
       h1.heightAnchor.constraint(equalToConstant: 1),
       filterBar.topAnchor.constraint(equalTo: h1.bottomAnchor),
-      filterBar.heightAnchor.constraint(equalToConstant: 42),
+      filterBar.heightAnchor.constraint(equalToConstant: Theme.Metrics.filterBarHeight),
       h2.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
       h2.heightAnchor.constraint(equalToConstant: 1),
       split.topAnchor.constraint(equalTo: h2.bottomAnchor),
       h3.topAnchor.constraint(equalTo: split.bottomAnchor),
       h3.heightAnchor.constraint(equalToConstant: 1),
       statusBar.topAnchor.constraint(equalTo: h3.bottomAnchor),
-      statusBar.heightAnchor.constraint(equalToConstant: 28),
+      statusBar.heightAnchor.constraint(equalToConstant: Theme.Metrics.statusBarHeight),
       statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ]
     NSLayoutConstraint.activate(c)

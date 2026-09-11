@@ -117,14 +117,6 @@ final class ZestCore {
     Int(zest_count(handle))
   }
 
-  /// Synchronous (runs in Zig); callers dispatch off-main in later phases.
-  /// Engine failures read as an empty result set.
-  func query(
-    _ q: String, scope: String = "/", maxDepth: UInt32 = .max, maxResults: UInt32 = 100_000
-  ) -> [Row] {
-    query(q, scope: scope, maxDepth: maxDepth, maxResults: maxResults, cancel: nil) ?? []
-  }
-
   /// Cancellable query. Returns nil **only** when `cancel` was cancelled while
   /// the engine was scanning — the caller should drop the delivery, because the
   /// query that cancelled it owns the state now. An engine failure still reads

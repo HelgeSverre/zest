@@ -13,7 +13,7 @@ final class IndexProgressTests: XCTestCase {
   ) -> IndexProgressSnapshot {
     IndexProgressSnapshot(
       version: 1, runId: "fixture", pid: getpid(), startedAt: 900,
-      updatedAt: updated, elapsedMs: 72_000, phase: phase, count: count,
+      updatedAt: updated, elapsedMs: 72_000, phase: .init(rawValue: phase)!, count: count,
       currentPath: "/Users/example/Documents/Projects", written: written, total: total,
       message: phase == "failed" ? "ScanIncomplete" : "")
   }
@@ -95,8 +95,10 @@ final class IndexProgressTests: XCTestCase {
     try Data("{broken".utf8).write(to: directory.appendingPathComponent("progress-broken.json"))
     try Data(repeating: 65, count: 33_000).write(
       to: directory.appendingPathComponent("progress-big.json"))
-    try JSONEncoder().encode(snapshot("unknown")).write(
-      to: directory.appendingPathComponent("progress-invalid.json"))
+    // Unknown phase: rejected by the Phase enum at decode time.
+    var invalid = String(decoding: try JSONEncoder().encode(snapshot("scanning")), as: UTF8.self)
+    invalid = invalid.replacingOccurrences(of: "\"scanning\"", with: "\"unknown\"")
+    try Data(invalid.utf8).write(to: directory.appendingPathComponent("progress-invalid.json"))
     XCTAssertNil(IndexProgressMonitor.read(directory: directory, now: now, alive: { _ in true }))
     try JSONEncoder().encode(snapshot("failed")).write(
       to: directory.appendingPathComponent("progress-old.json"))
@@ -104,7 +106,7 @@ final class IndexProgressTests: XCTestCase {
       to: directory.appendingPathComponent("progress-live.json"))
     let read = try XCTUnwrap(
       IndexProgressMonitor.read(directory: directory, now: now, alive: { _ in true }))
-    XCTAssertEqual(read.phase, "scanning")
+    XCTAssertEqual(read.phase, .scanning)
     XCTAssertEqual(read.count, 187_432)
     XCTAssertFalse(snapshot("writing", written: 101).valid)
     XCTAssertNil(snapshot("writing", written: 0, total: 0).fraction)

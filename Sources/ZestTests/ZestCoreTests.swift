@@ -42,7 +42,8 @@ final class ZestCoreTests: XCTestCase {
 
   func testOpenAndQueryRealIndex() throws {
     let core = try requireIntegrationIndex()
-    let rows = core.query("", scope: integrationScope, maxDepth: 1, maxResults: 5_000)
+    let rows =
+      core.query("", scope: integrationScope, maxDepth: 1, maxResults: 5_000, cancel: nil) ?? []
     if rows.isEmpty {
       if configuredIndexPath != nil {
         XCTFail("Configured fixture index does not cover \(integrationScope)")

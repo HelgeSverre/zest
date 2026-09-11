@@ -28,7 +28,6 @@ final class Breadcrumb: NSView {
   }
 
   private let coordinator: AppCoordinator
-  private static let accent = Theme.darkAccent
 
   private let stack = NSStackView()
   private let editField = EditField()
@@ -41,7 +40,7 @@ final class Breadcrumb: NSView {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
     layer?.borderWidth = 1
     layer?.borderColor = NSColor.clear.cgColor
 
@@ -246,7 +245,7 @@ final class Breadcrumb: NSView {
   private func attributes(for style: SegStyle, path: String) -> (NSFont, NSColor) {
     switch style {
     case .home:
-      return (.monospacedSystemFont(ofSize: 12.5, weight: .semibold), Breadcrumb.accent.accent)
+      return (.monospacedSystemFont(ofSize: 12.5, weight: .semibold), Theme.darkAccent.accent)
     case .root:
       return (.systemFont(ofSize: 12.5, weight: .regular), Theme.textTertiary)
     case .parent:
@@ -326,8 +325,8 @@ final class Breadcrumb: NSView {
 
     // Accent focus ring: border accentLine + soft glow.
     layer?.backgroundColor = Theme.background.cgColor
-    layer?.borderColor = Breadcrumb.accent.accentLine.cgColor
-    layer?.shadowColor = Breadcrumb.accent.accentSoft.cgColor
+    layer?.borderColor = Theme.darkAccent.accentLine.cgColor
+    layer?.shadowColor = Theme.darkAccent.accentSoft.cgColor
     layer?.shadowOpacity = 1
     layer?.shadowRadius = 3
     layer?.shadowOffset = .zero
@@ -343,6 +342,12 @@ final class Breadcrumb: NSView {
     guard editing else {
       return
     }
+    leaveEditMode()
+  }
+
+  /// Visual teardown shared by cancel and commit. `editing` goes false before
+  /// `refresh()` so the rebuilt crumbs reflect the current path.
+  private func leaveEditMode() {
     editing = false
     editField.isHidden = true
     stack.isHidden = false
@@ -363,18 +368,8 @@ final class Breadcrumb: NSView {
       editField.currentEditor()?.selectAll(nil)
       return
     }
-    // Success: exit edit mode. Set editing = false before refresh() so the
-    // rebuilt crumbs reflect the new path (refresh() guards on editing).
-    editing = false
-    editField.isHidden = true
-    stack.isHidden = false
-    editWidthConstraint?.isActive = false
-    layer?.backgroundColor = NSColor.clear.cgColor
-    layer?.borderColor = NSColor.clear.cgColor
-    layer?.shadowOpacity = 0
-    window?.makeFirstResponder(window)  // drop focus off the now-hidden field
-    refresh()
-    needsDisplay = true  // parity with exitEdit()'s visual teardown
+    window?.makeFirstResponder(window)  // drop focus off the soon-hidden field
+    leaveEditMode()
   }
 
   // MARK: Hit-testing for click-to-edit

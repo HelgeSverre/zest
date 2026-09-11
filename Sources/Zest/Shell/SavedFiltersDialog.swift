@@ -337,7 +337,6 @@ final class DialogButton: NSButton {
   enum Style { case neutral, primary, ghost }
 
   private let style: Style
-  private static let accent = Theme.darkAccent
 
   init(title: String, style: Style) {
     self.style = style
@@ -346,14 +345,14 @@ final class DialogButton: NSButton {
     isBordered = false
     setButtonType(.momentaryChange)
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
     heightAnchor.constraint(equalToConstant: 30).isActive = true
 
     let weight: NSFont.Weight = style == .primary ? .semibold : .regular
     let color: NSColor =
       switch style {
       case .neutral: Theme.text
-      case .primary: DialogButton.accent.onAccent
+      case .primary: Theme.darkAccent.onAccent
       case .ghost: Theme.textSecondary
       }
     attributedTitle = NSAttributedString(
@@ -381,7 +380,7 @@ final class DialogButton: NSButton {
       layer?.borderWidth = 1
       layer?.borderColor = Theme.border.cgColor
     case .primary:
-      layer?.backgroundColor = DialogButton.accent.accent.cgColor
+      layer?.backgroundColor = Theme.darkAccent.accent.cgColor
       layer?.borderWidth = 0
     case .ghost:
       layer?.backgroundColor = (hovered ? Theme.hover : .clear).cgColor
@@ -423,7 +422,7 @@ final class DialogIconButton: NSButton {
     isBordered = false
     setButtonType(.momentaryChange)
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
     image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibility)?
       .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .medium))
     imagePosition = .imageOnly
@@ -475,7 +474,7 @@ private final class DialogFilterRow: NSView {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
 
     let grip = NSTextField(labelWithString: "⠿")
     grip.font = .systemFont(ofSize: 14)
@@ -592,7 +591,6 @@ private final class FocusReportingTextField: NSTextField {
 /// Prototype `.sf-edit`: inline form on the window-background surface with
 /// bordered fields (accent border while focused) + ghost Cancel / primary Save.
 private final class DialogEditForm: NSView {
-  private static let accent = Theme.darkAccent
 
   private let onSave: (String, String) -> Void
   private let onCancel: () -> Void
@@ -711,7 +709,7 @@ private final class DialogEditForm: NSView {
     box.layer?.backgroundColor = Theme.panel.cgColor
     box.layer?.borderWidth = 1
     box.layer?.borderColor = Theme.border.cgColor
-    box.layer?.cornerRadius = 6
+    box.layer?.cornerRadius = Theme.Metrics.radius
     box.addSubview(field)
     NSLayoutConstraint.activate([
       box.heightAnchor.constraint(equalToConstant: 30),
@@ -721,7 +719,7 @@ private final class DialogEditForm: NSView {
     ])
     field.onFocusChange = { [weak box] focused in
       box?.layer?.borderColor =
-        (focused ? DialogEditForm.accent.accentLine : Theme.border).cgColor
+        (focused ? Theme.darkAccent.accentLine : Theme.border).cgColor
     }
     return box
   }

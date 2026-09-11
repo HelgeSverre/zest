@@ -8,6 +8,15 @@ import AppKit
 /// "render" is a forced full layout + draw of the window afterwards. The Zig
 /// engine alone is `just bench-capi`; this measures everything above it.
 enum Bench {
+  private struct Result: Encodable {
+    let step: String
+    let rows: Int
+    let queryMsMedian: Double
+    let queryMsP90: Double
+    let renderMsMedian: Double
+    let renderMsP90: Double
+  }
+
   private struct Step {
     let name: String
     let run: (AppCoordinator) -> Void
@@ -60,9 +69,9 @@ enum Bench {
     // immediately and false once the fresh rows for this generation land.
     var landed = false
     let original = coordinator.onChange
-    coordinator.onChange = {
+    coordinator.onChange = { [weak coordinator] in
       original?()
-      if !coordinator.isLoading { landed = true }
+      if coordinator?.isLoading == false { landed = true }
     }
     // Drain the initial query kicked by viewDidLoad + let layout settle.
     RunLoopPump.run(0.35)
@@ -97,28 +106,30 @@ enum Bench {
     let wall = now() - wallStart
     window.orderOut(nil)
 
-    let results = steps.indices.map { s -> [String: Any] in
-      [
-        "step": steps[s].name, "rows": rows[s],
-        "query_ms_median": percentile(query[s], 0.5), "query_ms_p90": percentile(query[s], 0.9),
-        "render_ms_median": percentile(render[s], 0.5), "render_ms_p90": percentile(render[s], 0.9),
-      ]
+    let results = steps.indices.map { s in
+      Result(
+        step: steps[s].name, rows: rows[s],
+        queryMsMedian: percentile(query[s], 0.5), queryMsP90: percentile(query[s], 0.9),
+        renderMsMedian: percentile(render[s], 0.5), renderMsP90: percentile(render[s], 0.9))
     }
     if json {
-      let data = try! JSONSerialization.data(
-        withJSONObject: results, options: [.prettyPrinted, .sortedKeys])
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+      encoder.keyEncodingStrategy = .convertToSnakeCase
+      guard let data = try? encoder.encode(results) else {
+        log("bench ERROR: could not encode results")
+        return 1
+      }
       print(String(decoding: data, as: UTF8.self))
     } else {
       let w = steps.map(\.name.count).max() ?? 0
       let header = "step".padding(toLength: w, withPad: " ", startingAt: 0)
       print("\(header)  query med   query p90  render med  render p90    rows")
       for r in results {
-        let name = (r["step"] as! String).padding(toLength: w, withPad: " ", startingAt: 0)
-        let cols = [
-          "query_ms_median", "query_ms_p90", "render_ms_median", "render_ms_p90",
-        ].map { String(format: "%9.1f", r[$0] as! Double) }
-        print(
-          "\(name)  \(cols.joined(separator: "   "))  \(String(format: "%6d", r["rows"] as! Int))")
+        let name = r.step.padding(toLength: w, withPad: " ", startingAt: 0)
+        let cols = [r.queryMsMedian, r.queryMsP90, r.renderMsMedian, r.renderMsP90]
+          .map { String(format: "%9.1f", $0) }
+        print("\(name)  \(cols.joined(separator: "   "))  \(String(format: "%6d", r.rows))")
       }
       print(
         String(

@@ -18,8 +18,6 @@ final class StatusBarView: NSView {
   private let progressBar = NSHostingView(rootView: IndexProgressBar(fraction: nil, active: false))
   var onProgressClick: (() -> Void)?
 
-  private static let accent = Theme.darkAccent
-
   /// Count formatter: SPACE thousands separators (e.g. 1 240 118).
   private static let countFormatter: NumberFormatter = {
     let f = NumberFormatter()
@@ -148,7 +146,7 @@ final class StatusBarView: NSView {
   func refresh() {
     let count = coordinator.core?.totalCount ?? 0
     countLabel.stringValue = formattedCount(count)
-    freshnessLabel.stringValue = Self.freshnessText() ?? ""
+    freshnessLabel.stringValue = freshnessText() ?? ""
   }
 
   // MARK: Count
@@ -169,7 +167,7 @@ final class StatusBarView: NSView {
   private func flashCount() {
     // Animate the text color toward the accent, then back. NSTextField's
     // textColor isn't directly animatable, so step it on a short timer.
-    let accent = Self.accent.accent
+    let accent = Theme.darkAccent.accent
     let rest = Theme.textSecondary
     countLabel.textColor = accent
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -188,18 +186,12 @@ final class StatusBarView: NSView {
 
   // MARK: Freshness
 
-  /// The index file's modification date as a relative bucket (mirrors the file
-  /// list's relativeText). Nil if the index is missing / unreadable.
-  private static func freshnessText() -> String? {
-    let fm = FileManager.default
-    guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-      return nil
-    }
-    let indexURL = support.appendingPathComponent("zest/index.zst")
-    guard let attrs = try? fm.attributesOfItem(atPath: indexURL.path),
-      let mtime = attrs[.modificationDate] as? Date
-    else { return nil }
-    return "updated \(relative(from: mtime)) ago"
+  /// The loaded index's modification date as a relative bucket (mirrors the
+  /// file list's relativeText). Read from the in-memory identity: this runs on
+  /// every change, and the 5s reload poll already stats the file.
+  private func freshnessText() -> String? {
+    guard let mtime = coordinator.core?.fileIdentity.mtime else { return nil }
+    return "updated \(Self.relative(from: Date(timeIntervalSince1970: TimeInterval(mtime)))) ago"
   }
 
   /// Relative bucket from a date: <1d "today" → bare, else "Nd"/"Nmo"/"Ny".

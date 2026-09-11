@@ -608,7 +608,6 @@ private final class CatRow: FocusableRow {
   private var expanded: Bool
   private var active = false
   private var hovering = false
-  private static let accent = Theme.darkAccent
 
   /// Leading 22pt is the chevron-only hit zone; the rest of the row selects.
   private static let chevronHitWidth: CGFloat = 22
@@ -629,7 +628,7 @@ private final class CatRow: FocusableRow {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
     setAccessibilityIdentifier(A11y.sidebarCategory(meta.queryKey))
 
     // Chevron
@@ -708,7 +707,7 @@ private final class CatRow: FocusableRow {
 
   private func updateBackground() {
     if active {
-      layer?.backgroundColor = CatRow.accent.accentSoft.cgColor
+      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
     } else if hovering {
       layer?.backgroundColor = Theme.hover.cgColor
     } else {
@@ -770,7 +769,6 @@ private final class ExtRow: FocusableRow {
   private let onSelect: (_ additive: Bool) -> Void
   private var active = false
   private var hovering = false
-  private static let accent = Theme.darkAccent
 
   private let dot = NSView()
   private let label = NSTextField(labelWithString: "")
@@ -784,7 +782,7 @@ private final class ExtRow: FocusableRow {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
 
     dot.wantsLayer = true
     dot.layer?.backgroundColor = meta.color.withAlphaComponent(0.55).cgColor
@@ -837,7 +835,7 @@ private final class ExtRow: FocusableRow {
 
   private func updateBackground() {
     if active {
-      layer?.backgroundColor = ExtRow.accent.accentSoft.cgColor
+      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
     } else if hovering {
       layer?.backgroundColor = Theme.hover.cgColor
     } else {
@@ -899,7 +897,6 @@ private final class PinRow: FocusableRow {
   var folderColor: NSColor? {
     didSet { applyIconTint() }
   }
-  private static let accent = Theme.darkAccent
 
   private let icon = NSImageView()
   private let label = NSTextField(labelWithString: "")
@@ -912,7 +909,7 @@ private final class PinRow: FocusableRow {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
 
     let img = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
@@ -968,7 +965,7 @@ private final class PinRow: FocusableRow {
 
   private func updateBackground() {
     if active {
-      layer?.backgroundColor = PinRow.accent.accentSoft.cgColor
+      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
     } else if hovering {
       layer?.backgroundColor = Theme.hover.cgColor
     } else {

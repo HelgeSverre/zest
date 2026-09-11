@@ -54,6 +54,17 @@ enum Theme {
   /// chrome tracks identically everywhere.
   static let sectionHeaderKern: CGFloat = 0.9
 
+  /// Layout metrics shared across views. The row-height pair is read by both
+  /// `buildTable()` and `heightOfRow`, so it must not drift.
+  enum Metrics {
+    static let rowHeight: CGFloat = 34
+    static let searchRowHeight: CGFloat = 48
+    static let toolbarHeight: CGFloat = 56
+    static let filterBarHeight: CGFloat = 42
+    static let statusBarHeight: CGFloat = 28
+    static let radius: CGFloat = 6
+  }
+
   /// The app currently ships dark-only; every view derives the same accent
   /// family. Compute it once instead of per-type statics.
   static let darkAccent = deriveAccent(base: defaultAccentBase, theme: .dark)

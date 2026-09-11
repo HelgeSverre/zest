@@ -52,122 +52,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// that mirror the old Zig UI: ⌘↑ = Go Up, ⌘↓ = Open Selection.
   func installMainMenu() {
     let mainMenu = NSMenu()
+    let indexMenuItem = NSMenuItem()
+    indexMenuItem.submenu = indexerMenu.menu
+    for item in [
+      makeAppMenu(), makeFileMenu(), makeEditMenu(), makeViewMenu(), indexMenuItem,
+      makeNavigationMenu(), makeWindowMenu(), makeMenu("Help", items: []),
+    ] {
+      mainMenu.addItem(item)
+    }
+    NSApp.mainMenu = mainMenu
+  }
 
-    // Application menu (titled with the process name automatically).
-    let appMenuItem = NSMenuItem()
-    mainMenu.addItem(appMenuItem)
-    let appMenu = NSMenu()
-    appMenu.addItem(
-      withTitle: "About Zest", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-      keyEquivalent: "",
-    )
-    appMenu.addItem(.separator())
-    appMenu.addItem(
-      withTitle: "Hide Zest", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h",
-    )
+  /// Application menu (titled with the process name automatically).
+  private func makeAppMenu() -> NSMenuItem {
     let hideOthers = NSMenuItem(
       title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
       keyEquivalent: "h",
     )
     hideOthers.keyEquivalentModifierMask = [.command, .option]
-    appMenu.addItem(hideOthers)
-    appMenu.addItem(
-      withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
-      keyEquivalent: "",
-    )
-    appMenu.addItem(.separator())
-    appMenu.addItem(
-      withTitle: "Quit Zest", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q",
-    )
-    appMenuItem.submenu = appMenu
+    return makeMenu(
+      "",
+      items: [
+        NSMenuItem(
+          title: "About Zest", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+          keyEquivalent: ""),
+        .separator(),
+        NSMenuItem(
+          title: "Hide Zest", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
+        hideOthers,
+        NSMenuItem(
+          title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+          keyEquivalent: ""),
+        .separator(),
+        NSMenuItem(
+          title: "Quit Zest", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"),
+      ])
+  }
 
-    // File menu — Close Window is the only universal File action we need.
-    mainMenu.addItem(
-      makeMenu(
-        "File",
-        items: [
-          NSMenuItem(
-            title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w",
-          )
-        ],
-      ),
-    )
+  /// Close Window is the only universal File action we need.
+  private func makeFileMenu() -> NSMenuItem {
+    makeMenu(
+      "File",
+      items: [
+        NSMenuItem(
+          title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+      ])
+  }
 
-    // Edit menu — these selectors walk the responder chain so Cut/Copy/Paste
-    // land in the active text field (the search field), not on a fixed target.
-    let undo = NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+  /// These selectors walk the responder chain so Cut/Copy/Paste land in the
+  /// active text field (the search field), not on a fixed target.
+  private func makeEditMenu() -> NSMenuItem {
     let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
     redo.keyEquivalentModifierMask = [.command, .shift]
-    let cut = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-    let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-    let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-    let selectAll = NSMenuItem(
-      title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a",
-    )
     let find = NSMenuItem(title: "Find", action: #selector(menuFocusSearch(_:)), keyEquivalent: "f")
     find.target = self
-    mainMenu.addItem(
-      makeMenu(
-        "Edit", items: [undo, redo, .separator(), cut, copy, paste, selectAll, .separator(), find]),
-    )
+    return makeMenu(
+      "Edit",
+      items: [
+        NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"), redo,
+        .separator(),
+        NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"),
+        NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"),
+        NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"),
+        NSMenuItem(
+          title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"),
+        .separator(), find,
+      ])
+  }
 
-    // View menu. Checkmark state comes from validateMenuItem, so it stays in
-    // sync however the pref changes.
-    let foldersOnTop = NSMenuItem(
-      title: "Folders on Top", action: #selector(menuToggleFoldersOnTop(_:)), keyEquivalent: "",
-    )
-    foldersOnTop.target = self
-    let focusSidebar = NSMenuItem(
-      title: "Focus Sidebar", action: #selector(menuFocusSidebar(_:)), keyEquivalent: "1")
-    focusSidebar.target = self
-    let focusList = NSMenuItem(
-      title: "Focus File List", action: #selector(menuFocusFileList(_:)), keyEquivalent: "2")
-    focusList.target = self
-    mainMenu.addItem(
-      makeMenu("View", items: [foldersOnTop, .separator(), focusSidebar, focusList]))
+  /// Checkmark state comes from validateMenuItem, so it stays in sync however
+  /// the pref changes.
+  private func makeViewMenu() -> NSMenuItem {
+    let items = [
+      NSMenuItem(
+        title: "Folders on Top", action: #selector(menuToggleFoldersOnTop(_:)), keyEquivalent: ""),
+      .separator(),
+      NSMenuItem(
+        title: "Focus Sidebar", action: #selector(menuFocusSidebar(_:)), keyEquivalent: "1"),
+      NSMenuItem(
+        title: "Focus File List", action: #selector(menuFocusFileList(_:)), keyEquivalent: "2"),
+    ]
+    for item in items { item.target = self }
+    return makeMenu("View", items: items)
+  }
 
-    let indexMenuItem = NSMenuItem()
-    indexMenuItem.submenu = indexerMenu.menu
-    mainMenu.addItem(indexMenuItem)
+  /// Keyboard shortcuts carried over from the old Zig UI: ⌘↑ Go Up, ⌘↓ Open.
+  private func makeNavigationMenu() -> NSMenuItem {
+    let items = [
+      NSMenuItem(title: "Go Up", action: #selector(menuGoUp(_:)), keyEquivalent: "\u{F700}"),
+      NSMenuItem(
+        title: "Open Selected", action: #selector(menuOpenSelected(_:)), keyEquivalent: "\u{F701}"),
+    ]
+    for item in items {
+      item.keyEquivalentModifierMask = [.command]
+      item.target = self
+    }
+    return makeMenu("Navigation", items: items)
+  }
 
-    // Navigation — the new keyboard shortcuts from the old Zig UI.
-    let navMenu = NSMenu(title: "Navigation")
-    let goUp = NSMenuItem(
-      title: "Go Up", action: #selector(menuGoUp(_:)), keyEquivalent: "\u{F700}",
-    )
-    goUp.keyEquivalentModifierMask = [.command]
-    goUp.target = self
-    navMenu.addItem(goUp)
-
-    let openSel = NSMenuItem(
-      title: "Open Selected", action: #selector(menuOpenSelected(_:)), keyEquivalent: "\u{F701}",
-    )
-    openSel.keyEquivalentModifierMask = [.command]
-    openSel.target = self
-    navMenu.addItem(openSel)
-
-    let navMenuItem = NSMenuItem()
-    navMenuItem.submenu = navMenu
-    mainMenu.addItem(navMenuItem)
-
-    // Window menu — Minimize + Zoom; NSApp.windowsMenu will populate the
-    // window list automatically once we install this.
-    let windowMenu = NSMenu(title: "Window")
-    windowMenu.addItem(
-      withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m",
-    )
-    windowMenu.addItem(
-      withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "",
-    )
-    let windowMenuItem = NSMenuItem()
-    windowMenuItem.submenu = windowMenu
-    mainMenu.addItem(windowMenuItem)
-    NSApp.windowsMenu = windowMenu
-
-    // Help menu — placeholder, keeps the bar balanced.
-    mainMenu.addItem(makeMenu("Help", items: []))
-
-    NSApp.mainMenu = mainMenu
+  /// Minimize + Zoom; NSApp.windowsMenu populates the window list itself.
+  private func makeWindowMenu() -> NSMenuItem {
+    let item = makeMenu(
+      "Window",
+      items: [
+        NSMenuItem(
+          title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"),
+        NSMenuItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""),
+      ])
+    NSApp.windowsMenu = item.submenu
+    return item
   }
 
   /// Build a top-level menu with the given title and items, returning the

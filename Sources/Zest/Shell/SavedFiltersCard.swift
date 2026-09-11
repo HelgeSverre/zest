@@ -7,7 +7,6 @@ import AppKit
 /// RootViewController, hidden until shown.
 final class SavedFiltersCard: NSView {
   private let coordinator: AppCoordinator
-  private static let accent = Theme.darkAccent
 
   var onManage: (() -> Void)?
   var onSaveCurrent: ((String) -> Void)?
@@ -175,8 +174,8 @@ final class SavedFiltersCard: NSView {
     let currentQuery = coordinator.queryText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !currentQuery.isEmpty, !Self.querySavedAlready(currentQuery, in: filters) {
       let saveRow = CardRow(
-        icon: "plus.circle", iconTint: SavedFiltersCard.accent.accent,
-        title: "Save current search", titleColor: SavedFiltersCard.accent.accent,
+        icon: "plus.circle", iconTint: Theme.darkAccent.accent,
+        title: "Save current search", titleColor: Theme.darkAccent.accent,
         titleWeight: .medium, query: currentQuery
       ) { [weak self] in
         self?.hide()
@@ -186,8 +185,8 @@ final class SavedFiltersCard: NSView {
     }
 
     let manage = CardRow(
-      icon: "gearshape", iconTint: SavedFiltersCard.accent.accentHi,
-      title: "Manage filters…", titleColor: SavedFiltersCard.accent.accentHi
+      icon: "gearshape", iconTint: Theme.darkAccent.accentHi,
+      title: "Manage filters…", titleColor: Theme.darkAccent.accentHi
     ) { [weak self] in
       self?.hide()
       self?.onManage?()
@@ -235,7 +234,7 @@ private final class CardRow: NSView {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
 
     var views: [NSView] = []
 

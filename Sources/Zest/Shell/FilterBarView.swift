@@ -155,7 +155,6 @@ private final class ScopeControl: NSView {
     private let onClick: () -> Void
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private static let accent = Theme.darkAccent
     private var selected = false
 
     init(title: String, symbol: String, onClick: @escaping () -> Void) {
@@ -204,7 +203,7 @@ private final class ScopeControl: NSView {
         layer?.borderWidth = 1
         layer?.borderColor = Theme.border.cgColor
         label.textColor = Theme.text
-        icon.contentTintColor = Segment.accent.accent
+        icon.contentTintColor = Theme.darkAccent.accent
       } else {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
@@ -263,7 +262,7 @@ private final class SortLabelButton: NSView {
     super.init(frame: frameRect)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.cornerRadius = 6
+    layer?.cornerRadius = Theme.Metrics.radius
 
     let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
     icon.image = NSImage(systemSymbolName: "arrow.up.arrow.down", accessibilityDescription: "Sort")?
