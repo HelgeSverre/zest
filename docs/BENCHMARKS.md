@@ -34,6 +34,14 @@ page cache. Since 2026-08-14 a superseded query is also *cancelled* rather than
 merely dropped on delivery (`zest_query_cancellable`), so the scan behind a
 keystroke stops instead of holding the serial query queue.
 
+> **Review sweep (2026-09-11, M2 Max, 4.09M entries, same index file for both
+> engines):** result counts identical for every op before/after. `ext_breakdown
+> x9 subtree` 63.6 → 49.9 ms median (one redundant bucket walk removed);
+> search medians unchanged within noise. Full scan: build 1.9 → 1.6 s, peak
+> RSS 1.80 → 1.59 GB, walk unchanged (kernel-bound: 12 threads doubled sys
+> time, 8 stays). Daemon rebuilds are now incremental: merge 0.1–0.3 s +
+> build 0.8 s + write 0.6 s instead of a 17 s / 60 CPU-second full walk.
+
 ## Synthetic harness (`just bench-search`)
 
 `bench_capi.zig` needs the developer's real `index.zst`; `bench_search.zig`
