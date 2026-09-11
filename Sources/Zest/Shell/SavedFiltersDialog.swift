@@ -45,11 +45,7 @@ final class SavedFiltersDialog: NSView {
     isHidden = false
     reload()
     if editingIndex == nil { window?.makeFirstResponder(self) }
-    alphaValue = 0
-    NSAnimationContext.runAnimationGroup { ctx in
-      ctx.duration = 0.16
-      animator().alphaValue = 1
-    }
+    fadeIn(duration: 0.16)
   }
 
   func hide() {
@@ -232,10 +228,7 @@ final class SavedFiltersDialog: NSView {
   // MARK: - Data
 
   private func clearStack() {
-    for view in stack.arrangedSubviews {
-      stack.removeArrangedSubview(view)
-      view.removeFromSuperview()
-    }
+    stack.removeAllArranged()
   }
 
   /// Adds a row stretched to the body width (stack edgeInsets are 10/side).
@@ -388,15 +381,9 @@ final class DialogButton: NSButton {
     }
   }
 
-  private var tracking: NSTrackingArea?
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {
@@ -435,15 +422,9 @@ final class DialogIconButton: NSButton {
 
   required init?(coder: NSCoder) { fatalError() }
 
-  private var tracking: NSTrackingArea?
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {
@@ -541,21 +522,14 @@ private final class DialogFilterRow: NSView {
   @objc private func deleteTapped() { onDelete() }
 
   override func mouseDown(with event: NSEvent) {
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
+    trackClick {
       onEdit()
     }
   }
 
-  private var tracking: NSTrackingArea?
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {

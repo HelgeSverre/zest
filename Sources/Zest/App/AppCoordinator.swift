@@ -43,9 +43,12 @@ struct Filter: Equatable {
     var plainParts: [String] = []
     for token in s.split(separator: " ", omittingEmptySubsequences: true) {
       let lower = token.lowercased()
-      if lower.hasPrefix("cat:") {
-        let v = String(lower.dropFirst(4))
-        if !v.isEmpty { f.category = v }
+      if lower.hasPrefix("cat:"),
+        Category.all.contains(where: { $0.queryKey == lower.dropFirst(4) })
+      {
+        // Only known keys become structured; `cat:bogus` stays plain text like
+        // every other unrecognised qualifier, instead of silently matching nothing.
+        f.category = String(lower.dropFirst(4))
       } else if lower.hasPrefix("ext:") {
         // Keep Swift's structured filter in the engine's canonical form.
         // Foundation lowercasing differs for several Unicode code points and

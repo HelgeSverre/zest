@@ -559,8 +559,46 @@ private final class CategorySection: NSView {
 private class FocusableRow: NSView {
   override var acceptsFirstResponder: Bool { true }
 
+  let label = NSTextField(labelWithString: "")
+  private(set) var active = false
+  private var hovering = false
+
   /// The row's activation — what a plain click does.
   func performRowAction() {}
+
+  /// Active rows read as primary text on the accent-soft fill; hover is the
+  /// plain `Theme.hover` wash underneath that.
+  func setActive(_ value: Bool) {
+    active = value
+    label.textColor = value ? Theme.text : Theme.textSecondary
+    updateBackground()
+  }
+
+  private func updateBackground() {
+    if active {
+      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
+    } else if hovering {
+      layer?.backgroundColor = Theme.hover.cgColor
+    } else {
+      layer?.backgroundColor = NSColor.clear.cgColor
+    }
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    refreshHoverTracking()
+  }
+
+  override func mouseEntered(with _: NSEvent) {
+    guard isTopmostUnderMouse else { return }
+    hovering = true
+    updateBackground()
+  }
+
+  override func mouseExited(with _: NSEvent) {
+    hovering = false
+    updateBackground()
+  }
 
   private func showFocusRing(_ focused: Bool) {
     layer?.borderWidth = focused ? 1.5 : 0
@@ -606,15 +644,12 @@ private final class CatRow: FocusableRow {
   private let onToggleExpand: (() -> Void)?
   private let hasChildren: Bool
   private var expanded: Bool
-  private var active = false
-  private var hovering = false
 
   /// Leading 22pt is the chevron-only hit zone; the rest of the row selects.
   private static let chevronHitWidth: CGFloat = 22
 
   private let chevron = NSImageView()
   private let dot = NSView()
-  private let label = NSTextField(labelWithString: "")
   private let countLabel = NSTextField(labelWithString: "")
 
   init(
@@ -699,22 +734,6 @@ private final class CatRow: FocusableRow {
     fatalError()
   }
 
-  func setActive(_ value: Bool) {
-    active = value
-    label.textColor = value ? Theme.text : Theme.textSecondary
-    updateBackground()
-  }
-
-  private func updateBackground() {
-    if active {
-      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
-    } else if hovering {
-      layer?.backgroundColor = Theme.hover.cgColor
-    } else {
-      layer?.backgroundColor = NSColor.clear.cgColor
-    }
-  }
-
   override func mouseDown(with _: NSEvent) {
     let up = window?.nextEvent(matching: [.leftMouseUp])
     guard let up, bounds.contains(convert(up.locationInWindow, from: nil)) else {
@@ -733,31 +752,6 @@ private final class CatRow: FocusableRow {
     onSelect()
   }
 
-  private var tracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let t = tracking {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil,
-    )
-    addTrackingArea(t)
-    tracking = t
-  }
-
-  override func mouseEntered(with _: NSEvent) {
-    guard isTopmostUnderMouse else { return }
-    hovering = true
-    updateBackground()
-  }
-
-  override func mouseExited(with _: NSEvent) {
-    hovering = false
-    updateBackground()
-  }
 }
 
 // MARK: - Extension row
@@ -767,11 +761,8 @@ private final class CatRow: FocusableRow {
 private final class ExtRow: FocusableRow {
   /// `additive` is true for ⌘/⌃-clicks (toggle in the multi-ext OR-set).
   private let onSelect: (_ additive: Bool) -> Void
-  private var active = false
-  private var hovering = false
 
   private let dot = NSView()
-  private let label = NSTextField(labelWithString: "")
   private let countLabel = NSTextField(labelWithString: "")
 
   init(
@@ -827,61 +818,17 @@ private final class ExtRow: FocusableRow {
     fatalError()
   }
 
-  func setActive(_ value: Bool) {
-    active = value
-    label.textColor = value ? Theme.text : Theme.textSecondary
-    updateBackground()
-  }
-
-  private func updateBackground() {
-    if active {
-      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
-    } else if hovering {
-      layer?.backgroundColor = Theme.hover.cgColor
-    } else {
-      layer?.backgroundColor = NSColor.clear.cgColor
-    }
-  }
-
   override func mouseDown(with event: NSEvent) {
     // Modifiers come from the mouse-down (the user may release ⌘/⌃ before
     // the button); ⌃ included because this row has no context menu.
     let additive = !event.modifierFlags.intersection([.command, .control]).isEmpty
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
-      onSelect(additive)
-    }
+    trackClick { onSelect(additive) }
   }
 
   override func performRowAction() {
     onSelect(false)
   }
 
-  private var tracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let t = tracking {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil,
-    )
-    addTrackingArea(t)
-    tracking = t
-  }
-
-  override func mouseEntered(with _: NSEvent) {
-    guard isTopmostUnderMouse else { return }
-    hovering = true
-    updateBackground()
-  }
-
-  override func mouseExited(with _: NSEvent) {
-    hovering = false
-    updateBackground()
-  }
 }
 
 // MARK: - Pin row
@@ -899,9 +846,6 @@ private final class PinRow: FocusableRow {
   }
 
   private let icon = NSImageView()
-  private let label = NSTextField(labelWithString: "")
-  private var active = false
-  private var hovering = false
 
   init(label text: String, symbol: String, path: String, onClick: @escaping (String) -> Void) {
     self.path = path
@@ -946,11 +890,9 @@ private final class PinRow: FocusableRow {
     fatalError()
   }
 
-  func setActive(_ value: Bool) {
-    active = value
-    label.textColor = value ? Theme.text : Theme.textSecondary
+  override func setActive(_ value: Bool) {
+    super.setActive(value)
     applyIconTint()
-    updateBackground()
   }
 
   private func applyIconTint() {
@@ -963,21 +905,8 @@ private final class PinRow: FocusableRow {
     }
   }
 
-  private func updateBackground() {
-    if active {
-      layer?.backgroundColor = Theme.darkAccent.accentSoft.cgColor
-    } else if hovering {
-      layer?.backgroundColor = Theme.hover.cgColor
-    } else {
-      layer?.backgroundColor = NSColor.clear.cgColor
-    }
-  }
-
   override func mouseDown(with event: NSEvent) {
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
-      onClick(path)
-    }
+    trackClick { onClick(path) }
   }
 
   override func performRowAction() {
@@ -990,29 +919,4 @@ private final class PinRow: FocusableRow {
     }
   }
 
-  private var tracking: NSTrackingArea?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let t = tracking {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil,
-    )
-    addTrackingArea(t)
-    tracking = t
-  }
-
-  override func mouseEntered(with _: NSEvent) {
-    guard isTopmostUnderMouse else { return }
-    hovering = true
-    updateBackground()
-  }
-
-  override func mouseExited(with _: NSEvent) {
-    hovering = false
-    updateBackground()
-  }
 }

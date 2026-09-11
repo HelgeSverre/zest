@@ -187,19 +187,12 @@ final class PillButton: NSView {
   required init?(coder: NSCoder) { fatalError() }
 
   override func mouseDown(with event: NSEvent) {
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) { onClick?() }
+    trackClick { onClick?() }
   }
 
-  private var tracking: NSTrackingArea?
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
   override func mouseEntered(with event: NSEvent) {
     guard isTopmostUnderMouse else { return }
@@ -267,21 +260,14 @@ final class IconButton: NSView {
   override func mouseDown(with event: NSEvent) {
     guard enabled else { return }
     // Confirm the mouse-up lands inside before firing (standard button feel).
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
+    trackClick {
       onClick?()
     }
   }
 
-  private var tracking: NSTrackingArea?
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {

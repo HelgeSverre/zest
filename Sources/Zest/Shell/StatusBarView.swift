@@ -234,7 +234,6 @@ private final class LiveDotView: NSView {
 /// A label that fires `onCopy` on click and shows a copy cursor on hover.
 private final class ClickToCopyLabel: NSTextField {
   var onCopy: (() -> Void)?
-  private var trackingArea: NSTrackingArea?
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -253,12 +252,7 @@ private final class ClickToCopyLabel: NSTextField {
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let trackingArea { removeTrackingArea(trackingArea) }
-    let ta = NSTrackingArea(
-      rect: bounds, options: [.activeInActiveApp, .mouseEnteredAndExited], owner: self,
-      userInfo: nil)
-    addTrackingArea(ta)
-    trackingArea = ta
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {

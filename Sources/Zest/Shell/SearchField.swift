@@ -303,27 +303,12 @@ private final class ClearButton: NSView {
   }
 
   override func mouseDown(with _: NSEvent) {
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up,
-      bounds.contains(convert(up.locationInWindow, from: nil))
-    {
-      onClick?()
-    }
+    trackClick { onClick?() }
   }
-
-  private var tracking: NSTrackingArea?
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil,
-    )
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with _: NSEvent) {

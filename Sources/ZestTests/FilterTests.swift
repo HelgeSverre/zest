@@ -61,6 +61,12 @@ final class FilterTests: XCTestCase {
     XCTAssertTrue(f.extensions.isEmpty)
   }
 
+  func testUnknownCategoryStaysAsText() {
+    let f = Filter.parse("cat:bogus report")
+    XCTAssertNil(f.category)
+    XCTAssertEqual("cat:bogus report", f.text)
+  }
+
   func testCategoryIsLowercased() {
     // The engine matches cat: keys case-insensitively; we normalize to
     // lowercase so the sidebar's `filter.category == meta.queryKey` check

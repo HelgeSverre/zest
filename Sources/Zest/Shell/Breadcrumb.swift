@@ -141,10 +141,7 @@ final class Breadcrumb: NSView {
     guard !editing else {
       return
     }
-    for sub in stack.arrangedSubviews {
-      stack.removeArrangedSubview(sub)
-      sub.removeFromSuperview()
-    }
+    stack.removeAllArranged()
 
     let tokens = buildTokens()
     guard !tokens.isEmpty else { return }
@@ -385,18 +382,10 @@ final class Breadcrumb: NSView {
   }
 
   // Hover background on the display control.
-  private var trackingArea: NSTrackingArea?
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = trackingArea {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    trackingArea = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {
@@ -489,25 +478,16 @@ private final class SegmentView: NSView {
   }
 
   override func mouseDown(with event: NSEvent) {
-    let up = window?.nextEvent(matching: [.leftMouseUp])
-    if let up, bounds.contains(convert(up.locationInWindow, from: nil)) {
+    trackClick {
       onClick(navPath)
     }
   }
 
   // Light hover affordance per crumb.
-  private var tracking: NSTrackingArea?
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking {
-      removeTrackingArea(t)
-    }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {
@@ -556,16 +536,9 @@ private final class CollapsedToken: NSView {
     onClick?()
   }
 
-  private var tracking: NSTrackingArea?
-
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let t = tracking { removeTrackingArea(t) }
-    let t = NSTrackingArea(
-      rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-      owner: self, userInfo: nil)
-    addTrackingArea(t)
-    tracking = t
+    refreshHoverTracking()
   }
 
   override func mouseEntered(with event: NSEvent) {
