@@ -256,6 +256,7 @@ final class AppCoordinator {
 
   func setFolderColor(for path: String, color: NSColor?) {
     userState.setFolderColor(forPath: path, color: color)
+    resultsVersion &+= 1
     notifyChange()
   }
 
@@ -389,7 +390,14 @@ final class AppCoordinator {
   /// count) shares this single query. Kept (stale) while a fresh query is in
   /// flight so observers never render an empty flash; written only on the
   /// main thread (a non-stale delivery, or `startQuery`'s no-core reset).
-  private var cachedResults: [ZestCore.Row]?
+  private var cachedResults: [ZestCore.Row]? {
+    didSet { resultsVersion &+= 1 }
+  }
+
+  /// Bumps whenever `results()` or the per-row decoration it feeds (folder
+  /// colors) changes. Observers that materialise rows can skip the stale
+  /// `onChange` pass when this is unchanged.
+  private(set) var resultsVersion = 0
 
   /// Serial queue for engine queries — one in flight at a time; the
   /// generation check drops stale deliveries (sidebar-style pattern).

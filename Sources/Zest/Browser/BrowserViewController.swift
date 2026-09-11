@@ -126,6 +126,10 @@ final class BrowserViewController: NSViewController {
     let scope: AppCoordinator.Scope
   }
   private var lastReloadKey: ReloadKey?
+  /// `coordinator.resultsVersion` that `items` was built from. The stale
+  /// first `onChange` pass of every change delivers the same rows, so the
+  /// 2k-item re-map is skipped until a fresh result set lands.
+  private var itemsVersion = -1
 
   // Column identifiers.
   private static let colName = NSUserInterfaceItemIdentifier("name")
@@ -215,7 +219,10 @@ final class BrowserViewController: NSViewController {
       tableView.selectedRow >= 0 && tableView.selectedRow < items.count
       ? items[tableView.selectedRow].path : nil
 
-    items = coordinator.results().map { makeItem(from: $0) }
+    if itemsVersion != coordinator.resultsVersion {
+      items = coordinator.results().map { makeItem(from: $0) }
+      itemsVersion = coordinator.resultsVersion
+    }
     updateSortIndicator()
 
     let isEmpty = items.isEmpty

@@ -287,11 +287,14 @@ final class SidebarViewController: NSViewController {
 private final class CategorySection: NSView {
   private let coordinator: AppCoordinator
   private let widthProvider: NSView
-  private var rows: [NSView] = []
+  private var rows: [(view: FocusableRow, isActive: (Filter) -> Bool)] = []
   private let stack = NSStackView()
+  /// What the current `rows` were built from. When neither the histogram nor
+  /// the expanded set changed, a refresh only re-applies active state.
+  private var builtFrom: (histogram: Histogram, expanded: Set<Int>)?
 
   /// The section's rows in visual order, for the sidebar's key-view chain.
-  var focusableRows: [NSView] { rows }
+  var focusableRows: [NSView] { rows.map(\.view) }
   /// Fired after every row rebuild so the owner can rewire the key loop.
   var onRowsRebuilt: (() -> Void)?
 
@@ -401,27 +404,43 @@ private final class CategorySection: NSView {
     }
   }
 
+  /// Categories shown expanded: manually toggled ones, plus any with an
+  /// active filter (their own, or one of their exts) so a selection always
+  /// shows its extensions on first render.
+  private func expandedCategories(in histogram: Histogram, filter: Filter) -> Set<Int> {
+    Set(
+      histogram.categories.filter { entry in
+        entry.extensions.count > 1
+          && (expandedIndices.contains(entry.index)
+            || filter.category == Category.meta(category: entry.index).queryKey
+            || entry.extensions.contains {
+              SidebarViewController.extIsSelected($0.ext, in: filter.extensions)
+            })
+      }.map(\.index))
+  }
+
   private func rebuildRows(with histogram: Histogram) {
-    // Remove old rows.
+    let filter = coordinator.filter
+    let expanded = expandedCategories(in: histogram, filter: filter)
+    if let builtFrom, builtFrom.histogram == histogram, builtFrom.expanded == expanded {
+      // Same rows, only the active filter moved (every keystroke lands here).
+      for row in rows { row.view.setActive(row.isActive(filter)) }
+      return
+    }
+    builtFrom = (histogram, expanded)
     for row in rows {
-      row.removeFromSuperview()
+      row.view.removeFromSuperview()
     }
     rows.removeAll()
 
-    let activeCat = coordinator.filter.category
-    let selectedExts = coordinator.filter.extensions
+    let activeCat = filter.category
+    let selectedExts = filter.extensions
 
     for entry in histogram.categories {
       let meta = Category.meta(category: entry.index)
       let isActive = activeCat == meta.queryKey
       let hasChildren = entry.extensions.count > 1
-      let hasSelectedExt = entry.extensions.contains {
-        SidebarViewController.extIsSelected($0.ext, in: selectedExts)
-      }
-      // Categories with an active filter (their own, or one of their exts)
-      // auto-expand; manually-toggled ones stay open across refreshes.
-      let isExpanded =
-        hasChildren && (expandedIndices.contains(entry.index) || isActive || hasSelectedExt)
+      let isExpanded = expanded.contains(entry.index)
 
       let row = CatRow(
         meta: meta,
@@ -435,8 +454,10 @@ private final class CategorySection: NSView {
             return
           }
           // Toggle: re-clicking the active row clears the category,
-          // preserving any extension filter and the search text.
-          coordinator.filter.category = isActive ? nil : meta.queryKey
+          // preserving any extension filter and the search text. Read the
+          // live filter: rows outlive the filter state they were built with.
+          coordinator.filter.category =
+            coordinator.filter.category == meta.queryKey ? nil : meta.queryKey
           rebuildRows(with: histogram)
         },
         onToggleExpand: {
@@ -454,7 +475,7 @@ private final class CategorySection: NSView {
       )
       stack.addArrangedSubview(row)
       row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-      rows.append(row)
+      rows.append((row, { $0.category == meta.queryKey }))
 
       if isExpanded {
         for extEntry in entry.extensions {
@@ -485,7 +506,8 @@ private final class CategorySection: NSView {
           )
           stack.addArrangedSubview(extRow)
           extRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-          rows.append(extRow)
+          rows.append(
+            (extRow, { SidebarViewController.extIsSelected(extEntry.ext, in: $0.extensions) }))
         }
       }
     }
@@ -496,10 +518,10 @@ private final class CategorySection: NSView {
 
   // TODO: improve naming, no context about what histogram we are dealing with.
 
-  private struct Histogram {
+  private struct Histogram: Equatable {
     // TODO: dont abbreviate, find better name
 
-    struct CatEntry {
+    struct CatEntry: Equatable {
       let index: Int
       let count: Int
       let extensions: [ExtEntry]
@@ -507,7 +529,7 @@ private final class CategorySection: NSView {
 
     // TODO: dont abbreviate, find better name
 
-    struct ExtEntry {
+    struct ExtEntry: Equatable {
       let ext: String
       let count: Int
     }
