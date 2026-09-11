@@ -321,40 +321,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
 
     // === Names Column ===
     const names_offset: u64 = buf.items.len;
-
-    var name_offsets = try allocator.alloc(u32, num);
-    defer allocator.free(name_offsets);
-    var name_lengths = try allocator.alloc(u16, num);
-    defer allocator.free(name_lengths);
-
-    var name_blob: std.ArrayList(u8) = .empty;
-    defer name_blob.deinit(allocator);
-    var lower_blob: std.ArrayList(u8) = .empty;
-    defer lower_blob.deinit(allocator);
-
-    // Pre-size the name blobs (~16 bytes/name heuristic) to avoid repeated
-    // doubling reallocations while appending millions of entries.
-    try name_blob.ensureTotalCapacity(allocator, num * 16);
-    try lower_blob.ensureTotalCapacity(allocator, num * 16);
-
-    for (entries, 0..) |entry, i| {
-        name_offsets[i] = @intCast(name_blob.items.len);
-        name_lengths[i] = @intCast(entry.name.len);
-        try name_blob.appendSlice(allocator, entry.name);
-        // Case folding is length-preserving (see core/casefold.zig), so the
-        // lowercase blob stays byte-parallel with the original: one
-        // (offset, length) pair addresses a name in both.
-        const lower_start = lower_blob.items.len;
-        try lower_blob.appendNTimes(allocator, 0, entry.name.len);
-        casefold.foldInto(lower_blob.items[lower_start..], entry.name);
-    }
-
-    for (name_offsets) |off| try writer.writeInt(u32, off, .little);
-    for (name_lengths) |len| try writer.writeInt(u16, len, .little);
-    try writer.writeInt(u32, @intCast(name_blob.items.len), .little);
-    try writer.writeAll(name_blob.items);
-    try writer.writeInt(u32, @intCast(lower_blob.items.len), .little);
-    try writer.writeAll(lower_blob.items);
+    try writeNamesColumn(allocator, writer, entries);
 
     // === Paths Column ===
     const paths_offset: u64 = buf.items.len;
@@ -404,16 +371,114 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     try writer.writeInt(u32, @intCast(dir_blob.items.len), .little);
     try writer.writeAll(dir_blob.items);
 
-    // === Recursive folder sizes ===
+    const sizes = try bakeFolderSizes(allocator, entries, parent_ids, dir_table, dir_list.items);
+    defer allocator.free(sizes);
+
+    // === Metadata Column ===
+    const meta_offset: u64 = buf.items.len;
+
+    for (sizes) |s| try writer.writeInt(u64, s, .little);
+    for (entries) |entry| try writer.writeInt(i64, entry.mtime, .little);
+    for (entries) |entry| try writer.writeByte(@intFromEnum(entry.kind));
+    for (entries) |entry| try writer.writeByte(@intFromEnum(entry.category));
+
+    // === Bitmaps ===
+    const bitmap_offset: u64 = buf.items.len;
+    try writeBitmaps(allocator, writer, entries);
+
+    // === Histogram (per-folder × per-category counts) ===
+    // Layout: `u32[FileCategory.count]` for each of the `dir_count` directories,
+    // in the same order as the dir table. Used by `zest_histogram` for the
+    // sidebar's O(1) per-folder read.
+    const histogram_offset: u64 = buf.items.len;
+    for (hist.items) |c| try writer.writeInt(u32, c, .little);
+
+    // === Extension Breakdown (per-folder × per-category × top-N exts) ===
+    const ext_breakdown_offset: u64 = buf.items.len;
+    try writeExtBreakdown(allocator, writer, entries, dir_table, dir_list.items.len);
+
+    // === Write header ===
+    const now: u64 = @intCast(runtime.unixTimestamp());
+    const header = Header{
+        .magic = MAGIC,
+        .version = VERSION,
+        .num_entries = @intCast(num),
+        .created_at = now,
+        .names_offset = names_offset,
+        .paths_offset = paths_offset,
+        .meta_offset = meta_offset,
+        .bitmap_offset = bitmap_offset,
+        .histogram_offset = histogram_offset,
+        .ext_breakdown_offset = ext_breakdown_offset,
+    };
+
+    var header_buf: [HEADER_SIZE]u8 = undefined;
+    var header_writer = std.Io.Writer.fixed(&header_buf);
+    try header.serialize(&header_writer);
+    @memcpy(buf.items[0..HEADER_SIZE], &header_buf);
+
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Names column: `u32 offsets[num]`, `u16 lengths[num]`, original blob, then the
+/// byte-parallel case-folded blob.
+fn writeNamesColumn(allocator: std.mem.Allocator, writer: BufWriter, entries: []const IndexEntry) !void {
+    const num = entries.len;
+
+    var name_offsets = try allocator.alloc(u32, num);
+    defer allocator.free(name_offsets);
+    var name_lengths = try allocator.alloc(u16, num);
+    defer allocator.free(name_lengths);
+
+    var name_blob: std.ArrayList(u8) = .empty;
+    defer name_blob.deinit(allocator);
+    var lower_blob: std.ArrayList(u8) = .empty;
+    defer lower_blob.deinit(allocator);
+
+    // Pre-size the name blobs (~16 bytes/name heuristic) to avoid repeated
+    // doubling reallocations while appending millions of entries.
+    try name_blob.ensureTotalCapacity(allocator, num * 16);
+    try lower_blob.ensureTotalCapacity(allocator, num * 16);
+
+    for (entries, 0..) |entry, i| {
+        name_offsets[i] = @intCast(name_blob.items.len);
+        name_lengths[i] = @intCast(entry.name.len);
+        try name_blob.appendSlice(allocator, entry.name);
+        // Case folding is length-preserving (see core/casefold.zig), so the
+        // lowercase blob stays byte-parallel with the original: one
+        // (offset, length) pair addresses a name in both.
+        const lower_start = lower_blob.items.len;
+        try lower_blob.appendNTimes(allocator, 0, entry.name.len);
+        casefold.foldInto(lower_blob.items[lower_start..], entry.name);
+    }
+
+    for (name_offsets) |off| try writer.writeInt(u32, off, .little);
+    for (name_lengths) |len| try writer.writeInt(u16, len, .little);
+    try writer.writeInt(u32, @intCast(name_blob.items.len), .little);
+    try writer.writeAll(name_blob.items);
+    try writer.writeInt(u32, @intCast(lower_blob.items.len), .little);
+    try writer.writeAll(lower_blob.items);
+}
+
+/// Recursive folder sizes: files keep their scanned size; directory entries get
+/// their subtree total. Returns one size per entry (caller frees).
+fn bakeFolderSizes(
+    allocator: std.mem.Allocator,
+    entries: []const IndexEntry,
+    parent_ids: []const u32,
+    dir_table: std.StringHashMap(u32),
+    dir_list: []const []const u8,
+) ![]u64 {
+    const num = entries.len;
     // Files keep their scanned allocated size; directory entries get their
     // subtree total (the scanner writes 0 for dirs — ALLOCSIZE is absent for them).
     // Local per-dir sums roll up child→parent in path-length-descending
     // order: a child's path is strictly longer than its parent's, so length
     // order is a valid bottom-up topological order.
     var sizes = try allocator.alloc(u64, num);
-    defer allocator.free(sizes);
+    errdefer allocator.free(sizes);
 
-    var dir_totals = try allocator.alloc(u64, dir_list.items.len);
+    var dir_totals = try allocator.alloc(u64, dir_list.len);
     defer allocator.free(dir_totals);
     @memset(dir_totals, 0);
 
@@ -422,7 +487,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         if (entry.kind != .directory) dir_totals[parent_ids[i]] += entry.size;
     }
 
-    const roll_order = try allocator.alloc(u32, dir_list.items.len);
+    const roll_order = try allocator.alloc(u32, dir_list.len);
     defer allocator.free(roll_order);
     for (roll_order, 0..) |*o, i| o.* = @intCast(i);
     const deeperFirst = struct {
@@ -430,10 +495,10 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
             return paths[a].len > paths[b].len;
         }
     }.f;
-    std.mem.sort(u32, roll_order, @as([]const []const u8, dir_list.items), deeperFirst);
+    std.mem.sort(u32, roll_order, @as([]const []const u8, dir_list), deeperFirst);
 
     for (roll_order) |d| {
-        const dpath = dir_list.items[d];
+        const dpath = dir_list[d];
         const slash = std.mem.lastIndexOfScalar(u8, dpath, '/') orelse continue;
         // "/x" → "/"; deeper paths cut at the last slash. Roll-up stops
         // naturally when the parent isn't in the table (scan root's parent).
@@ -457,17 +522,11 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         sizes[i] = if (dir_table.get(dir_path_buf.items)) |d| dir_totals[d] else 0;
     }
 
-    // === Metadata Column ===
-    const meta_offset: u64 = buf.items.len;
+    return sizes;
+}
 
-    for (sizes) |s| try writer.writeInt(u64, s, .little);
-    for (entries) |entry| try writer.writeInt(i64, entry.mtime, .little);
-    for (entries) |entry| try writer.writeByte(@intFromEnum(entry.kind));
-    for (entries) |entry| try writer.writeByte(@intFromEnum(entry.category));
-
-    // === Bitmaps ===
-    const bitmap_offset: u64 = buf.items.len;
-
+/// Per-category entry-index bitmaps (only non-empty categories are emitted).
+fn writeBitmaps(allocator: std.mem.Allocator, writer: BufWriter, entries: []const IndexEntry) !void {
     var category_entries: [types.FileCategory.count]std.ArrayList(u32) = undefined;
     for (0..types.FileCategory.count) |i| {
         category_entries[i] = .empty;
@@ -490,15 +549,17 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         try writer.writeInt(u32, @intCast(list.items.len), .little);
         for (list.items) |idx| try writer.writeInt(u32, idx, .little);
     }
+}
 
-    // === Histogram (per-folder × per-category counts) ===
-    // Layout: `u32[FileCategory.count]` for each of the `dir_count` directories,
-    // in the same order as the dir table. Used by `zest_histogram` for the
-    // sidebar's O(1) per-folder read.
-    const histogram_offset: u64 = buf.items.len;
-    for (hist.items) |c| try writer.writeInt(u32, c, .little);
-
-    // === Extension Breakdown (per-folder × per-category × top-N exts) ===
+/// Per-folder × per-category top-N extension counts.
+fn writeExtBreakdown(
+    allocator: std.mem.Allocator,
+    writer: BufWriter,
+    entries: []const IndexEntry,
+    dir_table: std.StringHashMap(u32),
+    dir_count: usize,
+) !void {
+    const num = entries.len;
     // Build it in a second pass over entries: we now know `dir_count`, so we
     // can allocate the per-bucket accumulator array in one shot. Each bucket
     // is sorted by count (descending) and truncated to MAX_EXTS_PER_BUCKET.
@@ -514,7 +575,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
 
     var ext_buckets = try allocator.alloc(
         std.ArrayList(StableExt),
-        dir_list.items.len * types.FileCategory.count,
+        dir_count * types.FileCategory.count,
     );
     defer {
         for (ext_buckets) |*list| list.deinit(allocator);
@@ -580,7 +641,6 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     // [0, FileCategory.count), `u16 num_exts` followed by `num_exts` entries
     // of `(u8 len, u8[len] bytes, u32 count)`. Self-describing: reader walks
     // the structure in order.
-    const ext_breakdown_offset: u64 = buf.items.len;
     for (ext_buckets) |bucket| {
         try writer.writeInt(u16, @intCast(bucket.items.len), .little);
         for (bucket.items) |e| {
@@ -589,26 +649,4 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
             try writer.writeInt(u32, e.count, .little);
         }
     }
-
-    // === Write header ===
-    const now: u64 = @intCast(runtime.unixTimestamp());
-    const header = Header{
-        .magic = MAGIC,
-        .version = VERSION,
-        .num_entries = @intCast(num),
-        .created_at = now,
-        .names_offset = names_offset,
-        .paths_offset = paths_offset,
-        .meta_offset = meta_offset,
-        .bitmap_offset = bitmap_offset,
-        .histogram_offset = histogram_offset,
-        .ext_breakdown_offset = ext_breakdown_offset,
-    };
-
-    var header_buf: [HEADER_SIZE]u8 = undefined;
-    var header_writer = std.Io.Writer.fixed(&header_buf);
-    try header.serialize(&header_writer);
-    @memcpy(buf.items[0..HEADER_SIZE], &header_buf);
-
-    return buf.toOwnedSlice(allocator);
 }

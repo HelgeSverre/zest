@@ -95,153 +95,182 @@ pub fn searchCancellable(
 
     var results: std.ArrayList(SearchResult) = .empty;
     errdefer results.deinit(allocator);
-    const num_entries: u32 = @intCast(reader.numEntries());
 
     if (has_text) {
-        // Text search path
-        var lower_query_buf: [256]u8 = undefined;
-        if (opts.query.len > lower_query_buf.len) return error.QueryTooLong;
-        if (reader.header.version >= format.UNICODE_CASEFOLD_VERSION) {
-            // The same length-preserving fold the v7 builder applied to the
-            // lowercase blob, so "RÉSUMÉ", "Résumé" and "résumé" reduce to
-            // one needle.
-            casefold.foldInto(&lower_query_buf, opts.query);
-        } else {
-            // v6 has the identical layout but an ASCII-lowercased blob. Keep
-            // existing indexes searchable during an app/daemon rolling
-            // upgrade; Unicode matching activates after the v7 rebuild lands.
-            for (opts.query, 0..) |ch, i| lower_query_buf[i] = std.ascii.toLower(ch);
-        }
-        const lower_query = lower_query_buf[0..opts.query.len];
+        try searchText(allocator, reader, opts, cancel, cat_bitmap, &results);
+    } else {
+        try searchFilterOnly(allocator, reader, opts, cancel, cat_bitmap, &results);
+    }
 
-        const blob_info = reader.getLowerNameBlob() orelse return try allocator.alloc(SearchResult, 0);
-        const blob = blob_info.blob;
+    return results.toOwnedSlice(allocator);
+}
 
-        if (lower_query.len <= blob.len) {
-            const first_char = lower_query[0];
-            const last_char = lower_query[lower_query.len - 1];
-            const qlen = lower_query.len;
-            // Last position a match can start at (exclusive bound).
-            const scan_limit = blob.len + 1 - qlen;
+/// Substring scan over the case-folded name blob; every hit is then checked
+/// against scope, category bitmap, and the remaining filters.
+fn searchText(
+    allocator: std.mem.Allocator,
+    reader: *reader_mod.IndexReader,
+    opts: SearchOptions,
+    cancel: ?*const CancelFlag,
+    cat_bitmap: ?bitmap_mod.Bitmap,
+    results: *std.ArrayList(SearchResult),
+) (SearchCancelled || std.mem.Allocator.Error || error{QueryTooLong})!void {
+    const has_filters = opts.filters.len > 0;
+    const num_entries: u32 = @intCast(reader.numEntries());
+    // Text search path
+    var lower_query_buf: [256]u8 = undefined;
+    if (opts.query.len > lower_query_buf.len) return error.QueryTooLong;
+    if (reader.header.version >= format.UNICODE_CASEFOLD_VERSION) {
+        // The same length-preserving fold the v7 builder applied to the
+        // lowercase blob, so "RÉSUMÉ", "Résumé" and "résumé" reduce to
+        // one needle.
+        casefold.foldInto(&lower_query_buf, opts.query);
+    } else {
+        // v6 has the identical layout but an ASCII-lowercased blob. Keep
+        // existing indexes searchable during an app/daemon rolling
+        // upgrade; Unicode matching activates after the v7 rebuild lands.
+        for (opts.query, 0..) |ch, i| lower_query_buf[i] = std.ascii.toLower(ch);
+    }
+    const lower_query = lower_query_buf[0..opts.query.len];
 
-            var pos: usize = 0;
-            // Blob positions are scanned in ascending order and names are laid
-            // out in entry order, so `findEntryForBlobPos` yields non-decreasing
-            // entry indices. A repeated match (a name containing the query more
-            // than once) can therefore only collide with the *previous* entry —
-            // one compare replaces the old O(results) duplicate scan that made
-            // short queries quadratic (4.5s for "i" over a 5.5M-entry index).
-            var last_seen_entry: u32 = std.math.maxInt(u32);
-            var check_at: usize = 0;
-            while (pos < scan_limit and results.items.len < opts.max_results) {
-                // Cancellation is polled per `cancel_check_stride` bytes of
-                // blob, and the vector scan is capped at the same boundary so a
-                // long candidate-free stretch can't outrun the check.
-                var chunk_end = scan_limit;
-                if (cancel) |flag| {
-                    if (pos >= check_at) {
-                        if (flag.load(.acquire) != 0) return error.SearchCancelled;
-                        check_at = pos + cancel_check_stride;
-                    }
-                    chunk_end = @min(scan_limit, check_at);
+    const blob_info = reader.getLowerNameBlob() orelse return;
+    const blob = blob_info.blob;
+
+    if (lower_query.len <= blob.len) {
+        const first_char = lower_query[0];
+        const last_char = lower_query[lower_query.len - 1];
+        const qlen = lower_query.len;
+        // Last position a match can start at (exclusive bound).
+        const scan_limit = blob.len + 1 - qlen;
+
+        var pos: usize = 0;
+        // Blob positions are scanned in ascending order and names are laid
+        // out in entry order, so `findEntryForBlobPos` yields non-decreasing
+        // entry indices. A repeated match (a name containing the query more
+        // than once) can therefore only collide with the *previous* entry —
+        // one compare replaces the old O(results) duplicate scan that made
+        // short queries quadratic (4.5s for "i" over a 5.5M-entry index).
+        var last_seen_entry: u32 = std.math.maxInt(u32);
+        var check_at: usize = 0;
+        while (pos < scan_limit and results.items.len < opts.max_results) {
+            // Cancellation is polled per `cancel_check_stride` bytes of
+            // blob, and the vector scan is capped at the same boundary so a
+            // long candidate-free stretch can't outrun the check.
+            var chunk_end = scan_limit;
+            if (cancel) |flag| {
+                if (pos >= check_at) {
+                    if (flag.load(.acquire) != 0) return error.SearchCancelled;
+                    check_at = pos + cancel_check_stride;
                 }
+                chunk_end = @min(scan_limit, check_at);
+            }
 
-                // SIMD two-anchor filter: 16/32 positions rejected per
-                // instruction. Only survivors reach the full memcmp.
-                const candidate = nextCandidate(blob, pos, chunk_end, first_char, last_char, qlen) orelse {
-                    pos = chunk_end;
-                    continue;
-                };
-                pos = candidate;
+            // SIMD two-anchor filter: 16/32 positions rejected per
+            // instruction. Only survivors reach the full memcmp.
+            const candidate = nextCandidate(blob, pos, chunk_end, first_char, last_char, qlen) orelse {
+                pos = chunk_end;
+                continue;
+            };
+            pos = candidate;
 
-                if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
-                    if (findEntryForBlobPos(reader, @intCast(pos), @intCast(qlen), num_entries)) |entry_idx| {
-                        const duplicate = entry_idx == last_seen_entry;
-                        last_seen_entry = entry_idx;
+            if (std.mem.eql(u8, blob[pos .. pos + qlen], lower_query)) {
+                if (findEntryForBlobPos(reader, @intCast(pos), @intCast(qlen), num_entries)) |entry_idx| {
+                    const duplicate = entry_idx == last_seen_entry;
+                    last_seen_entry = entry_idx;
 
-                        const in_category = !duplicate and
-                            (if (cat_bitmap) |bm| bm.contains(entry_idx) else true);
-                        if (in_category) {
-                            if (buildResult(reader, entry_idx)) |result| {
-                                if (matchesScope(result.dir_path, opts.scope, opts.max_depth) and
-                                    (!has_filters or matchFilters(opts.filters, result)))
-                                {
-                                    try results.append(allocator, result);
-                                }
+                    const in_category = !duplicate and
+                        (if (cat_bitmap) |bm| bm.contains(entry_idx) else true);
+                    if (in_category) {
+                        if (buildResult(reader, entry_idx)) |result| {
+                            if (matchesScope(result.dir_path, opts.scope, opts.max_depth) and
+                                (!has_filters or matchFilters(opts.filters, result)))
+                            {
+                                try results.append(allocator, result);
                             }
                         }
                     }
                 }
-                pos += 1;
             }
+            pos += 1;
         }
-    } else {
-        // Filter-only path: scan entries.
-        //
-        // A depth-1 folder listing (the every-folder-switch case) would otherwise
-        // do `buildResult` + a string `matchesScope` for ALL num_entries — a full
-        // ~5.7M-entry index scan (~750ms) regardless of how few files the folder
-        // holds, because the result count rarely reaches `max_results`. Instead,
-        // resolve the scope to a single dir id once and match the cheap parent-id
-        // column (one u32 read per entry), only building results for actual hits.
-        const scope_dir_id: ?u32 = if (opts.max_depth == 1 and !scope_is_root)
-            (reader.findDirId(stripTrailingSlash(opts.scope)) orelse return try results.toOwnedSlice(allocator))
-        else
-            null;
+    }
+}
 
-        // Subtree scope at unlimited depth: mark descendant dirs once (O(D) over
-        // the dedup'd dir table), then test one byte per entry instead of
-        // buildResult + string prefix compare for all entries. Finite depths > 1
-        // keep the old matchesScope path (depth-limited semantics require the
-        // actual string comparison that matchesScope does; the byte table ignores
-        // depth limits).
-        var subtree_marks: ?[]u8 = null;
-        defer if (subtree_marks) |m| allocator.free(m);
-        if (opts.max_depth == std.math.maxInt(u32) and !scope_is_root) {
-            const dc = reader.dirCount();
-            if (dc > 0) {
-                const m = try allocator.alloc(u8, dc);
-                @memset(m, 0);
-                if (subtree_mod.markSubtreeDirs(reader.*, stripTrailingSlash(opts.scope), m)) {
-                    subtree_marks = m;
-                } else {
-                    // Malformed dir table: free the marks buffer and let the
-                    // string-compare path (matchesScope) handle scoping.
-                    allocator.free(m);
-                }
-            }
-        }
+/// No query text: walk the parent-id column (folder listing / subtree scope)
+/// and apply the filters to each candidate entry.
+fn searchFilterOnly(
+    allocator: std.mem.Allocator,
+    reader: *reader_mod.IndexReader,
+    opts: SearchOptions,
+    cancel: ?*const CancelFlag,
+    cat_bitmap: ?bitmap_mod.Bitmap,
+    results: *std.ArrayList(SearchResult),
+) (SearchCancelled || std.mem.Allocator.Error)!void {
+    const scope_is_root = std.mem.eql(u8, opts.scope, "/");
+    const num_entries: u32 = @intCast(reader.numEntries());
+    // Filter-only path: scan entries.
+    //
+    // A depth-1 folder listing (the every-folder-switch case) would otherwise
+    // do `buildResult` + a string `matchesScope` for ALL num_entries — a full
+    // ~5.7M-entry index scan (~750ms) regardless of how few files the folder
+    // holds, because the result count rarely reaches `max_results`. Instead,
+    // resolve the scope to a single dir id once and match the cheap parent-id
+    // column (one u32 read per entry), only building results for actual hits.
+    const scope_dir_id: ?u32 = if (opts.max_depth == 1 and !scope_is_root)
+        (reader.findDirId(stripTrailingSlash(opts.scope)) orelse return)
+    else
+        null;
 
-        var idx: u32 = 0;
-        while (idx < num_entries and results.items.len < opts.max_results) : (idx += 1) {
-            // Cancellation check every 512 entries.
-            if (cancel) |flag| {
-                if (idx & 0x1FF == 0 and flag.load(.acquire) != 0) {
-                    return error.SearchCancelled;
-                }
-            }
-
-            if (scope_dir_id) |want| {
-                if ((reader.getParentId(idx) orelse continue) != want) continue;
-            } else if (subtree_marks) |m| {
-                const pid = reader.getParentId(idx) orelse continue;
-                if (pid >= m.len or m[pid] == 0) continue;
-            }
-            if (cat_bitmap) |bm| {
-                if (!bm.contains(idx)) continue;
-            }
-            if (buildResult(reader, idx)) |result| {
-                // subtree_marks covers the unlimited-depth case; fall back to
-                // matchesScope only for the finite-depth > 1 case (rare; keeps
-                // depth-limited semantics exact).
-                if (subtree_marks == null and !matchesScope(result.dir_path, opts.scope, opts.max_depth)) continue;
-                if (!matchFilters(opts.filters, result)) continue;
-                try results.append(allocator, result);
+    // Subtree scope at unlimited depth: mark descendant dirs once (O(D) over
+    // the dedup'd dir table), then test one byte per entry instead of
+    // buildResult + string prefix compare for all entries. Finite depths > 1
+    // keep the old matchesScope path (depth-limited semantics require the
+    // actual string comparison that matchesScope does; the byte table ignores
+    // depth limits).
+    var subtree_marks: ?[]u8 = null;
+    defer if (subtree_marks) |m| allocator.free(m);
+    if (opts.max_depth == std.math.maxInt(u32) and !scope_is_root) {
+        const dc = reader.dirCount();
+        if (dc > 0) {
+            const m = try allocator.alloc(u8, dc);
+            @memset(m, 0);
+            if (subtree_mod.markSubtreeDirs(reader.*, stripTrailingSlash(opts.scope), m)) {
+                subtree_marks = m;
+            } else {
+                // Malformed dir table: free the marks buffer and let the
+                // string-compare path (matchesScope) handle scoping.
+                allocator.free(m);
             }
         }
     }
 
-    return results.toOwnedSlice(allocator);
+    var idx: u32 = 0;
+    while (idx < num_entries and results.items.len < opts.max_results) : (idx += 1) {
+        // Cancellation check every 512 entries.
+        if (cancel) |flag| {
+            if (idx & 0x1FF == 0 and flag.load(.acquire) != 0) {
+                return error.SearchCancelled;
+            }
+        }
+
+        if (scope_dir_id) |want| {
+            if ((reader.getParentId(idx) orelse continue) != want) continue;
+        } else if (subtree_marks) |m| {
+            const pid = reader.getParentId(idx) orelse continue;
+            if (pid >= m.len or m[pid] == 0) continue;
+        }
+        if (cat_bitmap) |bm| {
+            if (!bm.contains(idx)) continue;
+        }
+        if (buildResult(reader, idx)) |result| {
+            // subtree_marks covers the unlimited-depth case; fall back to
+            // matchesScope only for the finite-depth > 1 case (rare; keeps
+            // depth-limited semantics exact).
+            if (subtree_marks == null and !matchesScope(result.dir_path, opts.scope, opts.max_depth)) continue;
+            if (!matchFilters(opts.filters, result)) continue;
+            try results.append(allocator, result);
+        }
+    }
 }
 
 /// Geometric scope predicate over an entry's `dir_path`.
