@@ -60,11 +60,9 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, pa
     var entries: std.ArrayList(format.IndexEntry) = .empty;
     defer entries.deinit(allocator);
 
-    var owned_strings: std.ArrayList([]u8) = .empty;
-    defer {
-        for (owned_strings.items) |s| allocator.free(s);
-        owned_strings.deinit(allocator);
-    }
+    // Name/dir strings live until writeIndex returns; one arena frees them all.
+    var strings = std.heap.ArenaAllocator.init(allocator);
+    defer strings.deinit();
 
     for (scan_paths) |scan_path| {
         const file = std.Io.Dir.openFileAbsolute(runtime.io, scan_path, .{}) catch
@@ -75,22 +73,22 @@ fn buildFromScanFiles(allocator: std.mem.Allocator, scan_paths: []const []u8, pa
         // backslash-heavy path can't abort the build with StreamTooLong.
         var line_buf: [16384]u8 = undefined;
         var file_reader = file.reader(runtime.io, &line_buf);
-        try parseScanReader(allocator, &file_reader.interface, &entries, &owned_strings);
+        try parseScanReader(allocator, strings.allocator(), &file_reader.interface, &entries);
     }
 
     if (parsed_out) |p| p.* = entries.items.len;
     return format.writeIndex(allocator, entries.items);
 }
 
-/// Parse tab-separated scan lines from `reader`, appending entries (and their
-/// owned name/dir_path strings) to the given lists. Uses `takeDelimiter`, which
+/// Parse tab-separated scan lines from `reader`, appending entries to `entries`;
+/// name/dir_path strings are allocated from `strings`. Uses `takeDelimiter`, which
 /// *consumes* the newline — `takeDelimiterExclusive` leaves it in place and turns
 /// blank lines into a non-advancing infinite loop.
 fn parseScanReader(
     allocator: std.mem.Allocator,
+    strings: std.mem.Allocator,
     reader: *std.Io.Reader,
     entries: *std.ArrayList(format.IndexEntry),
-    owned_strings: *std.ArrayList([]u8),
 ) !void {
     while (try reader.takeDelimiter('\n')) |line| {
         if (line.len == 0) continue;
@@ -116,12 +114,8 @@ fn parseScanReader(
         // unescapeTsv writes into a buffer <= s.len, so dupe-sized allocations are exact.
         const name_raw = fields[0];
         const dir_raw = fields[1];
-        const name_buf = try allocator.alloc(u8, name_raw.len);
-        try owned_strings.append(allocator, name_buf);
-        const name = format.unescapeTsv(name_buf, name_raw);
-        const dir_buf = try allocator.alloc(u8, dir_raw.len);
-        try owned_strings.append(allocator, dir_buf);
-        const dir_path = format.unescapeTsv(dir_buf, dir_raw);
+        const name = format.unescapeTsv(try strings.alloc(u8, name_raw.len), name_raw);
+        const dir_path = format.unescapeTsv(try strings.alloc(u8, dir_raw.len), dir_raw);
 
         try entries.append(allocator, .{
             .name = name,
@@ -162,12 +156,9 @@ test "scan validation rejects complete and partial record loss" {
 fn buildFromScanReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
     var entries: std.ArrayList(format.IndexEntry) = .empty;
     defer entries.deinit(allocator);
-    var owned_strings: std.ArrayList([]u8) = .empty;
-    defer {
-        for (owned_strings.items) |s| allocator.free(s);
-        owned_strings.deinit(allocator);
-    }
-    try parseScanReader(allocator, reader, &entries, &owned_strings);
+    var strings = std.heap.ArenaAllocator.init(allocator);
+    defer strings.deinit();
+    try parseScanReader(allocator, strings.allocator(), reader, &entries);
     return format.writeIndex(allocator, entries.items);
 }
 

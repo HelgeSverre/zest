@@ -367,26 +367,22 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     var parent_ids = try allocator.alloc(u32, num);
     defer allocator.free(parent_ids);
 
-    // Per-folder × per-category histogram buffer. Indexed `[dir_id][cat]`.
-    // Pre-allocated to a generous capacity (we'll know the exact size after
-    // the entries loop resolves all unique dirs). Filled inline in the loop
-    // below — no second pass over entries.
-    var hist = try allocator.alloc(
-        u32,
-        @as(usize, num) * types.FileCategory.count,
-    );
-    defer allocator.free(hist);
-    @memset(hist, 0);
+    // Per-folder × per-category histogram, indexed `[dir_id][cat]`. Grows by
+    // one row each time the loop below discovers a new directory, so it is
+    // sized by directories (a few % of entries), not by entries.
+    var hist: std.ArrayList(u32) = .empty;
+    defer hist.deinit(allocator);
 
     for (entries, 0..) |entry, i| {
         const gop = try dir_table.getOrPut(entry.dir_path);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(dir_list.items.len);
             try dir_list.append(allocator, entry.dir_path);
+            try hist.appendNTimes(allocator, 0, types.FileCategory.count);
         }
         const pid: u32 = gop.value_ptr.*;
         parent_ids[i] = pid;
-        hist[@as(usize, pid) * types.FileCategory.count + @intFromEnum(entry.category)] += 1;
+        hist.items[@as(usize, pid) * types.FileCategory.count + @intFromEnum(entry.category)] += 1;
     }
 
     for (parent_ids) |pid| try writer.writeInt(u32, pid, .little);
@@ -500,8 +496,7 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     // in the same order as the dir table. Used by `zest_histogram` for the
     // sidebar's O(1) per-folder read.
     const histogram_offset: u64 = buf.items.len;
-    const hist_count: usize = dir_list.items.len * types.FileCategory.count;
-    for (hist[0..hist_count]) |c| try writer.writeInt(u32, c, .little);
+    for (hist.items) |c| try writer.writeInt(u32, c, .little);
 
     // === Extension Breakdown (per-folder × per-category × top-N exts) ===
     // Build it in a second pass over entries: we now know `dir_count`, so we
@@ -527,6 +522,13 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
     }
     for (ext_buckets) |*list| list.* = .empty;
 
+    // (dir, cat, ext) → index into that bucket. Buckets keep insertion order
+    // (so on-disk tie order is unchanged); the map just makes the lookup O(1)
+    // instead of a linear scan that grew with distinct extensions per folder.
+    const ExtKey = struct { dir_id: u32, cat: u8, len: u8, ext: [15]u8 };
+    var ext_index = std.AutoHashMap(ExtKey, u32).init(allocator);
+    defer ext_index.deinit();
+
     var lower_buf: [31]u8 = undefined;
     for (entries) |entry| {
         // Lowercased extension: bytes after the last dot, or skip if no ext.
@@ -544,19 +546,13 @@ pub fn writeIndex(allocator: std.mem.Allocator, entries: []const IndexEntry) ![]
         const cat: u8 = @intFromEnum(entry.category);
         const bucket = &ext_buckets[@as(usize, dir_id) * types.FileCategory.count + cat];
 
-        // Linear scan of the bucket. Most buckets have <10 exts; the
-        // MAX_EXTS_PER_BUCKET cap is only reached in dev folders.
-        var found: ?usize = null;
-        for (bucket.items, 0..) |e, i| {
-            const existing = keys_buf.items[e.name_off..@intCast(e.name_off + e.name_len)];
-            if (std.mem.eql(u8, existing, ext_lower)) {
-                found = i;
-                break;
-            }
-        }
-        if (found) |i| {
-            bucket.items[i].count += 1;
+        var key = ExtKey{ .dir_id = dir_id, .cat = cat, .len = @intCast(ext_lower.len), .ext = @splat(0) };
+        @memcpy(key.ext[0..ext_lower.len], ext_lower);
+        const slot = try ext_index.getOrPut(key);
+        if (slot.found_existing) {
+            bucket.items[slot.value_ptr.*].count += 1;
         } else {
+            slot.value_ptr.* = @intCast(bucket.items.len);
             const off: u32 = @intCast(keys_buf.items.len);
             try keys_buf.appendSlice(allocator, ext_lower);
             try bucket.append(allocator, .{
