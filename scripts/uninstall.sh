@@ -5,8 +5,12 @@
 set -uo pipefail
 app=/Applications/Zest.app
 pkill -x Zest 2>/dev/null || true
-if [[ -x "$app/Contents/MacOS/Zest" ]]; then
+# Builds before 0.1.2 ignore unknown flags and open the GUI instead, so check
+# the usage text is actually compiled into the installed binary first.
+if [[ -x "$app/Contents/MacOS/Zest" ]] && grep -q -- '--indexer-uninstall' "$app/Contents/MacOS/Zest"; then
   "$app/Contents/MacOS/Zest" --indexer-uninstall >/dev/null || echo 'warning: could not unregister the bundled indexer' >&2
+elif [[ -e "$app" ]]; then
+  echo 'note: installed Zest predates --indexer-uninstall; only booting the agent out for this session' >&2
 fi
 launchctl bootout "gui/$(id -u)/dev.zest.app.indexer" 2>/dev/null || true
 if [[ -e "$app" ]]; then
