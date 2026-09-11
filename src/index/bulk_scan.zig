@@ -231,7 +231,7 @@ pub fn parallelScanWithProgress(
 
     const complete = !sh.scan_failed.load(.monotonic);
     if (!complete)
-        std.debug.print("error: index scan incomplete; refusing to publish its shards\n", .{});
+        runtime.warn("error: index scan incomplete; refusing to publish its shards\n", .{});
 
     return .{
         .paths = paths,
@@ -299,7 +299,7 @@ fn processDir(path: []const u8, w: *Worker, subdirs: *std.ArrayList([]u8), alloc
     const io = runtime.io;
     var dir = std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true }) catch |err| {
         if (std.mem.eql(u8, path, w.shared.root)) {
-            std.debug.print("error: scan root unavailable: {s}: {}\n", .{ path, err });
+            runtime.warn("error: scan root unavailable: {s}: {}\n", .{ path, err });
             w.shared.scan_failed.store(true, .monotonic);
             return;
         }

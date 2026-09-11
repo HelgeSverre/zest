@@ -23,6 +23,13 @@ pub fn init(process_init: std.process.Init) void {
     environ_map = process_init.environ_map;
 }
 
+/// Diagnostic to stderr, silent under `zig build test`: several tests exercise
+/// failure paths on purpose and their messages read like real failures in CI logs.
+pub fn warn(comptime fmt: []const u8, args: anytype) void {
+    if (builtin.is_test) return;
+    std.debug.print(fmt, args);
+}
+
 /// Monotonic clock in nanoseconds. Replaces the removed
 /// `std.time.nanoTimestamp` for elapsed-time measurements.
 pub fn nowNanos() i128 {

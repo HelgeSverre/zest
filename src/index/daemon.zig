@@ -99,7 +99,7 @@ const DaemonStartup = struct {
     pub fn initialScan(self: *DaemonStartup) !void {
         self.request_seen = readRequest(self.request_path);
         runFullScan(self.allocator, self.root, true) catch |err| {
-            std.debug.print("error: initial scan failed: {}; retrying in 5s\n", .{err});
+            runtime.warn("error: initial scan failed: {}; retrying in 5s\n", .{err});
             return;
         };
         self.initial_ok = true;

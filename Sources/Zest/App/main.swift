@@ -17,12 +17,12 @@ case .help:
 case .version:
   print(LaunchOptions.version)
   exit(0)
-case .indexerStatus:
-  // Read-only packaged-service diagnostic; no GUI, registration, or scanning.
+case .indexer(let command):
+  // Packaged-service diagnostics; no GUI or scanning. `status` is read-only.
   do {
     try BundledIndexerService.validateBundle(at: Bundle.main.bundleURL)
     let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/zest-indexer")
-    print(try BundledIndexerService(helper: helper).state().rawValue)
+    print(try BundledIndexerService(helper: helper).execute([command]))
     exit(0)
   } catch {
     FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))

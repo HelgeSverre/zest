@@ -7,7 +7,8 @@ enum LaunchAction: Equatable {
   case browse(path: String?)
   case help
   case version
-  case indexerStatus
+  /// `status` or `uninstall` against the bundled SMAppService agent.
+  case indexer(command: String)
   case snapshot(path: String, size: NSSize)
   case bench(iterations: Int, json: Bool)
 }
@@ -28,6 +29,7 @@ enum LaunchOptions {
 
     Diagnostics:
       --indexer-status         Print the bundled indexer service state and exit
+      --indexer-uninstall      Unregister the bundled indexer service and exit
       --snapshot PNG [WxH]     Render the UI off-screen to PNG and exit (dev)
       --bench [--iterations N] [--json]
                                Benchmark the UI headlessly against the index and exit (dev)
@@ -61,7 +63,8 @@ enum LaunchOptions {
       switch arg {
       case "-h", "--help": return .success(.help)
       case "-V", "--version": return .success(.version)
-      case "--indexer-status": return .success(.indexerStatus)
+      case "--indexer-status": return .success(.indexer(command: "status"))
+      case "--indexer-uninstall": return .success(.indexer(command: "uninstall"))
       case "--snapshot":
         guard i + 1 < args.count else { return .failure(.usage("--snapshot requires a PNG path")) }
         var size = NSSize(width: 1180, height: 760)

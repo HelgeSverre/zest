@@ -13,7 +13,10 @@ function run(command, args, env = process.env) {
 }
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
 const plist = JSON.parse(run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(app, 'Contents/Info.plist')]));
-assert.equal(plist.LSMinimumSystemVersion, '14.0');
+const release = JSON.parse(fs.readFileSync(new URL('../release.json', import.meta.url), 'utf8'));
+assert.equal(plist.LSMinimumSystemVersion, release.minimumSystemVersion);
+assert.equal(plist.CFBundleShortVersionString, release.version);
+assert.equal(plist.CFBundleVersion, release.build);
 assert.equal(plist.CFBundleExecutable, 'Zest');
 for (const name of ['MacOS/Zest', 'Helpers/zest-indexer', 'Helpers/zest-query']) {
   const executable = path.join(app, 'Contents', name);
@@ -50,6 +53,11 @@ for (const architecture of architectures) {
   const execute = (relative, args) => run('/usr/bin/arch', [`-${architecture}`, path.join(app, 'Contents', relative), ...args], env);
   // Exercise the real ServiceManagement status path from the actual app bundle.
   // Unlike fake-registration unit tests, this catches clean-install BTM behavior.
+  // Every executable reports the release.json version: the Zig binaries compile it
+  // in, the app reads Info.plist. Catches a stale template or a stale build.
+  for (const [relative, name] of [['MacOS/Zest', 'Zest'], ['Helpers/zest-indexer', 'zest-indexer'], ['Helpers/zest-query', 'zest-query']]) {
+    assert.equal(execute(relative, ['--version']).trim(), `${name} ${release.version} (build ${release.build})`);
+  }
   const status = execute('MacOS/Zest', ['--indexer-status']).trim();
   assert(['not_installed', 'stopped', 'running', 'waiting', 'requiresApproval'].includes(status),
     `Unexpected packaged indexer status: ${status}`);

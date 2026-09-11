@@ -131,3 +131,22 @@ wipe-index:
 [group('index')]
 clean:
     rm -rf zig-out .zig-cache .build
+
+# ── install ──────────────────────────────────────────────────────────────
+
+# Build an unsigned PKG and install it to /Applications like a real release (sudo).
+[group('install')]
+install:
+    bash .github/scripts/package-macos-pkg.sh --unsigned
+    sudo installer -pkg "$(ls -t dist/installer.*/zest-universal-apple-darwin-LOCAL-ONLY.pkg | head -1)" -target /
+    /Applications/Zest.app/Contents/MacOS/Zest --version
+
+# Quit, unregister the bundled indexer, delete /Applications/Zest.app and its receipt.
+[group('install')]
+uninstall:
+    bash scripts/uninstall.sh
+
+# Clean slate: uninstall + every dev.zest launchd job, the index, user data, and defaults.
+[group('install')]
+nuke:
+    bash scripts/nuke.sh

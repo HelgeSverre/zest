@@ -117,7 +117,7 @@ const Service = struct {
     fn checked(self: Service, args: []const []const u8) !void {
         const result = try self.launchctl(args);
         checkTermination(result.term) catch |err| {
-            std.debug.print("launchctl {s} failed: {s}\n", .{ args[0], result.stderr });
+            runtime.warn("launchctl {s} failed: {s}\n", .{ args[0], result.stderr });
             return err;
         };
     }
@@ -130,7 +130,7 @@ const Service = struct {
             // Only the documented missing-service diagnostic means stopped;
             // permission/domain/tool failures must not masquerade as absence.
             if (std.mem.indexOf(u8, result.stderr, "Could not find service") == null) {
-                std.debug.print("Cannot determine daemon status: {s}\n", .{result.stderr});
+                runtime.warn("Cannot determine daemon status: {s}\n", .{result.stderr});
                 return error.DaemonStatusUnavailable;
             }
         }
@@ -357,9 +357,9 @@ test "launchd install start stop and failed bootstrap with an isolated service" 
     defer tmp.cleanup();
     try tmp.dir.createDirPath(runtime.io, "home & test");
     const home = try tmp.dir.realPathFileAlloc(runtime.io, "home & test", allocator);
-    var nonce: u64 = undefined;
-    runtime.io.random(std.mem.asBytes(&nonce));
-    const job_label = try std.fmt.allocPrint(allocator, "dev.zest.test.{x}", .{nonce});
+    // One stable label: a crashed run leaves at most one stale job, and the
+    // next run boots it out before starting instead of accumulating garbage.
+    const job_label = "dev.zest.test";
     const service = Service{
         .allocator = allocator,
         .home = home,
@@ -370,6 +370,8 @@ test "launchd install start stop and failed bootstrap with an isolated service" 
         .target = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ domain, job_label }),
     };
     defer service.stop() catch {};
+    _ = service.launchctl(&.{ "bootout", service.target }) catch {};
+    try waitForStopped(service);
     try std.testing.expectEqual(State.not_installed, try service.state());
     // A real long-running job whose TERM handler deliberately takes time.
     // This reproduces bootout returning before launchd removes the service.

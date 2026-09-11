@@ -35,9 +35,11 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources"
 lipo -create "${app_binaries[@]}" -output "$app/Contents/MacOS/Zest"
 lipo -create "${helper_binaries[@]}" -output "$app/Contents/Helpers/zest-indexer"
 lipo -create "${query_binaries[@]}" -output "$app/Contents/Helpers/zest-query"
-cp macos/Info.plist "$app/Contents/Info.plist"
-plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
-plutil -replace CFBundleVersion -string "$build_number" "$app/Contents/Info.plist"
+# macos/Info.plist is a template; release.json is the only place versions live.
+sed -e "s/__VERSION__/$version/" -e "s/__BUILD__/$build_number/" -e "s/__MIN_MACOS__/$minimum_macos/" \
+  macos/Info.plist > "$app/Contents/Info.plist"
+! grep -q '__[A-Z_]*__' "$app/Contents/Info.plist" || { echo 'Unfilled placeholder in Info.plist' >&2; exit 1; }
+plutil -lint "$app/Contents/Info.plist" >/dev/null
 cp macos/dev.zest.app.indexer.plist "$app/Contents/Library/LaunchAgents/"
 swift scripts/make-icon.swift "$stage"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
