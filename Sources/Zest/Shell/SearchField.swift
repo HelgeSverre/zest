@@ -62,6 +62,8 @@ final class SearchField: NSView {
     field.cell?.usesSingleLineMode = true
     field.cell?.isScrollable = true
     field.delegate = self
+    field.setAccessibilityIdentifier(A11y.search)
+    field.setAccessibilityLabel("Search")
     field.onFocus = { [weak self] in self?.setFocused(true) }
     field.placeholderAttributedString = NSAttributedString(
       string: "Search — try kind:folder, ext:pdf",

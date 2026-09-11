@@ -42,12 +42,23 @@ If you installed the earlier query-only cask, run `brew update` followed by
 `brew reinstall --cask helgesverre/tap/zest` to add the other commands. Disable
 background indexing before reinstalling.
 
-With
-the PKG installed directly, invoke:
+A direct PKG installation is not tracked by Homebrew and does not create terminal
+links. To switch to Homebrew, use `brew install --cask helgesverre/tap/zest`, not
+`brew upgrade`. For an existing Homebrew installation, use `brew update` then
+`brew upgrade --cask zest`. Disable indexing and quit Zest before either operation;
+the index and preferences are retained.
+
+With the PKG installed directly, invoke:
 
 ```sh
 "/Applications/Zest.app/Contents/Helpers/zest-query" --help
 ```
+
+Since 0.1.1, `zest --indexer-status` checks the **packaged** background service
+without launching the GUI or starting a scan. With a direct PKG install, use
+`/Applications/Zest.app/Contents/MacOS/Zest --indexer-status`. This reports service
+state, not index freshness or scan coverage; `zest-indexer status` still refers
+only to the separate development daemon.
 
 For development, `just query-build` produces `./zig-out/bin/zest-query`.
 Open Zest and finish **Index > Set Up Indexer**, or build a development index with
@@ -95,6 +106,8 @@ qualifiers may be treated as literal search text rather than rejected.
 | `--asc` / `--desc` | descending | Sort direction |
 | `--bytes` | off | Exact indexed byte counts instead of human-readable sizes |
 | `--no-header` | off | Suppress the first TSV line |
+| `-h`, `--help` | | Print usage and exit 0 |
+| `-V`, `--version` | | Print `zest-query X.Y.Z (build N)` and exit 0 |
 
 `--limit` must not exceed `--scan-limit`. If matching entries exceed the scan
 limit, sorting covers only the collected subset: this is not a guaranteed global
@@ -106,8 +119,6 @@ The CLI does not print a separate truncation warning.
 Standard output is tab-separated, with this header unless suppressed:
 
 ```text
-| `-h`, `--help` | | Print usage and exit 0 |
-| `-V`, `--version` | | Print `zest-query X.Y.Z (build N)` and exit 0 |
 SIZE\tMTIME\tKIND\tPATH
 ```
 

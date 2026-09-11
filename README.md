@@ -21,7 +21,7 @@ Zest is a fast, keyboard-friendly Finder alternative for macOS. A native AppKit 
 
 ### Install the beta
 
-Download the [signed, notarized Universal installer](https://github.com/HelgeSverre/zest/releases/download/v0.1.0/zest-universal-apple-darwin.pkg), or use Homebrew:
+Download the [0.1.1 signed, notarized Universal installer](https://github.com/HelgeSverre/zest/releases/download/v0.1.1/zest-universal-apple-darwin.pkg), or use Homebrew:
 
 ```sh
 brew install --cask helgesverre/tap/zest
@@ -56,7 +56,7 @@ After updating, reopen Zest and use the Index menu to start indexing or complete
 
 ### Build from source
 
-- macOS 14 or later, on Apple Silicon or Intel (Universal release candidate).
+- macOS 14 or later, on Apple Silicon or Intel.
 - Zig 0.16.0
 - Xcode 26.3 (the compiler used by CI; the app still runs on macOS 14+)
 - [`just`](https://github.com/casey/just) for the supported development commands
@@ -65,14 +65,17 @@ Build the first index, then launch the app:
 
 ```sh
 just index
-just run
+just dev
 ```
 
-For a fully optimized Swift build, use `just run-fast`. To keep the index updated in the background:
+For a fully optimized Swift build, use `just run`. To keep the index updated in the background:
 
 ```sh
-just install-daemon
+just daemon-install
 ```
+
+This installs the separate **development** daemon. Do not run it alongside the
+packaged app's indexer; manage that service from the app's Index menu instead.
 
 > Use the `just` recipes after changing Zig code. SwiftPM does not track the external `libzest-core.a` archive, so the recipes explicitly rebuild and relink the current ReleaseFast engine.
 
@@ -167,14 +170,11 @@ The native **Index** menu shows whether the launchd indexer is running, stopped,
 waiting to start, or not installed. It offers **Re-index Now**, **Stop Indexer**,
 and **Restart Indexer** while running, **Start Indexer** while stopped, and
 **Set Up Indexer…** when absent. Starting always performs a full scan.
-If Zest cannot find the helper executable, **Locate Indexer…** lets you select it.
+Development builds offer **Locate Indexer…** if the helper is missing; packaged
+releases use only their bundled helper. A missing macOS registration record with
+a valid bundle offers setup. Genuine status failures expose **Show Status Error…**.
 Menu operations run in the background and report failures.
 
-Packaged releases use a bundled **SMAppService** LaunchAgent. Setup explicitly
-migrates an existing development daemon; app launch alone does not install or
-start one. macOS background-item approval is shown separately from Full Disk
-Access. **Stop Indexer** and **Disable Background Indexing…** unregister the
-packaged service, including at future logins. The CLI lifecycle described below
 In 0.1.1 and newer, check the packaged service without starting the GUI or a scan:
 
 ```sh
@@ -190,6 +190,11 @@ All three commands (`zest`, `zest-query`, `zest-indexer`) accept `--help` and
 `--version`; the version comes from `release.json` at build time. Invalid
 arguments print `NAME: error: ...` on stderr and exit 2.
 
+Packaged releases use a bundled **SMAppService** LaunchAgent. Setup explicitly
+migrates an existing development daemon; app launch alone does not install or
+start one. macOS background-item approval is shown separately from Full Disk
+Access. **Stop Indexer** and **Disable Background Indexing…** unregister the
+packaged service, including at future logins. The CLI lifecycle described below
 is retained for development builds. See [the release runbook](docs/RELEASE.md)
 for Universal PKG packaging, signing, installation, and removal.
 
@@ -228,7 +233,7 @@ malformed/oversized records, and does not confuse a stopped writer with success.
 Telemetry failures never prevent index publication. Successful one-shot scans
 remove their progress record; the daemon retains its last result. Both `just index`
 and daemon scans report progress. Existing development helpers must be updated via
-**Index → Set Up Full Disk Access…** (or `just install-daemon`) to emit it.
+**Index → Set Up Full Disk Access…** (or `just daemon-install`) to emit it.
 
 Set `ZEST_PROGRESS_SNAPSHOT_DIR` when running `swift test --filter IndexProgressTests`
 to capture native overlay states at the app's minimum size without starting a scan.
@@ -244,19 +249,21 @@ inconclusive results never enable Done. Closing the guide stops polling.
 Starting without granting access may still produce separate folder prompts. Full Disk Access is
 broader than folder-specific consent and can expose protected app data; scanner
 exclusions remain in effect. Development builds are ad-hoc signed, so replacing
-the executable may require granting access again. A release should use a stable
-code-signing identity. CLI `install` remains an explicit install-and-start command;
+the executable may require granting access again. Packaged releases use a stable
+Developer ID signing identity. Development CLI
+`install` remains an explicit install-and-start command;
 `prepare-install` only stages the executable for permission setup.
 
 Development CLI installation copies the helper to
 `~/Library/Application Support/zest/bin/zest-indexer`, so development builds and
-`just clean` do not remove the installed executable. Run `just install-daemon`
+`just clean` do not remove the installed executable. Run `just daemon-install`
 again after changing daemon code to update that copy. Diagnostics go to
 `~/Library/Application Support/zest/daemon.log`. Stopping unloads the job for
 the current login session; it starts again at the next login. Use
-`just uninstall-daemon` to remove automatic startup (index and user data remain).
+`just daemon-uninstall` to remove automatic startup (index and user data remain).
 
-The same controls are available from the CLI:
+The **development daemon** controls are also available from the CLI (these do
+not report or control the packaged app's SMAppService registration):
 
 ```sh
 ./zig-out/bin/zest-indexer status
@@ -264,6 +271,7 @@ The same controls are available from the CLI:
 ./zig-out/bin/zest-indexer stop
 ./zig-out/bin/zest-indexer start
 ./zig-out/bin/zest-indexer restart
+./zig-out/bin/zest-indexer --help
 ```
 
 Re-index requests are queued for the existing daemon, including requests arriving
@@ -271,7 +279,6 @@ during a scan. Failed builds preserve the last good index and retry after 5, 10,
 20 seconds, up to a five-minute delay. Scanning and filesystem-event handling
 share exclusions, including hidden trees and Zest's own output directory.
 Each scan uses unique intermediate files, so overlapping development scans do
-./zig-out/bin/zest-indexer --help
 not overwrite each other's shards; the last successful publication wins.
 
 Run `just test-daemon` (requires Node.js) for live FSEvents, forced re-index,
@@ -407,13 +414,14 @@ The query and index use the same length-preserving Unicode fold, so matches map 
 | Command | Purpose |
 |---|---|
 | `just build` | Build Zig binaries, the ReleaseFast core, and the Swift app |
-| `just run` | Run Debug Swift with the ReleaseFast engine |
-| `just run-fast` | Run optimized Swift and Zig builds |
+| `just dev` | Run Debug Swift with the ReleaseFast engine |
+| `just run` | Run optimized Swift and Zig builds |
 | `just index` | Rebuild the home-directory index once |
 | `just query-build` | Build the read-only `zest-query` CLI |
-| `just install-daemon` | Install and start the launchd indexer |
-| `just uninstall-daemon` | Stop and remove the launchd indexer |
+| `just daemon-install` | Install and start the launchd indexer |
+| `just daemon-uninstall` | Stop and remove the launchd indexer |
 | `just test` | Run Zig and Swift tests with the current core linked |
+| `just test-ui` | Run the headless AppKit UI tests against the local index |
 | `just lint` | Compile-check and lint both languages |
 | `just format` | Format Zig and Swift sources |
 | `just bench-search` | Benchmark a deterministic one-million-entry corpus |
@@ -436,7 +444,9 @@ The query and index use the same length-preserving Unicode fold, so matches map 
 
 `just test` runs embedded Zig tests and the Swift XCTest suite. Coverage includes index round-trips and corruption handling, Unicode folding, SIMD boundary cases, query filters, cancellation, subtree aggregation, C ABI marshaling, sorting, navigation, persisted state, previews, and highlighting.
 
-The remaining AppKit interaction layer is verified manually. Benchmark harnesses report medians over deterministic synthetic data or the current real index, making performance changes easy to compare before and after.
+UI tests (`just test-ui`, also part of `just test`) drive the real window in-process: `Sources/ZestTests/UIHarness.swift` builds `RootViewController` in an off-screen `NSWindow`, locates views by their `A11y` accessibility identifiers, and sends real `NSEvent` key and mouse events through the responder chain, so typing, Esc, ⌘↑, double-click, sidebar and scope-chip clicks are asserted against coordinator state and the visible cells. No XCUITest and no Accessibility permission is needed; the tests skip when there is no index.
+
+The remaining AppKit interaction layer (drag and drop, Quick Look, context menus) is verified manually. Benchmark harnesses report medians over deterministic synthetic data or the current real index, making performance changes easy to compare before and after.
 
 ## License
 

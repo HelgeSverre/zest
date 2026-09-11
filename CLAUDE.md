@@ -15,7 +15,8 @@ The legacy pure-Zig GUI (`src/main.zig`, `src/app.zig`, `src/ui/`, and associate
 ```sh
 just build          # zig build + ReleaseFast core lib + swift build
 just test           # zig build test + swift test
-just run            # build + swift run Zest
+just dev            # build + swift run Zest (Debug)
+just run            # build + swift run -c release Zest
 just index          # build indexer (ReleaseFast) + full scan of ~
 just bench-capi     # benchmark the engine against the real index
 just bench-search   # benchmark the engine against a synthetic corpus (no index needed)

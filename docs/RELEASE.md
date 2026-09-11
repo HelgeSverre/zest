@@ -48,10 +48,10 @@ Version/build metadata live in release.json; the bundle identifier is dev.zest.a
 Both Swift and Zig explicitly target macOS 14. The optimized Zig builds use the
 baseline CPU for each architecture; lipo combines the final binaries.
 
-- just package: ad-hoc Universal dist/Zest.app; local testing only.
-- just pkg: unsigned LOCAL-ONLY PKG; no credentials or uploads.
-- just package-signed: Developer ID signed PKG; no notarization or publication.
-- just package-notarized: signed PKG, explicit Apple submission, stapling and validation.
+- just app-package: ad-hoc Universal dist/Zest.app; local testing only.
+- just pkg-unsigned: unsigned LOCAL-ONLY PKG; no credentials or uploads.
+- just pkg-signed: Developer ID signed PKG; no notarization or publication.
+- just pkg-notarized: signed PKG, explicit Apple submission, stapling and validation.
 - just pkg-local: same notarized workflow using installed Liseth identities and
   the ignored signing/ folder's AuthKey_*.p8 and issuer-uuid.txt.
 
@@ -163,9 +163,23 @@ The publisher downloads the actual release PKG and checksum, verifies them,
 renders the cask, and updates only that tap file using the authenticated gh user.
 It is deliberately a separate publication step, not a cross-repository token
 hidden in the signing job. Re-running it with the same artifact is a no-op.
-Homebrew upgrades use brew upgrade --cask zest. Disable indexing before upgrades
-or removal; uninstall removes the app/receipt but retains index and preferences.
+For Homebrew-managed installs, run `brew update` then `brew upgrade --cask zest`.
+A PKG installed directly is not registered with Homebrew, even when the app exists
+in Applications. If upgrade reports "Cask 'zest' is not installed", use
+`brew install --cask helgesverre/tap/zest` to switch to Homebrew, or install the new
+PKG directly to keep managing updates manually. A direct PKG does not create the
+Homebrew terminal links; its executables remain inside Zest.app.
+
+Disable indexing and quit Zest before upgrades or removal; uninstall removes the
+app/receipt but retains index and preferences. Reopen the app after upgrading and
+start indexing or complete setup from the Index menu.
 Full Disk Access remains an explicit user choice after installation.
+
+For each patch release, update release.json (version and build), add
+docs/releases/VERSION.md without a duplicate title, and update the README's
+download and release-notes links. Verify the signed/notarized artifacts before
+publishing the draft, then update the cask and run the Homebrew smoke workflow.
+Do not move published tags or replace existing release artifacts.
 
 Before making that draft public:
 - [ ] Test the browser-downloaded, quarantined PKG on a clean account/Mac, without

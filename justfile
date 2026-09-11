@@ -1,72 +1,52 @@
-# Unified Zig and Swift commands.
+# Zig engine + Swift app.
 
 _default:
     @just --list
 
-# Build and verify a local-only Universal app.
-[group('release')]
-package:
-    bash scripts/package.sh
+# ── build ────────────────────────────────────────────────────────────────
 
-# Build a local-only installer package.
-[group('release')]
-pkg:
-    bash .github/scripts/package-macos-pkg.sh --unsigned
-
-# Build a Developer ID signed candidate (not notarized, not published).
-[group('release')]
-package-signed:
-    bash .github/scripts/package-macos-pkg.sh --signed-only
-
-# Explicitly submit the signed PKG to Apple, staple, and verify it. No publishing.
-[group('release')]
-package-notarized:
-    bash .github/scripts/package-macos-pkg.sh
-
-# Use existing local identities and the ignored signing/ folder; submits to Apple.
-[group('release')]
-pkg-local:
-    bash scripts/package-local-signed.sh
-
-# Build all binaries and relink the Swift app with the ReleaseFast core.
-[group('dev')]
+# Build Zig binaries, ReleaseFast core, and the Swift app.
+[group('build')]
 build:
     zig build
     zig build core -Doptimize=ReleaseFast
     touch Sources/CZestCore/empty.c
     swift build
 
-# Format all sources: `zig fmt` over src/ + `swift-format` over Sources/.
-[group('dev')]
+# Compile-check and lint Zig + Swift.
+[group('build')]
+lint:
+    zig build
+    zig build core -Doptimize=ReleaseFast
+    touch Sources/CZestCore/empty.c
+    swift build
+    swift-format lint --recursive Sources
+    swiftlint lint
+
+# Format Zig + Swift sources.
+[group('build')]
 format:
     zig fmt src
     swift-format format --in-place --recursive Sources
 
-# Compile-check and lint Zig and Swift sources.
-[group('dev')]
-lint:
-    @echo "→ zig build (compile check)"
-    zig build
-    zig build core -Doptimize=ReleaseFast
-    touch Sources/CZestCore/empty.c
-    @echo "→ swift build (compile check)"
-    swift build
-    @echo "→ swift-format lint"
-    swift-format lint --recursive Sources
-    @echo "→ swiftlint"
-    swiftlint lint
+# Remove Zig and SwiftPM build output.
+[group('build')]
+clean:
+    rm -rf zig-out .zig-cache .build
 
-# Build + run the Swift app in Debug.
-[group('dev')]
-run: build
+# Run the app in Debug.
+[group('build')]
+dev: build
     swift run Zest
 
-# Build + run the Swift app in Release (faster folder switching).
-[group('dev')]
-run-fast: build
+# Run the app in Release.
+[group('build')]
+run: build
     swift run -c release Zest
 
-# Run Zig and Swift tests with the ReleaseFast core.
+# ── test ─────────────────────────────────────────────────────────────────
+
+# Zig + Swift unit tests (ReleaseFast core).
 [group('test')]
 test:
     zig build test
@@ -74,63 +54,104 @@ test:
     touch Sources/CZestCore/empty.c
     swift test
 
-# Benchmark the C ABI against the real index.
+# Live FSEvents + failure recovery in a temp home.
 [group('test')]
+test-daemon:
+    zig build indexer query -Doptimize=ReleaseFast
+    node scripts/test-daemon.mjs
+
+# Headless AppKit UI tests (needs an index).
+[group('test')]
+test-ui:
+    zig build core -Doptimize=ReleaseFast
+    touch Sources/CZestCore/empty.c
+    swift test --filter UITests
+
+# ── bench ────────────────────────────────────────────────────────────────
+
+# Benchmark the C ABI against the real index.
+[group('bench')]
 bench-capi:
     zig build core -Doptimize=ReleaseFast --prefix zig-out/release
     mkdir -p zig-out/bin
     zig build-exe benchmarks/bench_capi.zig zig-out/release/lib/libzest-core.a -lc -OReleaseFast -femit-bin=zig-out/bin/bench-capi
     ./zig-out/bin/bench-capi
 
-# Benchmark search against a deterministic in-memory corpus.
-[group('test')]
+# Benchmark search against a synthetic corpus.
+[group('bench')]
 bench-search:
     mkdir -p zig-out/bin
     zig build-exe -OReleaseFast --dep zest -Mroot=benchmarks/bench_search.zig -OReleaseFast -Mzest=src/engine.zig -lc -femit-bin=zig-out/bin/bench-search
     ./zig-out/bin/bench-search
 
-# Exercise live FSEvents and failure recovery in an isolated temporary home.
-[group('test')]
-test-daemon:
-    zig build indexer query -Doptimize=ReleaseFast
-    node scripts/test-daemon.mjs
+# Benchmark the Swift UI end to end (needs an index).
+[group('bench')]
+bench-app: build
+    swift build -c release
+    ./.build/release/Zest --bench
 
-# Build the search index, then run a full scan of $HOME.
+# ── index ────────────────────────────────────────────────────────────────
+
+# Build the indexer and full-scan $HOME.
 [group('index')]
 index:
     zig build indexer -Doptimize=ReleaseFast
     ./zig-out/bin/zest-indexer --full-scan ~
 
-# Build the read-only index query CLI.
+# Open the index folder in Finder.
+[group('index')]
+index-open:
+    open ~/Library/Application\ Support/zest/
+
+# Delete the index (keeps user data).
+[group('index')]
+index-wipe:
+    rm -f ~/Library/Application\ Support/zest/index.zst
+
+# Build the zest-query CLI.
 [group('index')]
 query-build:
     zig build query -Doptimize=ReleaseFast
 
-# Install the indexer as a launchd background daemon.
-[group('index')]
-install-daemon:
+# ── daemon ───────────────────────────────────────────────────────────────
+
+# Install the indexer as a launchd agent.
+[group('daemon')]
+daemon-install:
     zig build indexer -Doptimize=ReleaseFast
     ./zig-out/bin/zest-indexer install
 
-# Uninstall the launchd daemon.
-[group('index')]
-uninstall-daemon:
+# Remove the launchd agent.
+[group('daemon')]
+daemon-uninstall:
     ./zig-out/bin/zest-indexer uninstall
 
-# Open the index data folder in Finder.
-[group('index')]
-open-index:
-    open ~/Library/Application\ Support/zest/
+# ── release ──────────────────────────────────────────────────────────────
 
-# Wipe the generated index while preserving user data.
-[group('index')]
-wipe-index:
-    rm -f ~/Library/Application\ Support/zest/index.zst
+# Ad-hoc Universal dist/Zest.app (local only).
+[group('release')]
+app-package:
+    bash scripts/package.sh
 
-# Remove build output and caches (Zig + Swift PM).
-[group('index')]
-clean:
-    rm -rf zig-out .zig-cache .build
+# Unsigned PKG (local only).
+[group('release')]
+pkg-unsigned:
+    bash .github/scripts/package-macos-pkg.sh --unsigned
+
+# Developer ID signed PKG, not notarized.
+[group('release')]
+pkg-signed:
+    bash .github/scripts/package-macos-pkg.sh --signed-only
+
+# Signed PKG, submitted to Apple, stapled, verified.
+[group('release')]
+pkg-notarized:
+    bash .github/scripts/package-macos-pkg.sh
+
+# Notarized PKG using local identities and the ignored signing/ folder.
+[group('release')]
+pkg-local:
+    bash scripts/package-local-signed.sh
 
 # ── install ──────────────────────────────────────────────────────────────
 

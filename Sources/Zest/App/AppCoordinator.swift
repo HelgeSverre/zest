@@ -227,11 +227,12 @@ final class AppCoordinator {
   }
 
   /// `startPath` is an absolute directory (already validated); nil means `$HOME`.
-  init(startPath: String? = nil) {
+  /// `indexPath` overrides the app-support index location (UI tests).
+  init(startPath: String? = nil, indexPath: String? = nil) {
     let fm = FileManager.default
     let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     let zestDir = support?.appendingPathComponent("zest")
-    let indexPath = zestDir?.appendingPathComponent("index.zst").path
+    let indexPath = indexPath ?? zestDir?.appendingPathComponent("index.zst").path
     core = indexPath.flatMap { ZestCore(indexPath: $0) }
     indexPathForReload = indexPath
     userState = UserState(directory: zestDir)

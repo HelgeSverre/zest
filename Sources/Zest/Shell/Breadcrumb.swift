@@ -222,7 +222,8 @@ final class Breadcrumb: NSView {
     }
     for (i, seg) in segments.enumerated() {
       tokens.append(
-        Token(text: seg.name, path: seg.fullPath, style: i == segments.count - 1 ? .current : .parent))
+        Token(
+          text: seg.name, path: seg.fullPath, style: i == segments.count - 1 ? .current : .parent))
     }
     return tokens
   }
@@ -480,7 +481,8 @@ private final class SegmentView: NSView {
     addSubview(label)
     NSLayoutConstraint.activate([
       label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Breadcrumb.Metrics.segPad),
-      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
+      label.trailingAnchor.constraint(
+        equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
       label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
       label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
     ])
@@ -546,7 +548,8 @@ private final class CollapsedToken: NSView {
     addSubview(label)
     NSLayoutConstraint.activate([
       label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Breadcrumb.Metrics.segPad),
-      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
+      label.trailingAnchor.constraint(
+        equalTo: trailingAnchor, constant: -Breadcrumb.Metrics.segPad),
       label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
       label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
     ])

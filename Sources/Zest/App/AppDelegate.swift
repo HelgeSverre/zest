@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// shortcuts (and the responder chain can't dispatch Cut/Copy/Paste/Select
   /// All into the search field). Navigation carries the keyboard shortcuts
   /// that mirror the old Zig UI: ⌘↑ = Go Up, ⌘↓ = Open Selection.
-  private func installMainMenu() {
+  func installMainMenu() {
     let mainMenu = NSMenu()
 
     // Application menu (titled with the process name automatically).

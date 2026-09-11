@@ -56,7 +56,7 @@ every change (destroys the clicked row mid-double-click), stale-index
 
 - [x] **A1. O(1) search dedup** (`src/index/search.zig`) — done, 250× on
   short queries. Zig tests pass; result counts byte-identical.
-- [x] **A2. Ship the engine in ReleaseFast** — `just build` / `run` must build
+- [x] **A2. Ship the engine in ReleaseFast** — `just build` / `dev` must build
   `libzest-core.a` with `-Doptimize=ReleaseFast` (Debug Zig lib is ~19×
   slower; there is no reason the *engine* should ever be Debug, even in dev).
 - [x] **A3. Sane result cap** — drop `maxResults` from 100,000 to ~2,000 in
@@ -258,6 +258,55 @@ these changes and still swings 28–38 ms across runs), and Apple Silicon is a
 16-byte NEON register against this machine's 32-byte AVX2, so the scan speedup
 there will be smaller. Re-run `just bench-capi` on the real index before
 quoting numbers for macOS.
+
+### UI benchmark (`just bench-app`)
+
+`Zest --bench` (`Sources/Zest/App/Bench.swift`) measures everything *above*
+the engine: it builds the real `RootViewController` in an off-screen window
+(the `--snapshot` trick), drives the real `AppCoordinator` through a scripted
+scenario — navigate `~` → `~/Library` → `~/Library/Application Support` → `~`,
+type `r`/`re`/`rea`/`read`/`readme`, a filter-only `cat:code`, clear — and
+reports two numbers per step, median and p90 over 7 iterations (`--iterations
+N`, `--json` for scripting):
+
+- **query** — from the coordinator mutation until the fresh rows land on main
+  (the second `onChange` of that generation, `isLoading == false`). This is the
+  engine call + off-main sort + FFI row copy + every observer's refresh
+  (`browser.reload()`, sidebar histogram, filter bar, status bar).
+- **render** — a forced full layout + `cacheDisplay` of the window afterwards,
+  i.e. the cost of drawing the whole chrome once; it is roughly constant and
+  mostly there to catch a view that suddenly becomes expensive to draw.
+
+`rows` is the delivered row count (2000 = the UI cap). "clear search" keeps the
+subfolders scope, as the real search field does, so it is a capped subtree
+listing rather than a folder browse. Needs an index; exits 1 with a hint
+otherwise. Requires a Release build of the Swift app (the recipe does this) —
+Debug numbers are not comparable.
+
+2026-09-11, M-series, ReleaseFast core + Release app, 7 iterations:
+
+```
+step                                query med   query p90  render med  render p90    rows
+open ~                                   15.3        16.0        13.1        13.5      42
+open ~/Library                           24.7        26.1        13.4        14.3     118
+open ~/Library/Application Support       26.9        27.0        13.7        14.2     259
+back to ~                                26.4        28.5        13.0        13.7      42
+type 'r'                                 25.6        26.5        13.0        13.2    2000
+type 're'                                31.4        32.3        11.5        13.2    2000
+type 'rea'                               31.9        32.6        13.1        13.5    2000
+type 'read'                              28.7        29.9        13.1        13.5    2000
+type 'readme'                            29.2        30.2        13.1        14.0    2000
+filter cat:code                          40.6        42.1        14.6        14.7    2000
+clear search                             32.7        32.7        12.3        12.5    2000
+
+7 iterations, 11 steps, total wall 3.52 s
+```
+
+Reading it against `bench-capi`: the engine returns a depth-1 folder listing
+in ~5 ms and a capped 2k search in well under a millisecond, so the 15–40 ms
+"query" figures are dominated by the Swift side (observer refreshes, the
+sidebar histogram/ext-breakdown, table reload) — that is where a UI regression
+will show up.
 
 ## Archived docs
 

@@ -19,6 +19,8 @@ final class FilePreviewOverlay: NSView {
     wantsLayer = true
     layer?.backgroundColor = Theme.scrim.cgColor
     isHidden = true
+    setAccessibilityIdentifier(A11y.preview)
+    setAccessibilityLabel("File preview")
     buildPanel()
   }
 

@@ -97,6 +97,7 @@ final class SidebarViewController: NSViewController {
     stack.spacing = 0
     stack.translatesAutoresizingMaskIntoConstraints = false
 
+    view.setAccessibilityIdentifier(A11y.sidebar)
     view.addSubview(stack)
     NSLayoutConstraint.activate([
       stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
@@ -629,6 +630,7 @@ private final class CatRow: FocusableRow {
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
     layer?.cornerRadius = 6
+    setAccessibilityIdentifier(A11y.sidebarCategory(meta.queryKey))
 
     // Chevron
     if hasChildren {
@@ -665,10 +667,8 @@ private final class CatRow: FocusableRow {
     countLabel.translatesAutoresizingMaskIntoConstraints = false
     addSubview(countLabel)
 
-
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 26),
-
 
       dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hasChildren ? 22 : 8),
       dot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -805,10 +805,8 @@ private final class ExtRow: FocusableRow {
     countLabel.translatesAutoresizingMaskIntoConstraints = false
     addSubview(countLabel)
 
-
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 22),
-
 
       dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
       dot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -929,13 +927,11 @@ private final class PinRow: FocusableRow {
     label.lineBreakMode = .byTruncatingTail
     label.translatesAutoresizingMaskIntoConstraints = false
 
-
     addSubview(icon)
     addSubview(label)
 
     NSLayoutConstraint.activate([
       heightAnchor.constraint(equalToConstant: 30),
-
 
       icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
       icon.centerYAnchor.constraint(equalTo: centerYAnchor),

@@ -18,7 +18,7 @@ enum Snapshot {
     window.setContentSize(size)
     window.orderFront(nil)
     // Let async layout / CATransaction commit before capturing.
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.35))
+    RunLoopPump.run(0.35)
 
     guard let content = window.contentView else {
       fail(path, "no contentView")
@@ -49,5 +49,24 @@ enum Snapshot {
 
   private static func fail(_ p: String, _ s: String) {
     log("snapshot ERROR (\(p)): \(s)")
+  }
+}
+
+/// Main-thread run-loop pumping shared by the off-screen harnesses (Snapshot,
+/// Bench, and the headless UI tests).
+enum RunLoopPump {
+  /// Pump the main run loop for `seconds`.
+  static func run(_ seconds: TimeInterval) {
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: seconds))
+  }
+
+  /// Pump in 1 ms slices until `done` is true or `timeout` elapses.
+  @discardableResult
+  static func until(timeout: TimeInterval, _ done: () -> Bool) -> Bool {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while !done() && Date() < deadline {
+      RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.001))
+    }
+    return done()
   }
 }

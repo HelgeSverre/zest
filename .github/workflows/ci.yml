@@ -42,4 +42,4 @@ jobs:
         run: just test-daemon
 
       - name: Build and validate local-only release candidate
-        run: just package
+        run: just app-package

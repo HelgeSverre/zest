@@ -121,6 +121,7 @@ private final class ScopeControl: NSView {
         self?.coordinator.scope = scope  // fires onChange → filterBar.refresh()
       }
       seg.scope = scope
+      seg.setAccessibilityIdentifier(A11y.filterScope(scope))
       segments.append(seg)
     }
 

@@ -50,6 +50,7 @@ final class StatusBarView: NSView {
     countLabel.font = .monospacedSystemFont(ofSize: 11.5, weight: .semibold)
     countLabel.textColor = Theme.textSecondary
     countLabel.onCopy = { [weak self] in self?.copyCount() }
+    countLabel.setAccessibilityIdentifier(A11y.statusCount)
 
     countSuffix.translatesAutoresizingMaskIntoConstraints = false
     countSuffix.font = .systemFont(ofSize: 11.5, weight: .regular)
@@ -59,6 +60,7 @@ final class StatusBarView: NSView {
     selectionLabel.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
     selectionLabel.textColor = Theme.textSecondary
     selectionLabel.alignment = .center
+    selectionLabel.setAccessibilityIdentifier(A11y.statusSelection)
     selectionLabel.lineBreakMode = .byTruncatingMiddle
     selectionLabel.cell?.truncatesLastVisibleLine = true
     selectionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

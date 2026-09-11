@@ -45,6 +45,14 @@ final class ToolbarView: NSView {
     forwardButton.onClick = { [weak coordinator] in coordinator?.goForward() }
     upButton.onClick = { [weak coordinator] in coordinator?.goUp() }
     savedButton.onClick = { [weak self] in self?.onSavedClick?() }
+    for (button, id) in [
+      (backButton, A11y.toolbarBack), (forwardButton, A11y.toolbarForward),
+      (upButton, A11y.toolbarUp),
+    ] {
+      button.setAccessibilityIdentifier(id)
+      button.setAccessibilityLabel(button.toolTip)
+    }
+    breadcrumb.setAccessibilityIdentifier(A11y.breadcrumb)
 
     navStack = NSStackView(views: [backButton, forwardButton, upButton])
     navStack.orientation = .horizontal

@@ -293,7 +293,8 @@ final class BrowserViewController: NSViewController {
   }
 
   @objc private func handleDoubleClick() {
-    activate(row: tableView.clickedRow)
+    // clickedRow is -1 when the action is sent without a mouse click (tests).
+    activate(row: tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow)
   }
 
   /// Open the currently selected row, mirroring Return/Enter. No-op if nothing
@@ -726,6 +727,7 @@ final class BrowserViewController: NSViewController {
 
   private func buildTable() {
     tableView.dataSource = self
+    tableView.setAccessibilityIdentifier(A11y.browserTable)
     tableView.delegate = self
     tableView.rowHeight = 34
     tableView.selectionHighlightStyle = .none
