@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const reader_mod = @import("reader.zig");
 const format = @import("format.zig");
+const paths = @import("../core/paths.zig");
 
 /// Sum per-category counts across the subtree rooted at `scope_path`.
 /// Walks the (deduplicated) dir table to find descendants; O(D) in the
@@ -11,43 +12,13 @@ const format = @import("format.zig");
 /// use `reader.getFolderHistogram` instead — O(1).
 pub fn computeHistogram(reader: reader_mod.IndexReader, scope_path: []const u8, out: *[types.FileCategory.count]u32) void {
     @memset(out, 0);
-
-    const header = reader.header;
-    const data = reader.data;
-    const num: usize = @intCast(header.num_entries);
-    const parent_ids_start: usize = @intCast(header.paths_offset);
-    const dir_count_offset = parent_ids_start + num * 4;
-    if (dir_count_offset + 4 > data.len) return;
-    const dir_count = std.mem.readInt(u32, data[dir_count_offset..][0..4], .little);
-    const dir_offsets_start = dir_count_offset + 4;
-    const dir_blob_len_pos = dir_offsets_start + dir_count * 4;
-    if (dir_blob_len_pos + 4 > data.len) return;
-    const dir_blob_len = std.mem.readInt(u32, data[dir_blob_len_pos..][0..4], .little);
-    const dir_blob_start = dir_blob_len_pos + 4;
-    if (dir_blob_start + dir_blob_len > data.len) return;
-
-    const is_root_scope = scope_path.len == 1 and scope_path[0] == '/';
+    const table = reader.dirTable() orelse return;
 
     var counts: [types.FileCategory.count]u32 = .{0} ** types.FileCategory.count;
     var d: u32 = 0;
-    while (d < dir_count) : (d += 1) {
-        const off = std.mem.readInt(u32, data[dir_offsets_start + d * 4 ..][0..4], .little);
-        const next: u32 = if (d + 1 < dir_count)
-            std.mem.readInt(u32, data[dir_offsets_start + (d + 1) * 4 ..][0..4], .little)
-        else
-            dir_blob_len;
-        if (next < off or next > dir_blob_len) continue;
-        const path = data[dir_blob_start + off .. dir_blob_start + next];
-
-        const is_descendant = blk: {
-            if (is_root_scope) break :blk true;
-            if (path.len < scope_path.len) break :blk false;
-            if (!std.mem.eql(u8, path[0..scope_path.len], scope_path)) break :blk false;
-            if (path.len == scope_path.len) break :blk true;
-            if (path[scope_path.len] == '/') break :blk true;
-            break :blk false;
-        };
-        if (!is_descendant) continue;
+    while (d < table.count) : (d += 1) {
+        const path = table.path(d) orelse continue;
+        if (!paths.isPathUnder(path, scope_path)) continue;
 
         var folder: [types.FileCategory.count]u32 = undefined;
         reader.getFolderHistogram(d, &folder);
@@ -74,7 +45,7 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
 
     const header = reader.header;
     const data = reader.data;
-    const num_dirs = dirCount(header, data) orelse return 0;
+    const num_dirs = reader.dirCount();
     if (num_dirs == 0) return 0;
 
     const col_start: usize = @intCast(header.ext_breakdown_offset);
@@ -88,7 +59,7 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
     const in_subtree = allocator.alloc(u8, num_dirs) catch return 0;
     defer allocator.free(in_subtree);
     @memset(in_subtree, 0);
-    if (!markSubtreeDirsRaw(header, data, scope_path, in_subtree)) return 0;
+    if (!markSubtreeDirs(reader, scope_path, in_subtree)) return 0;
 
     // Single forward walk of the column. For each (dir_id, cat) bucket,
     // check if the bucket's cat matches AND dir_id is in the subtree. If
@@ -110,8 +81,7 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
             if (pos + 2 > data.len) return 0;
             const num_exts = std.mem.readInt(u16, data[pos..][0..2], .little);
             pos += 2;
-            if (!skipExts(data, pos, num_exts)) return 0;
-            const ext_end = bucketEnd(data, pos, num_exts);
+            const ext_end = reader.bucketEnd(pos, num_exts);
             if (ext_end == 0) return 0;
 
             if (c == cat and in_subtree[d] != 0) {
@@ -179,50 +149,13 @@ pub fn computeExtBreakdown(reader: reader_mod.IndexReader, scope_path: []const u
 /// test instead of a string prefix compare per entry.
 /// Returns false if the dir table is malformed (caller should fall back to the
 /// string-compare path and free the marks buffer).
-/// Uses the same boundary-safe predicate as config.isPathUnder.
+/// Uses the same boundary-safe predicate as paths.isPathUnder.
 pub fn markSubtreeDirs(reader: reader_mod.IndexReader, scope_path: []const u8, marks: []u8) bool {
-    return markSubtreeDirsRaw(reader.header, reader.data, scope_path, marks);
-}
-
-/// Mark `in_subtree[d] = 1` for every dir id that falls under
-/// `scope_path` (or every dir if `scope_path == "/"`). Returns false
-/// if the dir table is malformed.
-fn markSubtreeDirsRaw(header: format.Header, data: []const u8, scope_path: []const u8, in_subtree: []u8) bool {
-    const num = in_subtree.len;
-    const parent_ids_start: usize = @intCast(header.paths_offset);
-    const dir_count_offset = parent_ids_start + @as(usize, @intCast(header.num_entries)) * 4;
-    if (dir_count_offset + 4 > data.len) return false;
-    const dir_count = std.mem.readInt(u32, data[dir_count_offset..][0..4], .little);
-    const dir_offsets_start = dir_count_offset + 4;
-    const dir_blob_len_pos = dir_offsets_start + dir_count * 4;
-    if (dir_blob_len_pos + 4 > data.len) return false;
-    const dir_blob_len = std.mem.readInt(u32, data[dir_blob_len_pos..][0..4], .little);
-    const dir_blob_start = dir_blob_len_pos + 4;
-    if (dir_blob_start + dir_blob_len > data.len) return false;
-
-    const is_root_scope = scope_path.len == 1 and scope_path[0] == '/';
+    const table = reader.dirTable() orelse return false;
     var d: u32 = 0;
-    while (d < num and d < dir_count) : (d += 1) {
-        if (is_root_scope) {
-            in_subtree[d] = 1;
-            continue;
-        }
-        const off = std.mem.readInt(u32, data[dir_offsets_start + d * 4 ..][0..4], .little);
-        const next: u32 = if (d + 1 < dir_count)
-            std.mem.readInt(u32, data[dir_offsets_start + (d + 1) * 4 ..][0..4], .little)
-        else
-            dir_blob_len;
-        if (next < off or next > dir_blob_len) continue;
-        const path = data[dir_blob_start + off .. dir_blob_start + next];
-
-        const is_descendant = blk: {
-            if (path.len < scope_path.len) break :blk false;
-            if (!std.mem.eql(u8, path[0..scope_path.len], scope_path)) break :blk false;
-            if (path.len == scope_path.len) break :blk true;
-            if (path[scope_path.len] == '/') break :blk true;
-            break :blk false;
-        };
-        if (is_descendant) in_subtree[d] = 1;
+    while (d < marks.len and d < table.count) : (d += 1) {
+        const path = table.path(d) orelse continue;
+        if (paths.isPathUnder(path, scope_path)) marks[d] = 1;
     }
     return true;
 }
@@ -243,43 +176,4 @@ test "subtree ext breakdown merges the same ext across directories" {
     try std.testing.expectEqual(@as(usize, 1), n); // ONE merged "pdf" row
     try std.testing.expectEqual(@as(u32, 2), out[0].count); // …with count 2
     try std.testing.expectEqualStrings("pdf", out[0].name[0..out[0].name_len]);
-}
-
-/// Number of directories in the dir table. Cached inline.
-fn dirCount(header: format.Header, data: []const u8) ?u32 {
-    const num: usize = @intCast(header.num_entries);
-    const parent_ids_start: usize = @intCast(header.paths_offset);
-    const dir_count_offset = parent_ids_start + num * 4;
-    if (dir_count_offset + 4 > data.len) return null;
-    return std.mem.readInt(u32, data[dir_count_offset..][0..4], .little);
-}
-
-/// Bounds check: would advancing past `num_exts` ext entries starting at
-/// `ext_start` fall inside `data`? Cheap, no allocations.
-fn skipExts(data: []const u8, ext_start: usize, num_exts: u16) bool {
-    var p = ext_start;
-    var i: u16 = 0;
-    while (i < num_exts) : (i += 1) {
-        if (p + 1 > data.len) return false;
-        const len = data[p];
-        p += 1 + len + 4;
-        if (p > data.len) return false;
-    }
-    return true;
-}
-
-/// Compute the byte position just past `num_exts` ext entries starting at
-/// `ext_start`. Returns 0 if the column is truncated.
-fn bucketEnd(data: []const u8, ext_start: usize, num_exts: u16) usize {
-    var p = ext_start;
-    var i: u16 = 0;
-    while (i < num_exts) : (i += 1) {
-        if (p + 1 > data.len) return 0;
-        const len = data[p];
-        p += 1;
-        p += len;
-        p += 4; // u32 count
-        if (p > data.len) return 0;
-    }
-    return p;
 }

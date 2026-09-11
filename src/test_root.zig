@@ -7,6 +7,7 @@ comptime {
     _ = @import("core/filters.zig");
     _ = @import("core/humanize.zig");
     _ = @import("core/cli.zig");
+    _ = @import("core/paths.zig");
     _ = @import("config/config.zig");
 
     // Index

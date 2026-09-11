@@ -1,5 +1,6 @@
 const std = @import("std");
 const runtime = @import("../core/runtime.zig");
+const paths = @import("../core/paths.zig");
 
 pub const app_name = "zest";
 pub const index_filename = "index.zst";
@@ -60,8 +61,8 @@ pub fn shouldExclude(name: []const u8) bool {
 /// refer to descendants (including deleted paths), so no filesystem lookup is
 /// appropriate here. The explicit root itself is always allowed.
 pub fn shouldExcludeDescendant(path: []const u8, root: []const u8, support: []const u8) bool {
-    if (isPathUnder(path, support)) return true;
-    if (!isPathUnder(path, root)) return true;
+    if (paths.isPathUnder(path, support)) return true;
+    if (!paths.isPathUnder(path, root)) return true;
     var end = root.len;
     while (end < path.len) {
         if (path[end] == '/') end += 1;
@@ -112,21 +113,6 @@ test "shouldExclude" {
     try std.testing.expect(shouldExclude(".DS_Store"));
     try std.testing.expect(!shouldExclude("src"));
     try std.testing.expect(!shouldExclude("main.zig"));
-}
-
-/// True when `path` is `dir` itself or lives underneath it. A bare prefix
-/// match is not enough: `/a/zest-foo` must not count as under `/a/zest`.
-pub fn isPathUnder(path: []const u8, dir: []const u8) bool {
-    if (std.mem.eql(u8, dir, "/")) return std.mem.startsWith(u8, path, "/");
-    if (!std.mem.startsWith(u8, path, dir)) return false;
-    return path.len == dir.len or path[dir.len] == '/';
-}
-
-test "isPathUnder matches dir itself and children, not prefix siblings" {
-    try std.testing.expect(isPathUnder("/a/zest", "/a/zest"));
-    try std.testing.expect(isPathUnder("/a/zest/index.zst", "/a/zest"));
-    try std.testing.expect(!isPathUnder("/a/zest-foo", "/a/zest"));
-    try std.testing.expect(!isPathUnder("/a/ze", "/a/zest"));
 }
 
 test "shouldExcludePath" {

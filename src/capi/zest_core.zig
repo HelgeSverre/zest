@@ -255,9 +255,10 @@ pub const ZestExtBreakdown = extern struct {
 
 /// Return the top-N extensions for the (scope, category) pair. `out` is
 /// caller-allocated, length ≥ `max`. Returns the number of rows actually
-/// written (≤ `max`, ≤ 32). For `max_depth == 1`, reads the per-folder bucket
-/// directly (O(1) amortized — walks past earlier buckets in the column to
-/// find the target). For deeper scopes, merges all buckets in the subtree
+/// written (≤ `max`, ≤ 32). For `max_depth == 1`, reads the per-folder bucket:
+/// the column has no offset table, so this walks the headers of every earlier
+/// bucket — O(dir_id × categories), not O(1). A per-dir offset table (format
+/// version bump) would make it a seek. For deeper scopes, merges all buckets in the subtree
 /// (O(D), hashmap temp). Buckets are already sorted by count desc on disk,
 /// but the subtree merge sorts the merged result too. Directories not in
 /// the index return 0 rows.

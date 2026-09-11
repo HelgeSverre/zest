@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const format = @import("format.zig");
 const bitmap_mod = @import("bitmap.zig");
-const runtime = @import("../core/runtime.zig");
 
 /// Read-only access to a serialized index (from memory buffer or mmap).
 pub const IndexReader = struct {
@@ -110,43 +109,45 @@ pub const IndexReader = struct {
         };
     }
 
-    pub fn getDirPath(self: IndexReader, idx: u32) ?[]const u8 {
+    /// The prefix-deduped directory table that follows the parent-id column:
+    /// `u32 count`, `u32 offsets[count]`, `u32 blob_len`, `blob`. Null when the
+    /// index is truncated. Every dir-table reader goes through here.
+    pub const DirTable = struct {
+        count: u32,
+        offsets_start: usize,
+        blob: []const u8,
+        data: []const u8,
+
+        /// Absolute path of dir `d`, or null when out of range or malformed.
+        pub fn path(self: DirTable, d: u32) ?[]const u8 {
+            if (d >= self.count) return null;
+            const off = std.mem.readInt(u32, self.data[self.offsets_start + d * 4 ..][0..4], .little);
+            const next = if (d + 1 < self.count)
+                std.mem.readInt(u32, self.data[self.offsets_start + (d + 1) * 4 ..][0..4], .little)
+            else
+                self.blob.len;
+            if (off > next or next > self.blob.len) return null;
+            return self.blob[off..next];
+        }
+    };
+
+    pub fn dirTable(self: IndexReader) ?DirTable {
         const num: usize = @intCast(self.header.num_entries);
-        if (idx >= num) return null;
-
-        const paths_start: usize = @intCast(self.header.paths_offset);
-        const parent_ids_start = paths_start;
-
-        const pid_offset = parent_ids_start + idx * 4;
-        if (pid_offset + 4 > self.data.len) return null;
-        const parent_id = std.mem.readInt(u32, self.data[pid_offset..][0..4], .little);
-
-        const dir_count_offset = parent_ids_start + num * 4;
+        const dir_count_offset = @as(usize, @intCast(self.header.paths_offset)) + num * 4;
         if (dir_count_offset + 4 > self.data.len) return null;
-        const dir_count = std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
-        if (parent_id >= dir_count) return null;
+        const count = std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
+        const offsets_start = dir_count_offset + 4;
+        const blob_len_pos = offsets_start + @as(usize, count) * 4;
+        if (blob_len_pos + 4 > self.data.len) return null;
+        const blob_len = std.mem.readInt(u32, self.data[blob_len_pos..][0..4], .little);
+        const blob_start = blob_len_pos + 4;
+        if (blob_start + blob_len > self.data.len) return null;
+        return .{ .count = count, .offsets_start = offsets_start, .blob = self.data[blob_start .. blob_start + blob_len], .data = self.data };
+    }
 
-        const dir_offsets_start = dir_count_offset + 4;
-        const dir_off_pos = dir_offsets_start + parent_id * 4;
-        if (dir_off_pos + 4 > self.data.len) return null;
-        const dir_offset = std.mem.readInt(u32, self.data[dir_off_pos..][0..4], .little);
-
-        const dir_blob_len_pos = dir_offsets_start + dir_count * 4;
-        if (dir_blob_len_pos + 4 > self.data.len) return null;
-        const dir_blob_len = std.mem.readInt(u32, self.data[dir_blob_len_pos..][0..4], .little);
-        const dir_blob_start = dir_blob_len_pos + 4;
-
-        const next_offset = if (parent_id + 1 < dir_count)
-            std.mem.readInt(u32, self.data[dir_offsets_start + (parent_id + 1) * 4 ..][0..4], .little)
-        else
-            dir_blob_len;
-
-        if (dir_offset > next_offset or next_offset > dir_blob_len) return null;
-        const start = dir_blob_start + dir_offset;
-        const end = dir_blob_start + next_offset;
-        if (end > self.data.len) return null;
-
-        return self.data[start..end];
+    pub fn getDirPath(self: IndexReader, idx: u32) ?[]const u8 {
+        const table = self.dirTable() orelse return null;
+        return table.path(self.getParentId(idx) orelse return null);
     }
 
     /// Read the deduplicated directory id for entry `idx` (cheap: one u32 read).
@@ -165,28 +166,10 @@ pub const IndexReader = struct {
     /// directory is not present in the index. Linear scan of the (deduplicated)
     /// directory table — far cheaper than scanning all entries.
     pub fn findDirId(self: IndexReader, path: []const u8) ?u32 {
-        const num: usize = @intCast(self.header.num_entries);
-        const parent_ids_start: usize = @intCast(self.header.paths_offset);
-        const dir_count_offset = parent_ids_start + num * 4;
-        if (dir_count_offset + 4 > self.data.len) return null;
-        const dir_count = std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
-
-        const dir_offsets_start = dir_count_offset + 4;
-        const dir_blob_len_pos = dir_offsets_start + dir_count * 4;
-        if (dir_blob_len_pos + 4 > self.data.len) return null;
-        const dir_blob_len = std.mem.readInt(u32, self.data[dir_blob_len_pos..][0..4], .little);
-        const dir_blob_start = dir_blob_len_pos + 4;
-        if (dir_blob_start + dir_blob_len > self.data.len) return null;
-
+        const table = self.dirTable() orelse return null;
         var d: u32 = 0;
-        while (d < dir_count) : (d += 1) {
-            const off = std.mem.readInt(u32, self.data[dir_offsets_start + d * 4 ..][0..4], .little);
-            const next = if (d + 1 < dir_count)
-                std.mem.readInt(u32, self.data[dir_offsets_start + (d + 1) * 4 ..][0..4], .little)
-            else
-                dir_blob_len;
-            if (next < off or next > dir_blob_len) continue;
-            if (std.mem.eql(u8, self.data[dir_blob_start + off .. dir_blob_start + next], path)) return d;
+        while (d < table.count) : (d += 1) {
+            if (std.mem.eql(u8, table.path(d) orelse continue, path)) return d;
         }
         return null;
     }
@@ -284,8 +267,8 @@ pub const IndexReader = struct {
             if (pos + 2 > self.data.len) return 0;
             const num_exts = std.mem.readInt(u16, self.data[pos..][0..2], .little);
             pos += 2;
-            if (!self.skipExts(pos, num_exts)) return 0;
             pos = self.bucketEnd(pos, num_exts);
+            if (pos == 0) return 0;
         }
         return self.readBucketInto(pos, out);
     }
@@ -293,11 +276,7 @@ pub const IndexReader = struct {
     /// Number of directories in the dir table. Bounds-checked; returns 0 on
     /// malformed/truncated index (matches the defensive pattern in findDirId).
     pub fn dirCount(self: IndexReader) u32 {
-        const num: usize = @intCast(self.header.num_entries);
-        const parent_ids_start: usize = @intCast(self.header.paths_offset);
-        const dir_count_offset = parent_ids_start + num * 4;
-        if (dir_count_offset + 4 > self.data.len) return 0;
-        return std.mem.readInt(u32, self.data[dir_count_offset..][0..4], .little);
+        return if (self.dirTable()) |table| table.count else 0;
     }
 
     /// Read the bucket starting at `pos` (which points to the `u16 num_exts`
@@ -346,7 +325,7 @@ pub const IndexReader = struct {
 
     /// Compute the byte position just past `num_exts` ext entries starting at
     /// `ext_start`. Returns 0 if the column is truncated.
-    fn bucketEnd(self: IndexReader, ext_start: usize, num_exts: u16) usize {
+    pub fn bucketEnd(self: IndexReader, ext_start: usize, num_exts: u16) usize {
         var p = ext_start;
         var i: u16 = 0;
         while (i < num_exts) : (i += 1) {
@@ -358,20 +337,6 @@ pub const IndexReader = struct {
             if (p > self.data.len) return 0;
         }
         return p;
-    }
-
-    /// Bounds check: would advancing past `num_exts` ext entries starting at
-    /// `ext_start` fall inside `data`? Cheap, no allocations.
-    fn skipExts(self: IndexReader, ext_start: usize, num_exts: u16) bool {
-        var p = ext_start;
-        var i: u16 = 0;
-        while (i < num_exts) : (i += 1) {
-            if (p + 1 > self.data.len) return false;
-            const len = self.data[p];
-            p += 1 + len + 4;
-            if (p > self.data.len) return false;
-        }
-        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -393,14 +358,5 @@ pub const IndexReader = struct {
         std.mem.writeInt(u64, data[16..24], 0xFFFFFFFFFFFFFFFF, .little);
 
         try std.testing.expectError(error.MalformedIndex, IndexReader.init(allocator, data));
-    }
-
-    pub fn openFile(allocator: std.mem.Allocator, path: []const u8) !IndexReader {
-        const data = try runtime.readFileAlloc(allocator, path, .unlimited);
-        if (data.len < format.HEADER_SIZE) {
-            allocator.free(data);
-            return error.IndexTooSmall;
-        }
-        return try init(allocator, data);
     }
 };

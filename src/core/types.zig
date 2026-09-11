@@ -33,13 +33,3 @@ pub const FileCategory = enum(u8) {
         };
     }
 };
-
-pub const SearchResult = struct {
-    name: []const u8,
-    dir_path: []const u8,
-    size: u64,
-    mtime: i64,
-    kind: FileKind,
-    category: FileCategory,
-    score: u32,
-};

@@ -65,9 +65,10 @@ fn parseQualifier(token: []const u8, now_unix: i64) ?FilterCriterion {
     } else if (std.ascii.eqlIgnoreCase(key, "ext")) {
         return parseExtension(negated, value);
     } else if (std.ascii.eqlIgnoreCase(key, "size")) {
-        return parseSizeFilter(value);
+        // No negated form: fall through to literal text like an unknown qualifier.
+        return if (negated) null else parseSizeFilter(value);
     } else if (std.ascii.eqlIgnoreCase(key, "date")) {
-        return parseDateFilter(value, now_unix);
+        return if (negated) null else parseDateFilter(value, now_unix);
     } else if (std.ascii.eqlIgnoreCase(key, "cat")) {
         return parseCategory(negated, value);
     } else if (std.ascii.eqlIgnoreCase(key, "path")) {
@@ -446,124 +447,6 @@ fn parseDateString(input: []const u8) !i64 {
     return epoch_days * 86400;
 }
 
-
-fn categoryName(cat: types.FileCategory) []const u8 {
-    return switch (cat) {
-        .uncategorized => "other",
-        .images => "images",
-        .text => "text",
-        .documents => "documents",
-        .spreadsheets => "spreadsheets",
-        .audio => "audio",
-        .video => "video",
-        .code => "code",
-        .archives => "archives",
-    };
-}
-
-fn formatSizeCriterion(f: anytype, buf: []u8) []const u8 {
-    const op_str: []const u8 = switch (f.op) {
-        .gt => ">",
-        .lt => "<",
-        .gte => ">=",
-        .lte => "<=",
-        .range => "",
-        .eq => "",
-    };
-    if (f.op == .range) {
-        var lower_buf: [32]u8 = undefined;
-        var upper_buf: [32]u8 = undefined;
-        const lower_str = formatBytesValue(f.value, &lower_buf);
-        const upper_str = formatBytesValue(f.value_upper, &upper_buf);
-        return std.fmt.bufPrint(buf, "size:{s}..{s}", .{ lower_str, upper_str }) catch "";
-    }
-    var val_buf: [32]u8 = undefined;
-    const val_str = formatBytesValue(f.value, &val_buf);
-    return std.fmt.bufPrint(buf, "size:{s}{s}", .{ op_str, val_str }) catch "";
-}
-
-fn formatBytesValue(bytes: u64, buf: []u8) []const u8 {
-    if (bytes == 0) return std.fmt.bufPrint(buf, "0", .{}) catch "0";
-    if (bytes >= 1024 * 1024 * 1024 and bytes % (1024 * 1024 * 1024) == 0) {
-        return std.fmt.bufPrint(buf, "{d}gb", .{bytes / (1024 * 1024 * 1024)}) catch "";
-    }
-    if (bytes >= 1024 * 1024 and bytes % (1024 * 1024) == 0) {
-        return std.fmt.bufPrint(buf, "{d}mb", .{bytes / (1024 * 1024)}) catch "";
-    }
-    if (bytes >= 1024 and bytes % 1024 == 0) {
-        return std.fmt.bufPrint(buf, "{d}kb", .{bytes / 1024}) catch "";
-    }
-    // Non-round values: pick best unit
-    if (bytes >= 1024 * 1024) {
-        const mb_val = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
-        return std.fmt.bufPrint(buf, "{d:.1}mb", .{mb_val}) catch "";
-    }
-    if (bytes >= 1024) {
-        const kb_val = @as(f64, @floatFromInt(bytes)) / 1024.0;
-        return std.fmt.bufPrint(buf, "{d:.1}kb", .{kb_val}) catch "";
-    }
-    return std.fmt.bufPrint(buf, "{d}b", .{bytes}) catch "";
-}
-
-fn formatDateCriterion(f: anytype, buf: []u8, now_unix: i64) []const u8 {
-    const day_secs: i64 = 86400;
-    const now = now_unix;
-
-    // Try to detect relative keywords
-    if (f.op == .gte) {
-        const diff = now - f.value;
-        if (diff >= 0 and diff <= day_secs + 60) return "date:today";
-        if (diff >= 6 * day_secs and diff <= 8 * day_secs) return "date:week";
-        if (diff >= 29 * day_secs and diff <= 31 * day_secs) return "date:month";
-        if (diff >= 364 * day_secs and diff <= 366 * day_secs) return "date:year";
-    }
-
-    // Fall back to absolute date formatting
-    var date_buf1: [16]u8 = undefined;
-    switch (f.op) {
-        .gt => {
-            const date_str = formatEpochDate(f.value, &date_buf1);
-            return std.fmt.bufPrint(buf, "date:>{s}", .{date_str}) catch "";
-        },
-        .lt => {
-            const date_str = formatEpochDate(f.value, &date_buf1);
-            return std.fmt.bufPrint(buf, "date:<{s}", .{date_str}) catch "";
-        },
-        .range => {
-            var date_buf2: [16]u8 = undefined;
-            const lower_str = formatEpochDate(f.value, &date_buf1);
-            const upper_str = formatEpochDate(f.value_upper - day_secs, &date_buf2);
-            return std.fmt.bufPrint(buf, "date:{s}..{s}", .{ lower_str, upper_str }) catch "";
-        },
-        else => {
-            const date_str = formatEpochDate(f.value, &date_buf1);
-            return std.fmt.bufPrint(buf, "date:{s}", .{date_str}) catch "";
-        },
-    }
-}
-
-/// Format epoch seconds as "YYYY-MM-DD".
-fn formatEpochDate(timestamp: i64, buf: []u8) []const u8 {
-    if (timestamp <= 0) return "1970-01-01";
-    const days = @divFloor(timestamp, @as(i64, 86400));
-    // Inverse of the civil_from_days algorithm
-    const z = days + 719468;
-    const era_val = @divFloor(if (z >= 0) z else z - 146096, @as(i64, 146097));
-    const doe = z - era_val * 146097;
-    const yoe_calc = @divFloor(doe - @divFloor(doe, 1460) + @divFloor(doe, 36524) - @divFloor(doe, 146096), 365);
-    const y = yoe_calc + era_val * 400;
-    const doy = doe - (365 * yoe_calc + @divFloor(yoe_calc, 4) - @divFloor(yoe_calc, 100));
-    const mp = @divFloor(5 * doy + 2, 153);
-    const d = doy - @divFloor(153 * mp + 2, 5) + 1;
-    const m_val = if (mp < 10) mp + 3 else mp - 9;
-    const y_final = if (m_val <= 2) y + 1 else y;
-    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{
-        @as(u16, @intCast(y_final)),
-        @as(u8, @intCast(m_val)),
-        @as(u8, @intCast(d)),
-    }) catch "????-??-??";
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -607,6 +490,14 @@ test "parse category filter" {
     defer result.deinit();
     try std.testing.expectEqual(@as(usize, 2), result.filters_list.len);
     try std.testing.expectEqual(types.FileCategory.images, result.filters_list[0].category.value);
+}
+
+test "negated size and date qualifiers degrade to text" {
+    const allocator = std.testing.allocator;
+    var parsed = try parse(allocator, "!size:>1gb !date:week", 0);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 0), parsed.filters_list.len);
+    try std.testing.expectEqualStrings("!size:>1gb !date:week", parsed.text);
 }
 
 test "parse size range" {
@@ -892,7 +783,6 @@ test "matchesAll keeps negated extensions ANDed" {
     try std.testing.expect(!matchesAll(&negs, .{ .name = "b.html" }));
 }
 
-
 test "parse date:today with injected now is deterministic" {
     // `now` is a parameter (not a clock read) so this module stays Io-free —
     // it's compiled into libzest-core, where the global runtime.io is
@@ -924,25 +814,4 @@ test "parseDate range" {
 test "parseDate invalid" {
     try std.testing.expectError(error.InvalidDate, parseDate("notadate", test_now));
     try std.testing.expectError(error.InvalidDate, parseDate(">bad", test_now));
-}
-
-
-
-
-
-
-
-
-
-test "formatEpochDate known date" {
-    var buf: [16]u8 = undefined;
-    // 2024-01-01 = 19723 days * 86400 = 1704067200
-    const result = formatEpochDate(1704067200, &buf);
-    try std.testing.expectEqualStrings("2024-01-01", result);
-}
-
-test "formatEpochDate epoch" {
-    var buf: [16]u8 = undefined;
-    const result = formatEpochDate(0, &buf);
-    try std.testing.expectEqualStrings("1970-01-01", result);
 }

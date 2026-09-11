@@ -6,6 +6,7 @@ const bitmap_mod = @import("bitmap.zig");
 const casefold = @import("../core/casefold.zig");
 const filters_mod = @import("../core/filters.zig");
 const subtree_mod = @import("subtree.zig");
+const paths = @import("../core/paths.zig");
 
 pub const SearchOptions = struct {
     query: []const u8,
@@ -251,11 +252,7 @@ pub fn searchCancellable(
 fn matchesScope(dir_path: []const u8, scope_in: []const u8, max_depth: u32) bool {
     const scope = stripTrailingSlash(scope_in);
     if (max_depth == 1) return std.mem.eql(u8, dir_path, scope);
-    if (std.mem.eql(u8, scope, "/")) return true;
-    if (std.mem.eql(u8, dir_path, scope)) return true;
-    return dir_path.len > scope.len and
-        std.mem.startsWith(u8, dir_path, scope) and
-        dir_path[scope.len] == '/';
+    return paths.isPathUnder(dir_path, scope);
 }
 
 /// Drop a single trailing slash (but keep root "/") so a normalized path passed
@@ -432,43 +429,6 @@ fn caseInsensitiveOrder(a: []const u8, b: []const u8) std.math.Order {
         if (ca != cb) return std.math.order(ca, cb);
     }
     return std.math.order(a.len, b.len);
-}
-
-/// The text shown in the Name column.
-/// `show_full_path` → absolute path. Otherwise the path relative to `scope`
-/// (just the basename for a direct child; `subdir/name` for a nested match).
-/// Caller owns the returned slice.
-pub fn displayName(
-    allocator: std.mem.Allocator,
-    row: SearchResult,
-    scope: []const u8,
-    show_full_path: bool,
-) ![]u8 {
-    if (show_full_path) {
-        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ row.dir_path, row.name });
-    }
-    const rel = relativeDir(row.dir_path, scope);
-    if (rel.len == 0) return allocator.dupe(u8, row.name);
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ rel, row.name });
-}
-
-/// The portion of `dir_path` below `scope` (no leading slash), as a slice into
-/// `dir_path`. Empty when `dir_path == scope`. For `scope == "/"` this is the
-/// absolute path minus its leading slash.
-fn relativeDir(dir_path: []const u8, scope_in: []const u8) []const u8 {
-    const scope = stripTrailingSlash(scope_in);
-    if (std.mem.eql(u8, scope, "/")) {
-        return if (dir_path.len > 0 and dir_path[0] == '/') dir_path[1..] else dir_path;
-    }
-    if (std.mem.eql(u8, dir_path, scope)) return "";
-    if (dir_path.len > scope.len and
-        std.mem.startsWith(u8, dir_path, scope) and
-        dir_path[scope.len] == '/')
-    {
-        return dir_path[scope.len + 1 ..];
-    }
-    // Outside scope (shouldn't happen once the scope predicate has run): show absolute.
-    return dir_path;
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,42 +1077,6 @@ test "max_results truncates the result set" {
 }
 
 // ---------------------------------------------------------------------------
-// displayName tests
-// ---------------------------------------------------------------------------
-
-test "displayName off shows basename for direct child" {
-    const allocator = std.testing.allocator;
-    const row = SearchResult{ .index = 0, .name = "report.pdf", .dir_path = "/home/user/docs", .size = 0, .mtime = 0, .kind = .file, .category = .documents };
-    const name = try displayName(allocator, row, "/home/user/docs", false);
-    defer allocator.free(name);
-    try std.testing.expectEqualStrings("report.pdf", name);
-}
-
-test "displayName off shows relative path for nested match" {
-    const allocator = std.testing.allocator;
-    const row = SearchResult{ .index = 0, .name = "app.zig", .dir_path = "/home/user/src", .size = 0, .mtime = 0, .kind = .file, .category = .code };
-    const name = try displayName(allocator, row, "/home/user", false);
-    defer allocator.free(name);
-    try std.testing.expectEqualStrings("src/app.zig", name);
-}
-
-test "displayName on shows absolute path" {
-    const allocator = std.testing.allocator;
-    const row = SearchResult{ .index = 0, .name = "app.zig", .dir_path = "/home/user/src", .size = 0, .mtime = 0, .kind = .file, .category = .code };
-    const name = try displayName(allocator, row, "/home/user", true);
-    defer allocator.free(name);
-    try std.testing.expectEqualStrings("/home/user/src/app.zig", name);
-}
-
-test "displayName off with root scope strips leading slash" {
-    const allocator = std.testing.allocator;
-    const row = SearchResult{ .index = 0, .name = "src", .dir_path = "/home/user", .size = 0, .mtime = 0, .kind = .directory, .category = .uncategorized };
-    const name = try displayName(allocator, row, "/", false);
-    defer allocator.free(name);
-    try std.testing.expectEqualStrings("home/user/src", name);
-}
-
-// ---------------------------------------------------------------------------
 // Sort comparator tests
 // ---------------------------------------------------------------------------
 
@@ -1265,12 +1189,4 @@ test "sort with folders_first keeps directories above files" {
     try std.testing.expectEqualStrings("beta.txt", rows[1].name);
     try std.testing.expectEqualStrings("omega", rows[2].name);
     try std.testing.expectEqualStrings("zeta.txt", rows[3].name);
-}
-
-test "displayName on shows absolute path for direct child" {
-    const allocator = std.testing.allocator;
-    const row = SearchResult{ .index = 0, .name = "report.pdf", .dir_path = "/home/user/docs", .size = 0, .mtime = 0, .kind = .file, .category = .documents };
-    const name = try displayName(allocator, row, "/home/user/docs", true);
-    defer allocator.free(name);
-    try std.testing.expectEqualStrings("/home/user/docs/report.pdf", name);
 }

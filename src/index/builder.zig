@@ -11,10 +11,6 @@ const progress = @import("progress.zig");
 /// pool, see `bulk_scan.zig`), streaming entries to per-worker temp files, then
 /// read them back and convert to the columnar index format. The temp files
 /// survive a crash mid-walk.
-pub fn buildIndex(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
-    return buildIndexWithProgress(allocator, root, null);
-}
-
 pub fn buildIndexWithProgress(allocator: std.mem.Allocator, root: []const u8, reporter: ?*progress.Reporter) ![]u8 {
     const support_path = try config.appSupportDir(allocator);
     defer allocator.free(support_path);
