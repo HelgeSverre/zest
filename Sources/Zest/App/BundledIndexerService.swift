@@ -37,12 +37,21 @@ final class BundledIndexerService: IndexerControl {
     self.validateBundle = validateBundle
   }
 
+  /// launchd keeps a registered job that cannot be launched scheduled forever,
+  /// so "enabled but not running" alone can mean either "starting" or "never
+  /// will" (an ad-hoc signed build exits 78/EX_CONFIG on every attempt).
+  /// `launchctl print gui/$UID/dev.zest.app.indexer` carries the exact code.
+  static func lastExitCode(in output: String) -> Int? {
+    guard let marker = output.range(of: "last exit code = ") else { return nil }
+    return Int(output[marker.upperBound...].prefix { $0.isNumber })
+  }
+
   static func state(
     authorization: SMAppService.Status, previouslySetUp: Bool,
-    running: Bool
+    running: Bool, spawnFailed: Bool = false
   ) throws -> IndexerState {
     switch authorization {
-    case .enabled: return running ? .running : .waiting
+    case .enabled: return running ? .running : (spawnFailed ? .failed : .waiting)
     case .requiresApproval: return .requiresApproval
     case .notRegistered: return previouslySetUp ? .stopped : .notInstalled
     // macOS can report notFound for an intact bundle with no BTM registration
@@ -78,7 +87,8 @@ final class BundledIndexerService: IndexerControl {
   func state() throws -> IndexerState {
     let authorization = service.status
     if authorization == .notFound { try validateBundle() }
-    let running: Bool
+    var running = false
+    var spawnFailed = false
     if authorization == .enabled {
       // A registered job may still be launching; don't confuse eligibility with liveness.
       do {
@@ -86,16 +96,15 @@ final class BundledIndexerService: IndexerControl {
           URL(fileURLWithPath: "/bin/launchctl"),
           ["print", "gui/\(getuid())/\(Self.label)"])
         running = output.contains("state = running")
+        if !running, let code = Self.lastExitCode(in: output) { spawnFailed = code != 0 }
       } catch {
         guard error.localizedDescription.contains("Could not find service") else { throw error }
-        running = false
       }
-    } else {
-      running = false
     }
     return try Self.state(
       authorization: authorization,
-      previouslySetUp: defaults.bool(forKey: "indexerSetupCompleted"), running: running)
+      previouslySetUp: defaults.bool(forKey: "indexerSetupCompleted"), running: running,
+      spawnFailed: spawnFailed)
   }
 
   func execute(_ arguments: [String]) throws -> String {

@@ -1,5 +1,8 @@
 import AppKit
 
+// Must run before anything reads Bundle.main (version, helper paths, SMAppService).
+BundleIdentity.reexecThroughRealPath()
+
 let action: LaunchAction
 switch LaunchOptions.parse(
   Array(CommandLine.arguments.dropFirst()), cwd: FileManager.default.currentDirectoryPath)

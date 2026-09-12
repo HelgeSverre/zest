@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum IndexerState: String {
   case notInstalled = "not_installed"
-  case stopped, running, waiting, requiresApproval
+  case stopped, running, waiting, requiresApproval, failed
 
   var title: String {
     switch self {
@@ -12,6 +12,7 @@ enum IndexerState: String {
     case .running: return "Indexer: Running"
     case .waiting: return "Indexer: Waiting to Start"
     case .requiresApproval: return "Indexer: Background Permission Required"
+    case .failed: return "Indexer: Failed to Start"
     }
   }
 
@@ -22,6 +23,7 @@ enum IndexerState: String {
     case .running: return [.reindex, .stop, .restart, .permissions, .uninstall]
     case .waiting: return [.stop, .restart, .permissions, .uninstall]
     case .requiresApproval: return [.approveBackground, .uninstall]
+    case .failed: return [.restart, .permissions, .uninstall]
     }
   }
 }
@@ -112,7 +114,9 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       if setup || state == .notInstalled {
         self.beginAccessSetup(state == .notInstalled ? .install : .existing, helper: helper)
       } else {
-        let command = state == .running ? "reindex" : state == .waiting ? "restart" : "start"
+        let command =
+          state == .running
+          ? "reindex" : (state == .waiting || state == .failed) ? "restart" : "start"
         self.execute(helper: helper, arguments: [command], title: "Retry Indexing")
       }
     }

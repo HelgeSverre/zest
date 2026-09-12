@@ -328,7 +328,8 @@ small, testable modules:
   - `IndexerMenuController` owns the **Index** menu. Every process operation
     runs on the serial `dev.zest.indexer-control` queue with a generation
     guard; menu state is refreshed on open and after each action. States are
-    `not_installed` / `stopped` / `running` / `waiting` / `requiresApproval`
+    `not_installed` / `stopped` / `running` / `waiting` / `requiresApproval` /
+    `failed` (registered but launchd reports a non-zero last exit)
     (`IndexerState`); liveness of an `.enabled` registration is checked with
     `launchctl print gui/<uid>/dev.zest.app.indexer`. A fresh launch only
     *reads* state — it never registers, migrates, or starts a scan.

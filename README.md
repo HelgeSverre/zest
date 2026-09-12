@@ -183,7 +183,10 @@ zest --indexer-status
 /Applications/Zest.app/Contents/MacOS/Zest --indexer-status
 ```
 
-This prints `not_installed`, `stopped`, `running`, `waiting`, or `requiresApproval`.
+This prints `not_installed`, `stopped`, `running`, `waiting`, `requiresApproval`,
+or `failed` when macOS registered the agent but refuses to launch it (an
+unsigned local build does this; `launchctl print gui/$UID/dev.zest.app.indexer`
+carries the exit code).
 Failures report the underlying error on stderr and exit nonzero.
 
 All three commands (`zest`, `zest-query`, `zest-indexer`) accept `--help` and

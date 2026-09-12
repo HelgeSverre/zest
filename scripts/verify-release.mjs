@@ -59,7 +59,7 @@ for (const architecture of architectures) {
     assert.equal(execute(relative, ['--version']).trim(), `${name} ${release.version} (build ${release.build})`);
   }
   const status = execute('MacOS/Zest', ['--indexer-status']).trim();
-  assert(['not_installed', 'stopped', 'running', 'waiting', 'requiresApproval'].includes(status),
+  assert(['not_installed', 'stopped', 'running', 'waiting', 'requiresApproval', 'failed'].includes(status),
     `Unexpected packaged indexer status: ${status}`);
   execute('Helpers/zest-indexer', ['--full-scan', path.join(fixture, 'files')]);
   const output = execute('Helpers/zest-query', ['--scope', path.join(fixture, 'files')]);

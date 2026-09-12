@@ -202,4 +202,26 @@ final class BundledIndexerServiceTests: XCTestCase {
     XCTAssertEqual(registration.registrations, 1)
     XCTAssertTrue(defaults.bool(forKey: "indexerSetupCompleted"))
   }
+
+  /// An unlaunchable registered job (ad-hoc signed build: EX_CONFIG) stays
+  /// scheduled forever; reporting "waiting" would hide it permanently.
+  func testRegisteredButUnlaunchableJobReportsFailedRatherThanWaiting() throws {
+    let failing = """
+      state = spawn scheduled
+      last exit code = 78: EX_CONFIG
+      """
+    XCTAssertEqual(BundledIndexerService.lastExitCode(in: failing), 78)
+    XCTAssertEqual(
+      try BundledIndexerService.state(
+        authorization: .enabled, previouslySetUp: true, running: false, spawnFailed: true),
+      .failed)
+    // A clean first launch has no exit history, and a normal exit is not a failure.
+    XCTAssertNil(BundledIndexerService.lastExitCode(in: "state = spawn scheduled"))
+    XCTAssertNil(BundledIndexerService.lastExitCode(in: "last exit code = (never exited)"))
+    XCTAssertEqual(BundledIndexerService.lastExitCode(in: "last exit code = 0"), 0)
+    XCTAssertEqual(
+      try BundledIndexerService.state(
+        authorization: .enabled, previouslySetUp: true, running: false, spawnFailed: false),
+      .waiting)
+  }
 }
