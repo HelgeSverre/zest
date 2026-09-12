@@ -18,6 +18,9 @@ enum IndexerAccessSetup {
 final class IndexerAccessSetupController: NSWindowController, NSWindowDelegate {
   private let helper: URL
   private let onStart: () -> Void
+  /// Preparation stops a running indexer, so dismissing the window without
+  /// finishing must put it back; only `.install` has nothing to restore.
+  private let onCancel: () -> Void
   let model = IndexerOnboardingModel()
   private let verify: () throws -> IndexerAccessStatus
   private let queue = DispatchQueue(label: "dev.zest.access-check", qos: .utility)
@@ -26,10 +29,12 @@ final class IndexerAccessSetupController: NSWindowController, NSWindowDelegate {
   private var active = false
 
   init(
-    helper: URL, verify: (() throws -> IndexerAccessStatus)? = nil, onStart: @escaping () -> Void
+    helper: URL, verify: (() throws -> IndexerAccessStatus)? = nil,
+    onCancel: @escaping () -> Void = {}, onStart: @escaping () -> Void
   ) {
     self.helper = helper
     self.onStart = onStart
+    self.onCancel = onCancel
     self.verify = verify ?? { try IndexerAccessVerifier.check(helper: helper) }
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 860, height: 650),
@@ -134,8 +139,10 @@ final class IndexerAccessSetupController: NSWindowController, NSWindowDelegate {
   }
 
   func windowWillClose(_ notification: Notification) {
+    let dismissed = !model.completed
     model.completed = true
     stopPolling()
+    if dismissed { onCancel() }
   }
 
   @objc private func revealHelper(_: Any?) {

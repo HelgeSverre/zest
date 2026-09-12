@@ -229,10 +229,11 @@ final class BrowserViewController: NSViewController {
     scrollView.isHidden = isEmpty
     emptyLabel?.isHidden = !isEmpty
     if isEmpty {
-      // TODO: bundled-app copy should suggest zest-indexer --full-scan ~ instead of the repo-local just recipe.
       if coordinator.core == nil {
         emptyLabel?.stringValue =
-          "No search index yet — run \"just index\" to build it. Zest will pick it up automatically."
+          ReleaseInstallation.isPackaged
+          ? "No search index yet — choose Index ▸ Set Up Indexer… to build it. Zest will pick it up automatically."
+          : "No search index yet — run \"just index\" to build it. Zest will pick it up automatically."
       } else if coordinator.isLoading {
         emptyLabel?.stringValue = ""  // in flight — don't claim "No results" yet
       } else {

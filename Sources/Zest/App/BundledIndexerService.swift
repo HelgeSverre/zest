@@ -12,6 +12,7 @@ extension SMAppService: BackgroundServiceRegistration {}
 /// owned by SMAppService; the CLI's launchctl installer remains development-only.
 final class BundledIndexerService: IndexerControl {
   static let label = "dev.zest.app.indexer"
+  static let setupCompletedKey = "indexerSetupCompleted"
   private let service: BackgroundServiceRegistration
   private let helper: URL
   private let defaults: UserDefaults
@@ -103,7 +104,7 @@ final class BundledIndexerService: IndexerControl {
     }
     return try Self.state(
       authorization: authorization,
-      previouslySetUp: defaults.bool(forKey: "indexerSetupCompleted"), running: running,
+      previouslySetUp: defaults.bool(forKey: Self.setupCompletedKey), running: running,
       spawnFailed: spawnFailed)
   }
 
@@ -124,12 +125,12 @@ final class BundledIndexerService: IndexerControl {
     case "install", "start":
       if service.status == .requiresApproval { return "" }
       if service.status != .enabled { try service.register() }
-      defaults.set(true, forKey: "indexerSetupCompleted")
+      defaults.set(true, forKey: Self.setupCompletedKey)
     case "stop", "uninstall": try stop()
     case "restart":
       try stop()
       try service.register()
-      defaults.set(true, forKey: "indexerSetupCompleted")
+      defaults.set(true, forKey: Self.setupCompletedKey)
     case "reindex":
       guard try state() == .running else {
         throw Self.failure("The indexer is not running. Start it first.")
@@ -143,6 +144,11 @@ final class BundledIndexerService: IndexerControl {
     }
     return ""
   }
+
+  /// Removing the app (`--indexer-uninstall`) must let a later reinstall offer
+  /// setup again. The menu's "Disable Background Indexing" deliberately doesn't:
+  /// it leaves the indexer stopped but set up, ready to start from the menu.
+  func forgetSetup() { defaults.removeObject(forKey: Self.setupCompletedKey) }
 
   private func stop() throws {
     let authorization = service.status

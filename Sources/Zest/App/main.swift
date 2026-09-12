@@ -25,7 +25,9 @@ case .indexer(let command):
   do {
     try BundledIndexerService.validateBundle(at: Bundle.main.bundleURL)
     let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/zest-indexer")
-    print(try BundledIndexerService(helper: helper).execute([command]))
+    let service = BundledIndexerService(helper: helper)
+    print(try service.execute([command]))
+    if command == "uninstall" { service.forgetSetup() }
     exit(0)
   } catch {
     FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))

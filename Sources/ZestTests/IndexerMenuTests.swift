@@ -32,6 +32,35 @@ final class IndexerMenuTests: XCTestCase {
     XCTAssertEqual(starts, 1)
   }
 
+  /// Preparation stops a running indexer, so closing the window without
+  /// finishing must hand control back — otherwise indexing stays off silently.
+  func testDismissingTheWindowResumesButFinishingDoesNot() throws {
+    _ = NSApplication.shared
+    var starts = 0
+    var cancels = 0
+    let dismissed = IndexerAccessSetupController(
+      helper: URL(fileURLWithPath: "/tmp/zest-indexer"),
+      verify: { .unavailable },
+      onCancel: { cancels += 1 }, onStart: { starts += 1 })
+    let window = try XCTUnwrap(dismissed.window)
+    window.setFrameOrigin(NSPoint(x: -30_000, y: 0))
+    window.orderFront(nil)
+    window.performClose(nil)
+    XCTAssertEqual(cancels, 1)
+    XCTAssertEqual(starts, 0)
+
+    let finished = IndexerAccessSetupController(
+      helper: URL(fileURLWithPath: "/tmp/zest-indexer"),
+      verify: { .unavailable },
+      onCancel: { cancels += 1 }, onStart: { starts += 1 })
+    let second = try XCTUnwrap(finished.window)
+    second.setFrameOrigin(NSPoint(x: -30_000, y: 0))
+    second.orderFront(nil)
+    finished.skipSetup(nil)
+    XCTAssertEqual(starts, 1)
+    XCTAssertEqual(cancels, 1, "Finishing setup must not also fire the resume path")
+  }
+
   func testNativeOnboardingRendersAllPanels() throws {
     _ = NSApplication.shared
     let helper = URL(

@@ -139,6 +139,11 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       item.isEnabled = !busy && helper != nil && accessSetup?.window?.isVisible != true
       menu.addItem(item)
     }
+    menu.addItem(.separator())
+    let reveal = NSMenuItem(
+      title: "Show Index in Finder", action: #selector(revealIndex(_:)), keyEquivalent: "")
+    reveal.target = self
+    menu.addItem(reveal)
     if helper == nil && !busy && !ReleaseInstallation.isPackaged {
       let locate = NSMenuItem(
         title: "Locate Indexer…", action: #selector(locateIndexer(_:)), keyEquivalent: "")
@@ -160,6 +165,16 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
   }
 
   @objc private func refreshStatus(_: Any?) { refresh() }
+
+  /// The index file may not exist yet (or at all); fall back to its folder.
+  @objc private func revealIndex(_: Any?) {
+    let folder = Self.supportDirectory
+    if !NSWorkspace.shared.selectFile(
+      folder.appendingPathComponent("index.zst").path, inFileViewerRootedAtPath: folder.path)
+    {
+      NSWorkspace.shared.open(folder)
+    }
+  }
 
   @objc private func showStatusError(_: Any?) {
     guard let statusError else { return }
@@ -235,15 +250,22 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
       return
     }
     execute(helper: helper, commands: setup.preparationCommands, title: "Prepare Indexer Access") {
-      [weak self] output in
+      [weak self] _ in
       guard let self else { return }
-      let installed =
-        self.bundledService != nil
-        ? helper
-        : setup == .install
-          ? URL(fileURLWithPath: output.trimmingCharacters(in: .whitespacesAndNewlines))
-          : Self.installedHelperURL
-      self.accessSetup = IndexerAccessSetupController(helper: installed) { [weak self] in
+      // `prepare-install` always stages to the same location, so don't parse it
+      // back out of the command's output (stdout and stderr share one pipe).
+      let installed = self.bundledService != nil ? helper : Self.installedHelperURL
+      self.accessSetup = IndexerAccessSetupController(
+        helper: installed,
+        onCancel: { [weak self] in
+          // Preparation stopped a working indexer; dismissing setup must not
+          // leave background indexing switched off.
+          guard setup == .existing else { return }
+          self?.execute(
+            helper: helper, arguments: setup.completionArguments(helper: installed),
+            title: "Resume Indexing")
+        }
+      ) { [weak self] in
         self?.execute(
           helper: helper, arguments: setup.completionArguments(helper: installed),
           title: "Start Indexing")
@@ -355,9 +377,13 @@ final class IndexerMenuController: NSObject, NSMenuDelegate {
     return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
   }
 
-  static var installedHelperURL: URL {
+  static var supportDirectory: URL {
     FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/zest/bin/zest-indexer")
+      .appendingPathComponent("Library/Application Support/zest", isDirectory: true)
+  }
+
+  static var installedHelperURL: URL {
+    supportDirectory.appendingPathComponent("bin/zest-indexer")
   }
 
 }
