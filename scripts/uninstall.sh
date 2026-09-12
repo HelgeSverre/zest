@@ -14,8 +14,17 @@ elif [[ -e "$app" ]]; then
 fi
 launchctl bootout "gui/$(id -u)/dev.zest.app.indexer" 2>/dev/null || true
 if [[ -e "$app" ]]; then
-  # The installer package writes the app as root.
-  rm -rf "$app" 2>/dev/null || sudo rm -rf "$app"
+  # The installer package writes the app as root, so remove it with whichever
+  # privilege escalation is available: a TTY sudo, else a graphical prompt.
+  rm -rf "$app" 2>/dev/null ||
+    sudo rm -rf "$app" 2>/dev/null ||
+    osascript -e 'do shell script "rm -rf /Applications/Zest.app" with administrator privileges' >/dev/null 2>&1 || true
 fi
-sudo pkgutil --forget dev.zest.app >/dev/null 2>&1 || true
+sudo pkgutil --forget dev.zest.app >/dev/null 2>&1 ||
+  osascript -e 'do shell script "/usr/sbin/pkgutil --forget dev.zest.app" with administrator privileges' >/dev/null 2>&1 || true
+# Never claim success we did not achieve: the caller may be a clean-slate test.
+if [[ -e "$app" ]]; then
+  echo "error: $app still present; remove it manually (it is owned by root)." >&2
+  exit 1
+fi
 echo "Removed $app (index and preferences kept)."
