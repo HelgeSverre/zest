@@ -157,7 +157,7 @@ app's Index menu to manage its SMAppService background registration instead.
 After verifying and publishing the release, run:
 
 ```sh
-node scripts/publish-cask.mjs 0.1.1
+node scripts/publish-cask.mjs 0.1.2
 brew install --cask helgesverre/tap/zest
 ```
 

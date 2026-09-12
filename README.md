@@ -21,7 +21,7 @@ Zest is a fast, keyboard-friendly Finder alternative for macOS. A native AppKit 
 
 ### Install the beta
 
-Download the [0.1.1 signed, notarized Universal installer](https://github.com/HelgeSverre/zest/releases/download/v0.1.1/zest-universal-apple-darwin.pkg), or use Homebrew:
+Download the [0.1.2 signed, notarized Universal installer](https://github.com/HelgeSverre/zest/releases/download/v0.1.2/zest-universal-apple-darwin.pkg), or use Homebrew:
 
 ```sh
 brew install --cask helgesverre/tap/zest
@@ -30,7 +30,7 @@ brew install --cask helgesverre/tap/zest
 Open Zest from Applications, then choose **Index > Set Up Indexer**. Installing
 does not start a scan. Full Disk Access and background approval are guided in the
 app. Requires macOS 14 or newer, on Apple Silicon or Intel. See the
-[0.1.1 beta notes](docs/releases/0.1.1.md) for fixes and known limitations.
+[0.1.2 beta notes](docs/releases/0.1.2.md) for fixes and known limitations.
 Homebrew exposes `zest`, `zest-query`, and `zest-indexer` in your terminal; a direct
 PKG installation keeps those binaries inside the app bundle. `zest .` or
 `zest ~/Downloads` opens a new window in that folder; each invocation is its
