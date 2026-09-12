@@ -14,9 +14,10 @@ third; CI runs everything except the benchmarks.
 
 Tests live next to the code they cover (`test "..."` blocks). `src/test_root.zig`
 imports every module that has them, so `zig build test` runs the whole set in one
-binary: `core/` (types, file_types, casefold, filters, humanize, cli), `config/`,
-`index/` (format, bulk_scan, bitmap, reader, subtree, search, builder, startup,
-schedule, service, access, progress), `query_main.zig`, and `capi/zest_core.zig`.
+binary: `core/` (types, file_types, casefold, filters, humanize, cli, paths),
+`config/`, `index/` (format, bulk_scan, bitmap, reader, subtree, search, builder,
+incremental, startup, schedule, service, access, progress), `query_main.zig`, and
+`capi/zest_core.zig`.
 
 Adding a module with tests means adding one `_ = @import(...)` line to
 `test_root.zig`, or its tests never run.
@@ -36,7 +37,8 @@ against it. It never touches launchd, the user's index, or preferences. Checks:
 2. Writes under excluded directories and the daemon's own output do not trigger a
    rebuild.
 3. Create, rename, delete, and an explicit `reindex.request` are reflected in
-   `zest-query` output.
+   `zest-query` output. The change batch must rebuild **incrementally** (the log
+   says so) and a renamed directory must be rescanned under its new name.
 4. A failed rebuild retries without another event and keeps the last good index.
 5. Overlapping manual scans and the daemon coexist, repeated three times.
 

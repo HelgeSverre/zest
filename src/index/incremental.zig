@@ -137,6 +137,15 @@ pub fn merge(
         var w: usize = 0;
         for (out.items) |e| {
             if (underAny(e.dir_path, drop_prefix.items) or underAny(e.dir_path, scan_roots.items)) continue;
+            // The subtree is gone, but the vanished dir's own row lives in its
+            // parent's listing. When FSEvents reported the dir without its
+            // parent, that listing was never refreshed — retire the row here
+            // instead of waiting for the parent's next event.
+            if (e.kind == .directory) {
+                if (joinBuf(&path_buf, e.dir_path, e.name)) |full| {
+                    if (underAny(full, drop_prefix.items)) continue;
+                }
+            }
             out.items[w] = e;
             w += 1;
         }
@@ -274,6 +283,24 @@ test "incremental merge matches a fresh full scan after create, delete, rename, 
     try std.testing.expect(std.mem.indexOf(u8, got, "/a2/sub/z.md") != null);
     try std.testing.expect(std.mem.indexOf(u8, got, "gone.txt") == null);
     try std.testing.expect(std.mem.indexOf(u8, got, "/del/") == null);
+
+    // A deleted directory reported *without* its parent still retires its own
+    // row, not just its subtree.
+    {
+        var orphan_strings = std.heap.ArenaAllocator.init(allocator);
+        defer orphan_strings.deinit();
+        var orphan: std.ArrayList(format.IndexEntry) = .empty;
+        defer orphan.deinit(allocator);
+        try tmp.dir.deleteTree(io, "data/b");
+        _ = try merge(allocator, orphan_strings.allocator(), merged_index, &.{dirty[3]}, root, support, &orphan);
+        const orphan_index = try format.writeIndex(allocator, orphan.items);
+        defer allocator.free(orphan_index);
+        const snap = try snapshot(allocator, orphan_index);
+        defer allocator.free(snap);
+        try std.testing.expect(std.mem.indexOf(u8, snap, "/b\t") == null);
+        try std.testing.expect(std.mem.indexOf(u8, snap, "/b/") == null);
+        try std.testing.expect(std.mem.indexOf(u8, snap, "keep.txt") != null);
+    }
 
     // An empty dirty set reproduces the old index exactly.
     var same: std.ArrayList(format.IndexEntry) = .empty;

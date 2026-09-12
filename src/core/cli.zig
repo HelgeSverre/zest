@@ -33,6 +33,9 @@ pub inline fn versionString(comptime name: []const u8) []const u8 {
 /// one was printed to stdout; the caller should then return from main.
 pub fn handleCommon(args: []const []const u8, comptime name: []const u8, usage: []const u8) bool {
     for (args[1..]) |arg| {
+        // Everything after `--` is data, not flags: a zest-query search term can
+        // legitimately be the literal text "-h".
+        if (std.mem.eql(u8, arg, "--")) return false;
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printStdout(usage);
             return true;
@@ -51,13 +54,19 @@ pub fn fail(comptime name: []const u8, comptime fmt: []const u8, args: anytype) 
     std.process.exit(2);
 }
 
-fn printStdout(text: []const u8) void {
-    // Under `zig build test` stdout is the test-server protocol pipe.
+/// Normal command output to stdout. Silent under `zig build test`, where stdout
+/// is the test-server protocol pipe and a stray write makes the build runner
+/// report a passing run as a failed command.
+pub fn info(comptime fmt: []const u8, args: anytype) void {
     if (builtin.is_test) return;
     var buffer: [4096]u8 = undefined;
     var writer = std.Io.File.stdout().writerStreaming(runtime.io, &buffer);
-    writer.interface.writeAll(text) catch {};
+    writer.interface.print(fmt, args) catch {};
     writer.interface.flush() catch {};
+}
+
+fn printStdout(text: []const u8) void {
+    info("{s}", .{text});
 }
 
 test "version string and common flag detection" {
@@ -66,4 +75,7 @@ test "version string and common flag detection" {
     try std.testing.expect(!handleCommon(&.{ "zest-x", "foo", "--bar" }, "zest-x", ""));
     try std.testing.expect(handleCommon(&.{ "zest-x", "foo", "-V" }, "zest-x", ""));
     try std.testing.expect(handleCommon(&.{ "zest-x", "--help" }, "zest-x", ""));
+    // `--` ends flag parsing, so a search for the literal "-h" is not help.
+    try std.testing.expect(!handleCommon(&.{ "zest-x", "--", "-h" }, "zest-x", ""));
+    try std.testing.expect(handleCommon(&.{ "zest-x", "-h", "--", "-V" }, "zest-x", ""));
 }

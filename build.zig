@@ -113,8 +113,10 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_tests.step);
-    // Also install the static lib so `swift test` can link against it
-    // without a separate `zig build` first. The justfile runs `zig build test`
-    // then `swift test` in one recipe; this keeps that sequence working.
+    // Install everything too: the Swift tests link libzest-core.a AND shell out
+    // to zig-out/bin/zest-indexer (IndexerMenuTests), so `just test` needs both
+    // present before `swift test`. Note this installs a *Debug* libzest-core.a —
+    // `just test` overwrites it with `zig build core -Doptimize=ReleaseFast` on
+    // the next line, which is why that step is not optional.
     test_step.dependOn(b.getInstallStep());
 }

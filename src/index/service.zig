@@ -207,7 +207,7 @@ const Service = struct {
         try runtime.writeFileAtomic(self.plist, plist);
         try self.stop();
         try self.start();
-        std.debug.print("zest-indexer daemon installed and loaded.\nBinary: {s}\n", .{binary});
+        cli.info("zest-indexer daemon installed and loaded.\nBinary: {s}\n", .{binary});
     }
 
     fn restart(self: Service) !void {
@@ -258,7 +258,7 @@ pub fn handle(gpa: std.mem.Allocator, args: []const []const u8) !bool {
                 error.FileNotFound => {},
                 else => return err,
             };
-            std.debug.print("zest-indexer daemon uninstalled.\n", .{});
+            cli.info("zest-indexer daemon uninstalled.\n", .{});
         },
         .start => try service.start(),
         .stop => try service.stop(),
@@ -278,7 +278,7 @@ pub fn handle(gpa: std.mem.Allocator, args: []const []const u8) !bool {
             var token: [16]u8 = undefined;
             runtime.io.random(&token);
             try runtime.writeFileAtomic(path, &token);
-            std.debug.print("Re-index requested.\n", .{});
+            cli.info("Re-index requested.\n", .{});
         },
     }
     return true;

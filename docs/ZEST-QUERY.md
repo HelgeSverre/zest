@@ -108,6 +108,7 @@ qualifiers may be treated as literal search text rather than rejected.
 | `--no-header` | off | Suppress the first TSV line |
 | `-h`, `--help` | | Print usage and exit 0 |
 | `-V`, `--version` | | Print `zest-query X.Y.Z (build N)` and exit 0 |
+| `-- QUERY` | | Treat the next argument as search text even if it starts with `-` (`zest-query -- -h`) |
 
 `--limit` must not exceed `--scan-limit`. If matching entries exceed the scan
 limit, sorting covers only the collected subset: this is not a guaranteed global

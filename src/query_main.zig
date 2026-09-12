@@ -149,6 +149,14 @@ fn parseArgs(args: []const []const u8) !Config {
             config.human_sizes = false;
         } else if (std.mem.eql(u8, arg, "--no-header")) {
             config.show_header = false;
+        } else if (std.mem.eql(u8, arg, "--")) {
+            // The next argument is the query verbatim, so text that looks like
+            // a flag ("-h") can still be searched for.
+            i += 1;
+            if (i >= args.len) return error.MissingQuery;
+            if (has_query) return error.MultipleQueries;
+            config.query = args[i];
+            has_query = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             return error.UnknownOption;
         } else if (!has_query) {
@@ -220,11 +228,13 @@ const usage =
     \\  --no-header        Omit the TSV header
     \\  -h, --help         Show this help
     \\  -V, --version      Print version
+    \\  -- QUERY           Search for text starting with '-' (e.g. -- -h)
     \\
     \\Examples:
     \\  zest-query --scope "$HOME" --depth 1 --sort size --desc
     \\  zest-query 'size:>1gb kind:file' --depth all --sort size --desc
     \\  zest-query 'date:week size:>100mb' --depth all --sort mtime --desc
+    \\  zest-query -- -h
     \\
 ;
 
@@ -244,6 +254,14 @@ test "parse query options" {
     try std.testing.expect(config.ascending);
     try std.testing.expect(!config.human_sizes);
     try std.testing.expect(!config.show_header);
+}
+
+test "-- passes a flag-shaped query through as search text" {
+    const config = try parseArgs(&[_][]const u8{ "zest-query", "--", "-h", "--limit", "5" });
+    try std.testing.expectEqualStrings("-h", config.query);
+    try std.testing.expectEqual(@as(usize, 5), config.limit);
+    try std.testing.expectError(error.MissingQuery, parseArgs(&[_][]const u8{ "zest-query", "--" }));
+    try std.testing.expectError(error.MultipleQueries, parseArgs(&[_][]const u8{ "zest-query", "a", "--", "b" }));
 }
 
 test "parse defaults support a bounded home listing" {

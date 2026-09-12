@@ -59,17 +59,23 @@ See `docs/ARCHITECTURE.md` (accurate, kept current), `docs/TESTING.md`, `docs/BE
 ## Project Structure
 
 ```
-Sources/Zest/          — Swift app: App/ (coordinator, delegate), Shell/ (toolbar,
-                         search, breadcrumb, filter bar, status bar), Browser/
-                         (file list), Sidebar/, Core/ (ZestCore FFI wrapper,
+Sources/Zest/          — Swift app: App/ (coordinator, delegate, launch options,
+                         indexer service/menu), Shell/ (toolbar, search,
+                         breadcrumb, filter bar, status bar), Browser/
+                         (file list), Sidebar/, Preview/ (text preview +
+                         tree-sitter highlighting), Core/ (ZestCore FFI wrapper,
                          UserState pins/folder-colors), Design/
 Sources/CZestCore/     — C header module for the Zig lib
+Vendor/, Tools/, Plugins/ — vendored Sema grammar + highlight queries, the
+                         casefold generator, and the SwiftPM plugin that embeds
+                         .scm highlight queries
 src/capi/              — C ABI (zest_open/close/count/query/query_cancellable/
                          query_count/query_row/query_free/cancel_token_*/
                          histogram/ext_breakdown/casefold_utf8)
-src/index/             — format, builder, bulk_scan, reader, search, subtree,
-                         bitmap, fsevents, daemon
-src/core/              — types, file_types, casefold, filters, humanize, runtime
+src/index/             — format, builder, incremental, bulk_scan, reader, search,
+                         subtree, bitmap, fsevents, daemon, service
+src/core/              — types, file_types, casefold, filters, humanize, runtime,
+                         paths, cli
 benchmarks/            — bench_capi.zig (real-index harness), bench_search.zig (synthetic)
 docs/                  — ARCHITECTURE.md, TESTING.md, BENCHMARKS.md, CAPI.md, RELEASE.md, ZEST-QUERY.md, archive/ (superseded docs)
 ```

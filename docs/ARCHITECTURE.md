@@ -260,8 +260,10 @@ small, testable modules:
    not walk the tree. The daemon reads the previous `index.zst` back into
    entries, relists each dirty directory with one `getattrlistbulk` call,
    drops old entries under directory children that vanished from a listing
-   (deleted or renamed away), recursively scans directory children the old
-   index never saw (created or renamed in), patches the relisted directories'
+   (deleted or renamed away, including the vanished directory's own row when
+   FSEvents reported it without its parent), recursively scans directory
+   children the old index never saw (created or renamed in), patches the
+   relisted directories'
    own mtimes, and hands the merged entries to `writeIndex`, which re-derives
    folder sizes, histograms, and extension buckets. On a 4.1M-entry home this
    is ~0.3 s merge + ~0.9 s build + ~0.6 s write versus a 15–20 s, 60
@@ -448,18 +450,22 @@ RootViewController                         (owns lifetimes; assigns coordinator.
 - **Launch modes** (`App/main.swift`, parsed by `LaunchOptions`): `zest [PATH]`
   opens a window at that directory (each invocation is its own process);
   `-h`/`--help`; `-V`/`--version`; `--indexer-status` (service state, no GUI);
-  `--snapshot PNG [WxH]` renders the real view hierarchy off-screen to a PNG
-  (`Snapshot.swift`, default 1180×760) for headless verification.
+  `--indexer-uninstall` (unregister the bundled service, used by
+  `scripts/uninstall.sh`); `--snapshot PNG [WxH]` renders the real view
+  hierarchy off-screen to a PNG (`Snapshot.swift`, default 1180×760) for
+  headless verification; `--bench [--iterations N] [--json]` runs the headless
+  UI benchmark (`Bench.swift`, `just bench-app`).
 
 ## What lives where
 
 ```
 build.zig                   ← zig targets: indexer, query, core lib, tests; build_info from release.json
 Package.swift               ← SwiftPM: Zest, ZestTests, CZestCore shim, TreeSitterSema, highlight-query plugin
-justfile                    ← build / lint / format / clean / dev / run / test / test-daemon /
+justfile                    ← build / lint / format / clean / dev / run / test / test-daemon / test-ui /
                               bench-capi / bench-search / bench-app / index / index-open / index-wipe /
                               query-build / daemon-install / daemon-uninstall / app-package /
-                              pkg-unsigned / pkg-signed / pkg-notarized / pkg-local
+                              pkg-unsigned / pkg-signed / pkg-notarized / pkg-local /
+                              install / uninstall / nuke
 release.json                ← version + build number (single source of truth)
 macos/                      ← Info.plist, dev.zest.app.indexer.plist, components.plist (PKG)
 
@@ -477,6 +483,7 @@ src/
 │   ├── cli.zig             ← shared --help/--version handling for the binaries
 │   ├── filters.zig         ← qualifier parser + FilterCriterion (kind/ext/size/date/cat/path)
 │   ├── types.zig           ← FileKind, FileCategory (9), FileEntry
+│   ├── paths.zig           ← isPathUnder and path-prefix helpers (shared by config/search/incremental)
 │   ├── runtime.zig         ← global Io handle + clock / file helpers (binaries only)
 │   ├── humanize.zig        ← "506.9 MiB" / duration / grouped-count formatting
 │   └── file_types.zig      ← extension → FileCategory via StaticStringMap
@@ -487,6 +494,7 @@ src/
 │   ├── subtree.zig         ← O(D) subtree histogram + ext-breakdown merge
 │   ├── bitmap.zig          ← sorted-array bitmap for category filtering
 │   ├── builder.zig         ← scan shards → columnar index
+│   ├── incremental.zig     ← relist dirty dirs + splice into the previous index (daemon rebuilds)
 │   ├── bulk_scan.zig       ← parallel getattrlistbulk walker (8 workers)
 │   ├── fsevents.zig        ← Zig wrapper over the C FSEvents bridge
 │   ├── fsevents_bridge.c/h ← FSEventStream create/start/stop + run-loop helpers
@@ -497,8 +505,7 @@ src/
 │   ├── access.zig          ← Full Disk Access probe (probe-access)
 │   └── progress.zig        ← progress-*.json reporter + heartbeat + atomic index write
 └── config/
-    ├── config.zig          ← app-support paths, name_excludes, path_excludes, exclusion predicates
-    └── user_config.zig     ← terminal-app candidate list for "Open in Terminal"
+    └── config.zig          ← app-support paths, name_excludes, path_excludes, exclusion predicates
 
 Sources/CZestCore/          ← header-only C module (include/zest_core.h) + empty.c relink shim
 Sources/Zest/
@@ -508,6 +515,8 @@ Sources/Zest/
 │   ├── AppDelegate.swift               ← window + main menu (Edit/View/Index/Navigation)
 │   ├── AppCoordinator.swift            ← source of truth: path, Filter, scope, sort, query queue, hot-reload timer
 │   ├── Snapshot.swift                  ← off-screen render to PNG
+│   ├── Bench.swift                     ← headless UI benchmark against the real index (--bench)
+│   ├── BundleIdentity.swift            ← re-exec through the resolved path (Homebrew's zest symlink)
 │   ├── ReleaseInstallation.swift       ← isPackaged / isInstalled / bundled helper lookup
 │   ├── IndexerControl.swift            ← IndexerControl protocol + CommandLineIndexerService (dev)
 │   ├── BundledIndexerService.swift     ← SMAppService registration + state for the packaged helper
@@ -552,6 +561,8 @@ benchmarks/bench_capi.zig               ← real-index C ABI harness (just bench
 benchmarks/bench_search.zig             ← synthetic-corpus engine harness (just bench-search)
 scripts/package.sh                      ← Universal ad-hoc Zest.app (just app-package)
 scripts/package-local-signed.sh         ← notarized PKG with local identities (just pkg-local)
+scripts/uninstall.sh                    ← remove an installed Zest.app like a user would (just uninstall)
+scripts/nuke.sh                         ← wipe app + launchd jobs + index + prefs (just nuke)
 scripts/verify-release.mjs              ← bundle checks + isolated scan/query + --indexer-status
 scripts/test-daemon.mjs                 ← live FSEvents / recovery in a temp home (just test-daemon)
 scripts/render-cask.mjs · publish-cask.mjs ← Homebrew tap
